@@ -555,7 +555,7 @@ class Command:
             return self.subcommands[path[0]].call(path[1:], argv)
         elif self.run_fn:
             if len(argv) == self.nargs:
-                return Response(0, self.spawn(argv), None, {})
+                return self.spawn(argv)
             else:
                 return Response(-1, "bad options")
         else:
@@ -568,7 +568,7 @@ class Command:
         result = self.run_fn(**argv)
         if isinstance(result, types.GeneratorType):
             result = list(result)
-        return Result(0, result)
+        return Response(0, result)
 
     def main(self, name):
         if name == '__main__':
@@ -622,7 +622,7 @@ def main(root, argv, environ):
     if action.mode == "version":
         result = obj.version()
     elif action.mode == "call":
-        result =  root.call(action.path, argv)
+        result =  root.call(action.path, action.argv)
     elif action.mode == "help":
         result = obj.help(action.path, usage=action.argv.get('usage'))
     elif action.mode == "error":
