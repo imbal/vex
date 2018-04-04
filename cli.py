@@ -379,7 +379,7 @@ class CommandDescription:
             output = []
             for name in self.subcommands:
                 if name.startswith(text):
-                    output.append(name)
+                    output.append("{} ".format(name))
             if output:
                 return output
 
@@ -396,12 +396,14 @@ class CommandDescription:
         if '=' in prefix:
             # check to see if it's a completeable type
             return ()
-        else:
+        elif self.argspec:
             out = []
-            out.extend("--{}".format(x) for x in self.argspec.switches if x.startswith(prefix))
+            out.extend("--{} ".format(x) for x in self.argspec.switches if x.startswith(prefix))
             out.extend("--{}=".format(x) for x in self.argspec.flags if x.startswith(prefix))
             out.extend("--{}=".format(x) for x in self.argspec.lists if x.startswith(prefix))
             return out
+        else:
+            return ()
             
         
 
@@ -596,6 +598,7 @@ def main(root, argv, environ):
     if 'COMP_LINE' in environ and 'COMP_POINT' in environ:
         arg, offset =  environ['COMP_LINE'], int(environ['COMP_POINT'])
         tmp = arg[:offset].rsplit(' ', 1)
+        tmp[0] = tmp[0].lstrip()
         if len(tmp) > 1:
             action = Action('complete', tmp[0].split(' ')[1:], tmp[1])
         else:

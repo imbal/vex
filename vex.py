@@ -443,9 +443,6 @@ class Project:
         except (IOError, FileNotFoundError):
             raise Exception('lock')
 
-    def history(self):
-        return self.history_log.entries()
-
     @contextmanager
     def do(self, command):
         txn = Transaction(self, command)
@@ -534,6 +531,9 @@ class Project:
             txn.put_session(session)
 
             txn.set_state("session", session_uuid)
+
+    def history(self):
+        return self.history_log.entries()
 
     def log(self):
         session_uuid = self.state.get("session")
