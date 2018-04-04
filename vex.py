@@ -6,6 +6,7 @@ import shutil
 import hashlib
 from datetime import datetime, timezone
 from uuid import uuid4
+from contextlib import contextmanager
 
 from cli import Command
 import rson
@@ -85,10 +86,11 @@ class objects:
 
     @codec.register
     class Revert:
-        def __init__(self, old, timestamp, new):
-            self.old = old
+        def __init__(self, prev, timestamp, root, changelog):
+            self.prev = prev
             self.timestamp = timestamp
-            self.new = new
+            self.root = root
+            self.changelog = changelog
 
     @codec.register
     class Amend:
@@ -138,12 +140,12 @@ class objects:
     
     @codec.register
     class Session:
-        def __init__(self,uuid, prefix, branch, head, base, mode=None, state=None):
+        def __init__(self,uuid, prefix, branch, prepare, commit, mode=None, state=None):
             self.uuid = uuid
             self.prefix = prefix
             self.branch = branch
-            self.head = head
-            self.base = base
+            self.prepare = prepare
+            self.commit = commit
             self.mode = mode
             self.state = state
 
@@ -154,6 +156,27 @@ class objects:
             self.head = head
             self.base = base
             self.upstream = upstream
+
+    @codec.register
+    class Action:
+        def __init__(self, time, command, do, undo):
+            self.time = time
+            self.command = command
+            self.do = do
+            self.undo = undo
+
+    @codec.register
+    class Do:
+        def __init__(self, prev, action):
+            self.prev = prev
+            self.action = action
+
+    @codec.register
+    class Redo:
+        def __init__(self, prev, next, action):
+            self.prev = prev
+            self.next = next
+            self.action = action
 
 class BlobStore:
     def __init__(self, dir):
@@ -216,93 +239,204 @@ class DirStore:
         with open(self.filename(name), 'rb') as fh:
             return codec.parse(fh.read())
 
-    def put(self, name, value):
+    def set(self, name, value):
         with open(self.filename(name),'w+b') as fh:
             fh.write(codec.dump(value))
 
 
 
+class HistoryStore:
+    def __init__(self, dir):
+        self.dir = dir
+        self.store = BlobStore(dir)
+        self.settings = DirStore(dir)
 
+    def makedirs(self):
+        os.makedirs(self.dir, exist_ok=True)
+        self.settings.set("last", None)
+
+    def last(self):
+        return self.settings.get("last")
+
+    def add(self, action):
+        obj = objects.Do(self.last(), action)
+        addr = self.store.put_obj(obj)
+        self.settings.set("last", addr) 
+
+    def entries(self):
+        last = self.last()
+        out = []
+        while last != None:
+            obj = self.store.get_obj(last)
+            out.append(obj.action)
+            last = obj.prev
+
+        return out
+
+    def redo(self, action):
+        pass
+
+    def pop(self):
+        pass
+
+    def push_redo(self):
+        pass
+
+    def pop_redo(self):
+        pass
+
+
+class Transaction:
+    def __init__(self, project, command):
+        self.project = project
+        self.command = command
+
+    def current_session(self):
+        return self.project.sessions.get(self.project.state.get('session'))
+
+    def put_change(self, obj):
+        return self.project.changes.put_obj(obj)
+
+    def get_branch(self, uuid):
+        return self.project.branches.get(uuid)
+    
+    def put_session(self, session):
+        self.project.sessions.set(session.uuid, session)
+
+    def put_branch(self, branch):
+        self.project.branches.set(branch.uuid, branch)
+
+    def set_name(self, name, branch):
+        self.project.names.set(name, branch.uuid)
+
+    def set_state(self, name, value):
+        self.project.state.set(name, value)
+
+    def action(self):
+        return objects.Action(NOW(), self.command, {}, {})
 
 class Project:
     def __init__(self, dir):    
         self.dir = dir
-        self.store = BlobStore(os.path.join(dir, 'blobs'))
-        self.sessions = DirStore(os.path.join(dir, 'sessions'))
+        self.changes = BlobStore(os.path.join(dir, 'changes'))
+        self.manifests = BlobStore(os.path.join(dir, 'manifests'))
+        self.files = BlobStore(os.path.join(dir, 'files'))
         self.branches = DirStore(os.path.join(dir, 'branches'))
         self.names = DirStore(os.path.join(dir, 'branches', 'names'))
+        self.sessions = DirStore(os.path.join(dir, 'sessions'))
         self.state = DirStore(os.path.join(dir, 'state'))
+        self.log = HistoryStore(os.path.join(dir, 'history'))
 
     def makedirs(self):
         os.makedirs(self.dir, exist_ok=True)
-        self.store.makedirs()
+        self.changes.makedirs()
+        self.manifests.makedirs()
+        self.files.makedirs()
         self.sessions.makedirs()
         self.branches.makedirs()
         self.names.makedirs()
         self.state.makedirs()
+        self.log.makedirs()
 
-    def init(self, options):
+    def exists(self):
+        return os.path.exists(self.dir)
+
+    @contextmanager
+    def transaction(self, command):
+        txn = Transaction(self, command)
+        yield txn
+        action = txn.action()
+        self.log.add(action)
+        # lock file? or write it to lock file, then do it
+
+    def init(self, prefix, options):
         self.makedirs()
-        branch_uuid = UUID()
-        prefix = '/latest'
-        branch_name = 'latest'
-        commit = objects.Init(NOW(), branch_uuid, {})
-        commit_uuid = self.store.put_obj(commit)
+        with self.transaction('init') as txn:
+            branch_uuid = UUID()
+            branch_name = 'latest'
+            commit = objects.Init(NOW(), branch_uuid, {})
+            commit_uuid = txn.put_change(commit)
 
-        branch = objects.Branch(branch_uuid, commit_uuid, None, branch_uuid)
-        self.branches.put(branch_uuid, branch)
-        self.names.put(branch_name, branch_uuid)
+            branch = objects.Branch(branch_uuid, commit_uuid, None, branch_uuid)
+            txn.put_branch(branch)
+            txn.set_name(branch_name, branch) 
 
-        session_uuid = UUID()
-        session = objects.Session(session_uuid, prefix, branch_uuid, commit_uuid, commit_uuid)
-        self.sessions.put(session_uuid, session)
+            session_uuid = UUID()
+            session = objects.Session(session_uuid, prefix, branch_uuid, commit_uuid, commit_uuid)
+            txn.put_session(session)
 
-        self.state.put("session", session_uuid)
+            txn.set_state("session", session_uuid)
 
     def log(self):
         session_uuid = self.state.get("session")
         session = self.sessions.get(session_uuid)
-        commit = session.head
+        commit = session.prepare
         out = []
-        while commit:
-            obj = self.store.get_obj(commit)
-            out.append('{}: {}'.format(obj.__class__.__name__, commit))
+        while commit != session.commit:
+            obj = self.changes.get_obj(commit)
+            out.append('*uncommitted* {}: {}'.format(obj.__class__.__name__, commit))
             commit = getattr(obj, 'prev', None)
 
+        while commit != None:
+            obj = self.changes.get_obj(commit)
+            out.append('committed {}: {}'.format(obj.__class__.__name__, commit))
+            commit = getattr(obj, 'prev', None)
         return out
 
     def prepare(self, files):
-        session_uuid = self.state.get("session")
-        session = self.sessions.get(session_uuid)
-        commit = session.head
-        # create changelog
+        with self.transaction('prepare') as txn:
+            session = txn.current_session()
+            commit = session.prepare
 
-        prepare = objects.Prepare(commit, NOW(), None)
-        prepare_uuid = self.store.put_obj(prepare)
+            prepare = objects.Prepare(commit, NOW(), None)
+            prepare_uuid = txn.put_change(prepare)
 
-        session.head = prepare_uuid
-        self.sessions.put(session_uuid, session)
+            session.prepare = prepare_uuid
+            txn.put_session(session)
 
     def commit(self, files):
+        with self.transaction('commit') as txn:
+            session = txn.current_session()
+
+            commit = objects.Commit(session.prepare, NOW(), None, None)
+            commit_uuid = txn.put_change(commit)
+
+            branch = txn.get_branch(session.branch)
+            if branch.head != session.commit: # descendent check
+                print('branch has diverged, not applying commit')
+            else:
+                branch.head = commit_uuid
+                txn.put_branch(branch)
+            session.prepare = commit_uuid
+            session.commit = commit_uuid
+            txn.put_session(session)
+            print('done')
+
+    def status(self):
         session_uuid = self.state.get("session")
         session = self.sessions.get(session_uuid)
-        old_commit = session.head
-        # create changelog
 
-        commit = objects.Commit(old_commit, NOW(), None, None)
-        commit_uuid = self.store.put_obj(commit)
+        commit = self.changes.get_obj(session.prepare)
 
-        session.head = commit_uuid
-        self.sessions.put(session_uuid, session)
-        branch_uuid = session.branch
+        branch = self.branches.get(session.branch)
+        return "\n".join([
+            "session: {}".format(session_uuid),
+            "at {}, started at {}".format(session.prepare, session.commit),
+            "commiting to branch {}".format(branch.uuid),
+            "last commit: {}".format(commit.__class__.__name__),
+            "",
+        ])
 
-        branch = self.branches.get(branch_uuid)
-        if branch.head != session.base:
-            print('branch has diverged, not applying commit')
-        else:
-            branch.head = commit_uuid
-            self.branches.put(branch_uuid, branch)
-        print('done')
+
+    def history(self):
+        return self.log.entries()
+
+    def undo(self):
+        pass
+
+    def redo(self):
+        pass
+
     def add(self, files):
         # get current session
         # get head commit
@@ -322,10 +456,6 @@ class Project:
         pass
 
 
-    @property
-    def blobs(self):
-        return
-
 
 vex_cmd = Command('vex', 'a database for files')
 vex_init = vex_cmd.subcommand('init')
@@ -335,8 +465,11 @@ def Init(directory):
     directory = os.path.join(directory, DOTVEX)
     print(directory)
     p = Project(directory)
-    print('Creating vex project in "{}"...'.format(directory))
-    p.init({})
+    if p.exists():
+        print('A vex project already exists here')
+    else:
+        print('Creating vex project in "{}"...'.format(directory))
+        p.init('/prefix', {})
 
 vex_prepare = vex_cmd.subcommand('prepare')
 @vex_prepare.run('[files...]')
@@ -363,6 +496,22 @@ def Log():
     for entry in p.log():
         print(entry)
         print()
+
+vex_history = vex_cmd.subcommand('history')
+@vex_history.run()
+def History():
+    directory = get_project_directory(os.getcwd())
+    p = Project(directory)
+    for entry in p.history():
+        print(entry.time, entry.command)
+        print()
+
+vex_status = vex_cmd.subcommand('status')
+@vex_status.run()
+def Status():
+    directory = get_project_directory(os.getcwd())
+    p = Project(directory)
+    print(p.status())
 
 
 vex_cmd.main(__name__)
