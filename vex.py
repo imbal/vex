@@ -138,13 +138,14 @@ class objects:
     
     @codec.register
     class Session:
-        def __init__(self, prefix, branch, head, base, mode=None, state=None):
-            self.mode = mode
-            self.state = state
+        def __init__(self,uuid, prefix, branch, head, base, mode=None, state=None):
+            self.uuid = uuid
             self.prefix = prefix
+            self.branch = branch
             self.head = head
             self.base = base
-            self.branch = branch
+            self.mode = mode
+            self.state = state
 
     @codec.register
     class Branch:
@@ -197,45 +198,29 @@ class BlobStore:
         return self.filename(addr)
 
     def get_obj(self, addr):
-        with open(self.filename(addr), 'b'):
-            return parse(fh.read())
+        with open(self.filename(addr), 'rb') as fh:
+            return codec.parse(fh.read())
 
-class Sessions:
+class DirStore:
     def __init__(self, dir):
         self.dir = dir
 
     def makedirs(self):
         os.makedirs(self.dir, exist_ok=True)
-
+    def filename(self, name):
+        return os.path.join(self.dir, name)
     def all(self):
-        pass
-    def active(self):
-        pass
-
-class Branches:
-    def __init__(self, dir):
-        self.dir = dir
-
-    def makedirs(self):
-        os.makedirs(self.dir, exist_ok=True)
-
-    def all(self):
-        pass
+        return os.listdir(self.dir())
 
     def get(self, name):
-        pass
+        with open(self.filename(name), 'rb') as fh:
+            return codec.parse(fh.read())
 
-    def create(self, name, commit, base, upstream):
-        pass
+    def put(self, name, value):
+        with open(self.filename(name),'w+b') as fh:
+            fh.write(codec.dump(value))
 
-    def delete(self, name):
-        pass
 
-    def rename(self, old_name, new_name):
-        pass
-
-    def update(self, name, new):
-        pass
 
 
 
@@ -243,18 +228,18 @@ class Project:
     def __init__(self, dir):    
         self.dir = dir
         self.store = BlobStore(os.path.join(dir, 'blobs'))
-        self.sessions = Sessions(os.path.join(dir, 'sessions'))
-        self.branches = Branches(os.path.join(dir, 'branches'))
+        self.sessions = DirStore(os.path.join(dir, 'sessions'))
+        self.branches = DirStore(os.path.join(dir, 'branches'))
+        self.names = DirStore(os.path.join(dir, 'branches', 'names'))
+        self.state = DirStore(os.path.join(dir, 'state'))
 
     def makedirs(self):
         os.makedirs(self.dir, exist_ok=True)
         self.store.makedirs()
         self.sessions.makedirs()
         self.branches.makedirs()
-
-    @property
-    def session(self):
-        pass
+        self.names.makedirs()
+        self.state.makedirs()
 
     def init(self, options):
         self.makedirs()
@@ -263,17 +248,61 @@ class Project:
         branch_name = 'latest'
         commit = objects.Init(NOW(), branch_uuid, {})
         commit_uuid = self.store.put_obj(commit)
-        branch = objects.Branch(branch_uuid, commit_uuid, commit_uuid, branch_uuid)
-        session = objects.Session(prefix, branch_uuid, commit_uuid, commit_uuid)
 
-        # create project directory
-        # create blobstore, session, branch directory
-        # create initial commit
-        # create branch 'latest'
-        # create session 0 on branch latest
-        pass
+        branch = objects.Branch(branch_uuid, commit_uuid, None, branch_uuid)
+        self.branches.put(branch_uuid, branch)
+        self.names.put(branch_name, branch_uuid)
 
+        session_uuid = UUID()
+        session = objects.Session(session_uuid, prefix, branch_uuid, commit_uuid, commit_uuid)
+        self.sessions.put(session_uuid, session)
 
+        self.state.put("session", session_uuid)
+
+    def log(self):
+        session_uuid = self.state.get("session")
+        session = self.sessions.get(session_uuid)
+        commit = session.head
+        out = []
+        while commit:
+            obj = self.store.get_obj(commit)
+            out.append('{}: {}'.format(obj.__class__.__name__, commit))
+            commit = getattr(obj, 'prev', None)
+
+        return out
+
+    def prepare(self, files):
+        session_uuid = self.state.get("session")
+        session = self.sessions.get(session_uuid)
+        commit = session.head
+        # create changelog
+
+        prepare = objects.Prepare(commit, NOW(), None)
+        prepare_uuid = self.store.put_obj(prepare)
+
+        session.head = prepare_uuid
+        self.sessions.put(session_uuid, session)
+
+    def commit(self, files):
+        session_uuid = self.state.get("session")
+        session = self.sessions.get(session_uuid)
+        old_commit = session.head
+        # create changelog
+
+        commit = objects.Commit(old_commit, NOW(), None, None)
+        commit_uuid = self.store.put_obj(commit)
+
+        session.head = commit_uuid
+        self.sessions.put(session_uuid, session)
+        branch_uuid = session.branch
+
+        branch = self.branches.get(branch_uuid)
+        if branch.head != session.base:
+            print('branch has diverged, not applying commit')
+        else:
+            branch.head = commit_uuid
+            self.branches.put(branch_uuid, branch)
+        print('done')
     def add(self, files):
         # get current session
         # get head commit
@@ -292,28 +321,6 @@ class Project:
         # add an update
         pass
 
-    def prepare(self):
-        # find changed files
-        # create changelog
-        # add to store
-        # set prepare in session
-        pass
-
-    def commit(self, message):
-        # prepare
-        # find parent commit from prepare in session
-        # build up history file of changes
-        # create a commit record 
-        # add it to the store
-        # find the branch of the current session
-        # update the branch to point to this commit
-        pass
-
-    def log(self):
-        # find current prepare, branch start
-        # go back until session start point
-        # go back until branch start
-        return ()
 
     @property
     def blobs(self):
@@ -331,13 +338,22 @@ def Init(directory):
     print('Creating vex project in "{}"...'.format(directory))
     p.init({})
 
+vex_prepare = vex_cmd.subcommand('prepare')
+@vex_prepare.run('[files...]')
+def Prepare(files):
+    directory = get_project_directory(os.getcwd())
+    p = Project(directory)
+    print('Preparing')
+    p.prepare(files)
+
 vex_commit = vex_cmd.subcommand('commit')
-@vex_commit.run('[files....]')
+@vex_commit.run('[files...]')
 def Commit(files):
     directory = get_project_directory(os.getcwd())
     p = Project(directory)
     print('Committing')
-    p.commit()
+    p.commit(files)
+    print('done')
 
 vex_log = vex_cmd.subcommand('log')
 @vex_log.run()
