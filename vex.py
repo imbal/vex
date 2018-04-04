@@ -339,6 +339,7 @@ class Transaction:
     def __init__(self, project, command):
         self.project = project
         self.command = command
+        self.now = NOW()
 
     def current_session(self):
         return self.project.sessions.get(self.project.state.get('session'))
@@ -362,7 +363,7 @@ class Transaction:
         self.project.state.set(name, value)
 
     def action(self):
-        return objects.Action(NOW(), self.command, {}, {})
+        return objects.Action(self.now, self.command, {}, {})
 
 class Project:
     def __init__(self, dir):    
@@ -374,7 +375,7 @@ class Project:
         self.names = DirStore(os.path.join(dir, 'branches', 'names'))
         self.sessions = DirStore(os.path.join(dir, 'sessions'))
         self.state = DirStore(os.path.join(dir, 'state'))
-        self.log = HistoryStore(os.path.join(dir, 'history'))
+        self.history_log = HistoryStore(os.path.join(dir, 'history'))
 
     def makedirs(self):
         os.makedirs(self.dir, exist_ok=True)
@@ -385,7 +386,7 @@ class Project:
         self.branches.makedirs()
         self.names.makedirs()
         self.state.makedirs()
-        self.log.makedirs()
+        self.history_log.makedirs()
 
     def exists(self):
         return os.path.exists(self.dir)
@@ -395,29 +396,29 @@ class Project:
         txn = Transaction(self, command)
         yield txn
         action = txn.action()
-        self.log.add(action)
+        self.history_log.add(action)
         # lock file? or write it to lock file, then do it
 
     def history(self):
-        return self.log.entries()
+        return self.history_log.entries()
 
     def undo(self):
-        last = self.log.pop()
+        last = self.history_log.pop()
         return last
 
     def redo(self, choice):
-        next = self.log.redo(choice)
+        next = self.history_log.redo(choice)
         return next
 
     def redo_choices(self):
-        return self.log.redo_choices()
+        return self.history_log.redo_choices()
 
     def init(self, prefix, options):
         self.makedirs()
         with self.transaction('init') as txn:
             branch_uuid = UUID()
             branch_name = 'latest'
-            commit = objects.Init(NOW(), branch_uuid, {})
+            commit = objects.Init(txn.now, branch_uuid, {})
             commit_uuid = txn.put_change(commit)
 
             branch = objects.Branch(branch_uuid, commit_uuid, None, branch_uuid)
@@ -451,7 +452,7 @@ class Project:
             session = txn.current_session()
             commit = session.prepare
 
-            prepare = objects.Prepare(commit, NOW(), None)
+            prepare = objects.Prepare(commit, txn.now, None)
             prepare_uuid = txn.put_change(prepare)
 
             session.prepare = prepare_uuid
@@ -461,7 +462,7 @@ class Project:
         with self.transaction('commit') as txn:
             session = txn.current_session()
 
-            commit = objects.Commit(session.prepare, NOW(), None, None)
+            commit = objects.Commit(session.prepare, txn.now, None, None)
             commit_uuid = txn.put_change(commit)
 
             branch = txn.get_branch(session.branch)
@@ -473,7 +474,6 @@ class Project:
             session.prepare = commit_uuid
             session.commit = commit_uuid
             txn.put_session(session)
-            print('done')
 
     def status(self):
         session_uuid = self.state.get("session")
@@ -517,7 +517,6 @@ vex_init = vex_cmd.subcommand('init')
 def Init(directory):
     directory = directory or os.getcwd()
     directory = os.path.join(directory, DOTVEX)
-    print(directory)
     p = Project(directory)
     if p.exists():
         print('A vex project already exists here')
