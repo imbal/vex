@@ -173,10 +173,9 @@ class objects:
 
     @codec.register
     class Redo:
-        def __init__(self, prev, next, action):
-            self.prev = prev
+        def __init__(self, next, dos):
             self.next = next
-            self.action = action
+            self.dos = dos
 
 class BlobStore:
     def __init__(self, dir):
@@ -234,6 +233,9 @@ class DirStore:
         return os.path.join(self.dir, name)
     def all(self):
         return os.listdir(self.dir())
+    def exists(self, addr):
+        return os.path.exists(self.filename(addr))
+
 
     def get(self, name):
         with open(self.filename(name), 'rb') as fh:
@@ -248,11 +250,14 @@ class DirStore:
 class HistoryStore:
     def __init__(self, dir):
         self.dir = dir
-        self.store = BlobStore(dir)
+        self.store = BlobStore(os.path.join(dir,'entries'))
+        self.redos = DirStore(os.path.join(dir,'redos' ))
         self.settings = DirStore(dir)
 
     def makedirs(self):
         os.makedirs(self.dir, exist_ok=True)
+        self.store.makedirs()
+        self.redos.makedirs()
         self.settings.set("last", None)
 
     def last(self):
@@ -262,6 +267,25 @@ class HistoryStore:
         obj = objects.Do(self.last(), action)
         addr = self.store.put_obj(obj)
         self.settings.set("last", addr) 
+
+    def pop(self):
+        last = self.last()
+        if last is None:
+            return None
+        obj = self.store.get_obj(last)
+
+        if self.redos.exists(last):
+            next = self.redos.get(last)
+        else:
+            next = None
+        dos = [last] 
+        if self.redos.exists(obj.prev):
+            dos.extend(self.redos.get(obj.prev).dos) 
+        redo = objects.Redo(next, dos)
+        new_next = self.redos.set(obj.prev, redo)
+
+        self.settings.set("last", obj.prev)
+        return obj.action
 
     def entries(self):
         last = self.last()
@@ -273,18 +297,43 @@ class HistoryStore:
 
         return out
 
-    def redo(self, action):
-        pass
+    def redo(self, n=0):
+        last = self.last()
+        if last is None:
+            return None
 
-    def pop(self):
-        pass
+        if not self.redos.exists(last):
+            return
 
-    def push_redo(self):
-        pass
+        next = self.redos.get(last)
 
-    def pop_redo(self):
-        pass
+        if next is None:
+            return
 
+        do = next.dos[n]
+
+        self.settings.set("last", do)
+
+        obj = self.store.get_obj(do)
+        return obj.action
+
+    def redo_choices(self):
+        last = self.last()
+        if last is None:
+            return None
+
+        if not self.redos.exists(last):
+            return
+
+        next = self.redos.get(last)
+
+        if next is None:
+            return
+        out = []
+        for do in next.dos:
+            obj = self.store.get_obj(do)
+            out.append(obj.action)
+        return out
 
 class Transaction:
     def __init__(self, project, command):
@@ -348,6 +397,20 @@ class Project:
         action = txn.action()
         self.log.add(action)
         # lock file? or write it to lock file, then do it
+
+    def history(self):
+        return self.log.entries()
+
+    def undo(self):
+        last = self.log.pop()
+        return last
+
+    def redo(self, choice):
+        next = self.log.redo(choice)
+        return next
+
+    def redo_choices(self):
+        return self.log.redo_choices()
 
     def init(self, prefix, options):
         self.makedirs()
@@ -428,15 +491,6 @@ class Project:
         ])
 
 
-    def history(self):
-        return self.log.entries()
-
-    def undo(self):
-        pass
-
-    def redo(self):
-        pass
-
     def add(self, files):
         # get current session
         # get head commit
@@ -513,5 +567,28 @@ def Status():
     p = Project(directory)
     print(p.status())
 
+vex_undo = vex_cmd.subcommand('undo')
+@vex_undo.run()
+def Undo():
+    directory = get_project_directory(os.getcwd())
+    p = Project(directory)
+    action = p.undo()
+    if action:
+        print('undid', action.command)
 
+vex_redo = vex_cmd.subcommand('redo')
+@vex_redo.run('--list? --choice')
+def Redo(list, choice):
+    directory = get_project_directory(os.getcwd())
+    p = Project(directory)
+    if list:
+        choices = p.redo_choices()
+        if choices:
+            for n, choice in enumerate(choices):
+                print(n, choice.command)
+    else:
+        choice = choice or 0
+        action = p.redo(choice)
+        if action:
+            print('redid', action.command)
 vex_cmd.main(__name__)
