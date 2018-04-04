@@ -4,6 +4,7 @@ import os.path
 import os
 import shutil
 import hashlib
+import fcntl
 from datetime import datetime, timezone
 from uuid import uuid4
 from contextlib import contextmanager
@@ -296,7 +297,10 @@ class HistoryStore:
         out = []
         while last != self.START:
             obj = self.store.get_obj(last)
-            out.append(obj.action)
+            redos = ()
+            if self.redos.exists(last):
+                redos = [self.store.get_obj(x).action.command for x in self.redos.get(last).dos]
+            out.append((obj.action, redos))
             last = obj.prev
 
         return out
@@ -311,10 +315,12 @@ class HistoryStore:
 
         next = self.redos.get(last)
 
-        do = next.dos[n]
+        do = next.dos.pop(n)
 
         obj = self.store.get_obj(do)
+        redo = objects.Redo(next.next, next.dos)
         yield obj.action
+        self.redos.set(last, redo)
         self.settings.set("last", do)
 
     def redo_choices(self):
@@ -409,6 +415,7 @@ class Project:
         self.sessions = DirStore(os.path.join(dir, 'sessions'))
         self.state = DirStore(os.path.join(dir, 'state'))
         self.history_log = HistoryStore(os.path.join(dir, 'history'))
+        self.lockfile = os.path.join(dir, 'lock')
 
     def makedirs(self):
         os.makedirs(self.dir, exist_ok=True)
@@ -428,12 +435,26 @@ class Project:
         return self.history_log.last() == self.history_log.START
 
     @contextmanager
-    def transaction(self, command):
+    def _lock(self):
+        try:
+            with open(self.lockfile, 'wb+') as fh:
+                fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                yield
+        except (IOError, FileNotFoundError):
+            raise Exception('lock')
+
+    def history(self):
+        return self.history_log.entries()
+
+    @contextmanager
+    def do(self, command):
         txn = Transaction(self, command)
         yield txn
         action = txn.action()
 
-        with self.history_log.do(action):
+        with self._lock(), self.history_log.do(action):
+            if not action:
+                return
             for key in action.changes:
                 if key == 'branches':
                     for name,value in action.changes['branches']['new'].items():
@@ -450,11 +471,8 @@ class Project:
                 else:
                     raise Exception('unknown')
 
-    def history(self):
-        return self.history_log.entries()
-
     def undo(self):
-        with self.history_log.undo() as action:
+        with self._lock(), self.history_log.undo() as action:
             if not action:
                 return
 
@@ -475,7 +493,7 @@ class Project:
                     raise Exception('unknown')
 
     def redo(self, choice):
-        with self.history_log.redo(choice) as action:
+        with self._lock(), self.history_log.redo(choice) as action:
             if not action:
                 return
             for key in action.changes:
@@ -501,7 +519,7 @@ class Project:
         self.makedirs()
         if not self.uncreated():
             return None
-        with self.transaction('init') as txn:
+        with self.do('init') as txn:
             branch_uuid = UUID()
             branch_name = 'latest'
             commit = objects.Init(txn.now, branch_uuid, {})
@@ -534,7 +552,7 @@ class Project:
         return out
 
     def prepare(self, files):
-        with self.transaction('prepare') as txn:
+        with self.do('prepare') as txn:
             session = txn.current_session()
             commit = session.prepare
 
@@ -545,7 +563,7 @@ class Project:
             txn.put_session(session)
 
     def commit(self, files):
-        with self.transaction('commit') as txn:
+        with self.do('commit') as txn:
             session = txn.current_session()
 
             commit = objects.Commit(session.prepare, txn.now, None, None)
@@ -588,17 +606,15 @@ class Project:
         # get head commit
         # create a change entry
         # 
-        # add an update with it inside
         # set prepare
         pass
 
     def ignore(self, files):
-        # add an update
         # set prepare
         pass
 
     def remove(self, files):
-        # add an update
+        # set prepare
         pass
 
 
@@ -646,8 +662,14 @@ vex_history = vex_cmd.subcommand('history')
 def History():
     directory = get_project_directory(os.getcwd())
     p = Project(directory)
-    for entry in p.history():
-        print(entry.time, entry.command)
+    for entry,redos in p.history():
+        alternative = ""
+        if len(redos) == 1:
+            alternative = "(can redo {})".format(redos[0])
+        elif len(redos) > 0:
+            alternative = "(can redo {}, or {})".format(",".join(redos[:-1]), redos[-1])
+
+        print(entry.time, entry.command,alternative)
         print()
 
 vex_status = vex_cmd.subcommand('status')
