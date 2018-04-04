@@ -176,6 +176,29 @@ class objects:
             self.next = next
             self.dos = dos
 
+# Stores
+
+class DirStore:
+    def __init__(self, dir):
+        self.dir = dir
+
+    def makedirs(self):
+        os.makedirs(self.dir, exist_ok=True)
+    def filename(self, name):
+        return os.path.join(self.dir, name)
+    def all(self):
+        return os.listdir(self.dir())
+    def exists(self, addr):
+        return os.path.exists(self.filename(addr))
+    def get(self, name):
+        with open(self.filename(name), 'rb') as fh:
+            return codec.parse(fh.read())
+    def set(self, name, value):
+        with open(self.filename(name),'w+b') as fh:
+            fh.write(codec.dump(value))
+
+
+
 class BlobStore:
     def __init__(self, dir):
         self.dir = dir
@@ -221,29 +244,6 @@ class BlobStore:
     def get_obj(self, addr):
         with open(self.filename(addr), 'rb') as fh:
             return codec.parse(fh.read())
-
-class DirStore:
-    def __init__(self, dir):
-        self.dir = dir
-
-    def makedirs(self):
-        os.makedirs(self.dir, exist_ok=True)
-    def filename(self, name):
-        return os.path.join(self.dir, name)
-    def all(self):
-        return os.listdir(self.dir())
-    def exists(self, addr):
-        return os.path.exists(self.filename(addr))
-
-
-    def get(self, name):
-        with open(self.filename(name), 'rb') as fh:
-            return codec.parse(fh.read())
-
-    def set(self, name, value):
-        with open(self.filename(name),'w+b') as fh:
-            fh.write(codec.dump(value))
-
 
 
 class HistoryStore:
@@ -364,16 +364,24 @@ class Transaction:
         return self.project.branches.get(uuid)
     
     def put_session(self, session):
-        self.project.sessions.set(session.uuid, session)
+        if session.uuid not in self.old_sessions and self.project.sessions.exists(session.uuid):
+            self.old_sessions[session.uuid] = self.project.sessions.get(session.uuid)
+        self.new_sessions[session.uuid] = session
 
     def put_branch(self, branch):
-        self.project.branches.set(branch.uuid, branch)
+        if branch.uuid not in self.old_branches and self.project.branches.exists(branch.uuid):
+            self.old_branches[branch.uuid] = self.project.branches.get(branch.uuid)
+        self.new_branches[branch.uuid] = branch
 
     def set_name(self, name, branch):
-        self.project.names.set(name, branch.uuid)
+        if name not in self.old_names and self.project.names.exists(name):
+            self.old_names[name] = self.project.names.get(name)
+        self.new_names[name] = branch.uuid
 
     def set_state(self, name, value):
-        self.project.state.set(name, value)
+        if name not in self.old_state and self.project.state.exists(name):
+            self.old_state[name] = self.project.state.get(name)
+        self.new_state[name] = value
 
     def action(self):
         branches = dict(old=self.old_branches, new=self.new_branches)
@@ -417,18 +425,60 @@ class Project:
         action = txn.action()
 
         with self.history_log.do(action):
-            pass
+            for key in action.changes:
+                if key == 'branches':
+                    for name,value in action.changes['branches']['new'].items():
+                        self.branches.set(name, value)
+                elif key == 'names':
+                    for name,value in action.changes['names']['new'].items():
+                        self.names.set(name, value)
+                elif key == 'sessions':
+                    for name,value in action.changes['sessions']['new'].items():
+                        self.sessions.set(name, value)
+                elif key == 'state':
+                    for name,value in action.changes['state']['new'].items():
+                        self.state.set(name, value)
+                else:
+                    raise Exception('unknown')
 
     def history(self):
         return self.history_log.entries()
 
     def undo(self):
         with self.history_log.undo() as action:
-            return action
+            for key in action.changes:
+                if key == 'branches':
+                    for name,value in action.changes['branches']['old'].items():
+                        self.branches.set(name, value)
+                elif key == 'names':
+                    for name,value in action.changes['names']['old'].items():
+                        self.names.set(name, value)
+                elif key == 'sessions':
+                    for name,value in action.changes['sessions']['old'].items():
+                        self.sessions.set(name, value)
+                elif key == 'state':
+                    for name,value in action.changes['state']['old'].items():
+                        self.state.set(name, value)
+                else:
+                    raise Exception('unknown')
 
     def redo(self, choice):
         with self.history_log.redo(choice) as action:
-            return action
+            for key in action.changes:
+                if key == 'branches':
+                    for name,value in action.changes['branches']['new'].items():
+                        self.branches.set(name, value)
+                elif key == 'names':
+                    for name,value in action.changes['names']['new'].items():
+                        self.names.set(name, value)
+                elif key == 'sessions':
+                    for name,value in action.changes['sessions']['new'].items():
+                        self.sessions.set(name, value)
+                elif key == 'state':
+                    for name,value in action.changes['state']['new'].items():
+                        self.state.set(name, value)
+                else:
+                    raise Exception('unknown')
 
     def redo_choices(self):
         return self.history_log.redo_choices()
@@ -559,7 +609,6 @@ def Commit(files):
     p = Project(directory)
     print('Committing')
     p.commit(files)
-    print('done')
 
 vex_log = vex_cmd.subcommand('log')
 @vex_log.run()
