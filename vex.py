@@ -247,6 +247,7 @@ class BlobStore:
 
 
 class HistoryStore:
+    START = 'init'
     def __init__(self, dir):
         self.dir = dir
         self.store = BlobStore(os.path.join(dir,'entries'))
@@ -257,7 +258,7 @@ class HistoryStore:
         os.makedirs(self.dir, exist_ok=True)
         self.store.makedirs()
         self.redos.makedirs()
-        self.settings.set("last", None)
+        self.settings.set("last", self.START)
 
     def last(self):
         return self.settings.get("last")
@@ -272,8 +273,10 @@ class HistoryStore:
     @contextmanager
     def undo(self):
         last = self.last()
-        if last is None:
+        if last == self.START:
             yield None
+            return
+
         obj = self.store.get_obj(last)
 
         if self.redos.exists(last):
@@ -281,7 +284,7 @@ class HistoryStore:
         else:
             next = None
         dos = [last] 
-        if self.redos.exists(obj.prev):
+        if obj.prev and self.redos.exists(obj.prev):
             dos.extend(self.redos.get(obj.prev).dos) 
         redo = objects.Redo(next, dos)
         yield obj.action
@@ -291,7 +294,7 @@ class HistoryStore:
     def entries(self):
         last = self.last()
         out = []
-        while last != None:
+        while last != self.START:
             obj = self.store.get_obj(last)
             out.append(obj.action)
             last = obj.prev
@@ -301,9 +304,6 @@ class HistoryStore:
     @contextmanager
     def redo(self, n=0):
         last = self.last()
-        if last is None:
-            yield None
-            return
 
         if not self.redos.exists(last):
             yield None
@@ -311,12 +311,7 @@ class HistoryStore:
 
         next = self.redos.get(last)
 
-        if next is None:
-            yield None
-            return
-
         do = next.dos[n]
-
 
         obj = self.store.get_obj(do)
         yield obj.action
@@ -324,8 +319,6 @@ class HistoryStore:
 
     def redo_choices(self):
         last = self.last()
-        if last is None:
-            return None
 
         if not self.redos.exists(last):
             return
@@ -364,23 +357,36 @@ class Transaction:
         return self.project.branches.get(uuid)
     
     def put_session(self, session):
-        if session.uuid not in self.old_sessions and self.project.sessions.exists(session.uuid):
-            self.old_sessions[session.uuid] = self.project.sessions.get(session.uuid)
+        if session.uuid not in self.old_sessions:
+            if self.project.sessions.exists(session.uuid):
+                self.old_sessions[session.uuid] = self.project.sessions.get(session.uuid)
+            else:
+                self.old_sessions[session.uuid] = None
         self.new_sessions[session.uuid] = session
 
     def put_branch(self, branch):
-        if branch.uuid not in self.old_branches and self.project.branches.exists(branch.uuid):
-            self.old_branches[branch.uuid] = self.project.branches.get(branch.uuid)
+        if branch.uuid not in self.old_branches:
+            if self.project.branches.exists(branch.uuid):
+                self.old_branches[branch.uuid] = self.project.branches.get(branch.uuid)
+            else:
+                self.old_branches[branch.uuid] = None
+
         self.new_branches[branch.uuid] = branch
 
     def set_name(self, name, branch):
-        if name not in self.old_names and self.project.names.exists(name):
-            self.old_names[name] = self.project.names.get(name)
+        if name not in self.old_names:
+            if self.project.names.exists(name):
+                self.old_names[name] = self.project.names.get(name)
+            else:
+                self.old_names[name] = None
         self.new_names[name] = branch.uuid
 
     def set_state(self, name, value):
-        if name not in self.old_state and self.project.state.exists(name):
-            self.old_state[name] = self.project.state.get(name)
+        if name not in self.old_state:
+            if self.project.state.exists(name):
+                self.old_state[name] = self.project.state.get(name)
+            else:
+                self.old_state[name] = None
         self.new_state[name] = value
 
     def action(self):
@@ -418,6 +424,9 @@ class Project:
     def exists(self):
         return os.path.exists(self.dir)
 
+    def uncreated(self):
+        return self.history_log.last() == self.history_log.START
+
     @contextmanager
     def transaction(self, command):
         txn = Transaction(self, command)
@@ -446,6 +455,9 @@ class Project:
 
     def undo(self):
         with self.history_log.undo() as action:
+            if not action:
+                return
+
             for key in action.changes:
                 if key == 'branches':
                     for name,value in action.changes['branches']['old'].items():
@@ -464,6 +476,8 @@ class Project:
 
     def redo(self, choice):
         with self.history_log.redo(choice) as action:
+            if not action:
+                return
             for key in action.changes:
                 if key == 'branches':
                     for name,value in action.changes['branches']['new'].items():
@@ -485,6 +499,8 @@ class Project:
 
     def init(self, prefix, options):
         self.makedirs()
+        if not self.uncreated():
+            return None
         with self.transaction('init') as txn:
             branch_uuid = UUID()
             branch_name = 'latest'
@@ -546,19 +562,25 @@ class Project:
             txn.put_session(session)
 
     def status(self):
+        out = []
         session_uuid = self.state.get("session")
-        session = self.sessions.get(session_uuid)
+        if session_uuid and self.sessions.exists(session_uuid):
+            session = self.sessions.get(session_uuid)
+            out.append("session: {}".format(session_uuid))
+            out.append("at {}, started at {}".format(session.prepare, session.commit))
 
-        commit = self.changes.get_obj(session.prepare)
+            branch = self.branches.get(session.branch)
+            out.append("commiting to branch {}".format(branch.uuid))
 
-        branch = self.branches.get(session.branch)
-        return "\n".join([
-            "session: {}".format(session_uuid),
-            "at {}, started at {}".format(session.prepare, session.commit),
-            "commiting to branch {}".format(branch.uuid),
-            "last commit: {}".format(commit.__class__.__name__),
-            "",
-        ])
+            commit = self.changes.get_obj(session.prepare)
+            out.append("last commit: {}".format(commit.__class__.__name__))
+        else:
+            if self.uncreated():
+                out.append("you undid the creation. try vex redo")
+            else:
+                out.append("no active session, but history, weird")
+        out.append("")
+        return "\n".join(out)
 
 
     def add(self, files):
@@ -588,7 +610,7 @@ def Init(directory):
     directory = directory or os.getcwd()
     directory = os.path.join(directory, DOTVEX)
     p = Project(directory)
-    if p.exists():
+    if p.exists() and not p.uncreated():
         print('A vex project already exists here')
     else:
         print('Creating vex project in "{}"...'.format(directory))
@@ -643,6 +665,8 @@ def Undo():
     action = p.undo()
     if action:
         print('undid', action.command)
+    if p.uncreated():
+        print('vex project uninitalised')
 
 vex_redo = vex_cmd.subcommand('redo')
 @vex_redo.run('--list? --choice')
@@ -653,7 +677,7 @@ def Redo(list, choice):
         choices = p.redo_choices()
         if choices:
             for n, choice in enumerate(choices):
-                print(n, choice.command)
+                print(n, choice.time, choice.command)
     else:
         choice = choice or 0
         action = p.redo(choice)
