@@ -159,11 +159,10 @@ class objects:
 
     @codec.register
     class Action:
-        def __init__(self, time, command, do, undo):
+        def __init__(self, time, command, changes=()):
             self.time = time
             self.command = command
-            self.do = do
-            self.undo = undo
+            self.changes = changes
 
     @codec.register
     class Do:
@@ -263,15 +262,18 @@ class HistoryStore:
     def last(self):
         return self.settings.get("last")
 
-    def add(self, action):
+    @contextmanager
+    def do(self, action):
         obj = objects.Do(self.last(), action)
         addr = self.store.put_obj(obj)
+        yield action
         self.settings.set("last", addr) 
 
-    def pop(self):
+    @contextmanager
+    def undo(self):
         last = self.last()
         if last is None:
-            return None
+            yield None
         obj = self.store.get_obj(last)
 
         if self.redos.exists(last):
@@ -282,10 +284,9 @@ class HistoryStore:
         if self.redos.exists(obj.prev):
             dos.extend(self.redos.get(obj.prev).dos) 
         redo = objects.Redo(next, dos)
+        yield obj.action
         new_next = self.redos.set(obj.prev, redo)
-
         self.settings.set("last", obj.prev)
-        return obj.action
 
     def entries(self):
         last = self.last()
@@ -297,25 +298,29 @@ class HistoryStore:
 
         return out
 
+    @contextmanager
     def redo(self, n=0):
         last = self.last()
         if last is None:
-            return None
+            yield None
+            return
 
         if not self.redos.exists(last):
+            yield None
             return
 
         next = self.redos.get(last)
 
         if next is None:
+            yield None
             return
 
         do = next.dos[n]
 
-        self.settings.set("last", do)
 
         obj = self.store.get_obj(do)
-        return obj.action
+        yield obj.action
+        self.settings.set("last", do)
 
     def redo_choices(self):
         last = self.last()
@@ -340,6 +345,14 @@ class Transaction:
         self.project = project
         self.command = command
         self.now = NOW()
+        self.old_branches = {}
+        self.new_branches = {}
+        self.old_names = {}
+        self.new_names = {}
+        self.old_sessions = {}
+        self.new_sessions = {}
+        self.old_state = {}
+        self.new_state = {}
 
     def current_session(self):
         return self.project.sessions.get(self.project.state.get('session'))
@@ -363,14 +376,20 @@ class Transaction:
         self.project.state.set(name, value)
 
     def action(self):
-        return objects.Action(self.now, self.command, {}, {})
+        branches = dict(old=self.old_branches, new=self.new_branches)
+        names = dict(old=self.old_names, new=self.new_names)
+        sessions = dict(old=self.old_sessions, new=self.new_sessions)
+        state = dict(old=self.old_state, new=self.new_state)
+        changes = dict(branches=branches,names=names, sessions=sessions, state=state)
+        return objects.Action(self.now, self.command, changes)
 
 class Project:
     def __init__(self, dir):    
         self.dir = dir
-        self.changes = BlobStore(os.path.join(dir, 'changes'))
-        self.manifests = BlobStore(os.path.join(dir, 'manifests'))
-        self.files = BlobStore(os.path.join(dir, 'files'))
+        blobs = os.path.join(dir, 'blobs')
+        self.changes = BlobStore(os.path.join(blobs, 'changes'))
+        self.manifests = BlobStore(os.path.join(blobs, 'manifests'))
+        self.files = BlobStore(os.path.join(blobs, 'files'))
         self.branches = DirStore(os.path.join(dir, 'branches'))
         self.names = DirStore(os.path.join(dir, 'branches', 'names'))
         self.sessions = DirStore(os.path.join(dir, 'sessions'))
@@ -396,19 +415,20 @@ class Project:
         txn = Transaction(self, command)
         yield txn
         action = txn.action()
-        self.history_log.add(action)
-        # lock file? or write it to lock file, then do it
+
+        with self.history_log.do(action):
+            pass
 
     def history(self):
         return self.history_log.entries()
 
     def undo(self):
-        last = self.history_log.pop()
-        return last
+        with self.history_log.undo() as action:
+            return action
 
     def redo(self, choice):
-        next = self.history_log.redo(choice)
-        return next
+        with self.history_log.redo(choice) as action:
+            return action
 
     def redo_choices(self):
         return self.history_log.redo_choices()
