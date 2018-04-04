@@ -229,8 +229,8 @@ class BlobStore:
         shutil.copyfile(file, self.filename(addr))
         return addr
 
-    def put_buf(self, buf):
-        addr = self.addr_for_buf(buf)
+    def put_buf(self, buf, addr=None):
+        addr = addr or self.addr_for_buf(buf)
         with open(self.filename(addr), 'xb') as fh:
             fh.write(buf)
         return addr
@@ -265,14 +265,18 @@ class HistoryStore:
         return self.settings.get("last")
 
     @contextmanager
-    def do(self, action):
+    def do(self, lock, action):
         obj = objects.Do(self.last(), action)
-        addr = self.store.put_obj(obj)
-        yield action
-        self.settings.set("last", addr) 
+        buf = codec.dump(obj)
+
+        addr = self.store.addr_for_buf(buf)
+        with lock(action):
+            yield action
+            self.store.put_buf(buf, addr=addr)
+            self.settings.set("last", addr) 
 
     @contextmanager
-    def undo(self):
+    def undo(self, lock):
         last = self.last()
         if last == self.START:
             yield None
@@ -288,9 +292,10 @@ class HistoryStore:
         if obj.prev and self.redos.exists(obj.prev):
             dos.extend(self.redos.get(obj.prev).dos) 
         redo = objects.Redo(next, dos)
-        yield obj.action
-        new_next = self.redos.set(obj.prev, redo)
-        self.settings.set("last", obj.prev)
+        with lock(obj.action):
+            yield obj.action
+            new_next = self.redos.set(obj.prev, redo)
+            self.settings.set("last", obj.prev)
 
     def entries(self):
         last = self.last()
@@ -306,7 +311,7 @@ class HistoryStore:
         return out
 
     @contextmanager
-    def redo(self, n=0):
+    def redo(self, lock, n=0):
         last = self.last()
 
         if not self.redos.exists(last):
@@ -319,9 +324,10 @@ class HistoryStore:
 
         obj = self.store.get_obj(do)
         redo = objects.Redo(next.next, next.dos)
-        yield obj.action
-        self.redos.set(last, redo)
-        self.settings.set("last", do)
+        with lock(obj.action):
+            yield obj.action
+            self.redos.set(last, redo)
+            self.settings.set("last", do)
 
     def redo_choices(self):
         last = self.last()
@@ -435,11 +441,17 @@ class Project:
         return self.history_log.last() == self.history_log.START
 
     @contextmanager
-    def _lock(self):
+    def _lock(self, action):
         try:
             with open(self.lockfile, 'wb+') as fh:
                 fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                fh.truncate(0)
+                fh.write(b'# locked by %d at %a\n'%(os.getpid(), str(NOW())))
+                fh.write(codec.dump(action))
+                fh.write(b'\n')
+                fh.flush()
                 yield
+                fh.write(b'# released by %d %a\n'%(os.getpid(), str(NOW())))
         except (IOError, FileNotFoundError):
             raise Exception('lock')
 
@@ -449,7 +461,7 @@ class Project:
         yield txn
         action = txn.action()
 
-        with self._lock(), self.history_log.do(action):
+        with self.history_log.do(self._lock, action):
             if not action:
                 return
             for key in action.changes:
@@ -469,7 +481,7 @@ class Project:
                     raise Exception('unknown')
 
     def undo(self):
-        with self._lock(), self.history_log.undo() as action:
+        with self.history_log.undo(self._lock) as action:
             if not action:
                 return
 
@@ -490,7 +502,7 @@ class Project:
                     raise Exception('unknown')
 
     def redo(self, choice):
-        with self._lock(), self.history_log.redo(choice) as action:
+        with self.history_log.redo(self._lock, choice) as action:
             if not action:
                 return
             for key in action.changes:
