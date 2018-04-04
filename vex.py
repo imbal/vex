@@ -705,4 +705,9 @@ def Redo(list, choice):
         action = p.redo(choice)
         if action:
             print('redid', action.command)
+
+vex_debug = vex_cmd.subcommand('debug')
+
+debug_nop = vex_debug.subcommand('nop')
+
 vex_cmd.main(__name__)

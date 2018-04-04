@@ -373,15 +373,17 @@ class CommandDescription:
         return "<None>"
 
     def complete(self, path, text):
-        if path and path[0] in self.subcommands:
-            return self.subcommands[path[0]].complete(path[1:], text)
-        elif not path:
+        if self.subcommands:
+            if path and path[0] in self.subcommands:
+                return self.subcommands[path[0]].complete(path[1:], text)
             output = []
-            for name in self.subcommands:
-                if name.startswith(text):
-                    output.append("{} ".format(name))
-            if output:
-                return output
+            for name,cmd in self.subcommands.items():
+                if not path or name.startswith(path[0]):
+                    if cmd.subcommands:
+                        output.append("{}:".format(name))
+                    else:
+                        output.append("{} ".format(name))
+            return output
 
         if text.startswith('--'):
             return self.complete_flag(text[2:])
@@ -407,31 +409,42 @@ class CommandDescription:
             
         
 
-    def parse_args(self, path,argv, environ):
-        if argv and argv[0] in self.subcommands:
-            return self.subcommands[argv[0]].parse_args(path+[argv[0]], argv[1:], environ)
+    def parse_args(self, path, argv, environ, route):
+        if self.subcommands:
+            if path and path[0] in self.subcommands:
+                return self.subcommands[path[0]].parse_args(path[1:], argv, environ, route+[path[0]])
+            elif path:
+                if route:
+                    error="unknown subcommand {} for {}".format(path[0],":".join(route))
+                    return Action("error", route, {'usage':True}, errors=(error,))
+                return Action("error", route, {'usage':True}, errors=("an unknown command: {}".format(path[0]),))
+            elif argv and argv[0]:
+                if argv[0] == "help":
+                    return Action("help", route, {'usage': False})
+                elif "--help" in argv:
+                    return Action("help", route, {'usage': True})
+                return Action("error", route, {'usage':True}, errors=("unknown command: {}".format(argv[0]),))
 
-        if not self.argspec:
+            return Action("help", route, {'usage': False})
+
             # no argspec, print usage
+        elif not self.argspec:
             if argv and argv[0]:
                 if argv[0] == "help":
-                    return Action("help", path, {'usage': False})
+                    return Action("help", route, {'usage': False})
                 elif "--help" in argv:
-                    return Action("help", path, {'usage': True})
-                elif self.subcommands:
-                    return Action("error", path, {'usage':True}, errors=("unknown command: {}".format(argv[0]),))
-                else:
-                    return Action("error", path, {'usage':True}, errors=("unknown option: {}".format(argv[0]),))
+                    return Action("help", route, {'usage': True})
+                return Action("error", route, {'usage':True}, errors=("unknown option: {}".format(argv[0]),))
 
-            return Action("help", path, {'usage': False})
+            return Action("help", route, {'usage': False})
         else:
             if '--help' in argv:
-                return Action("help", path, {'usage':True})
+                return Action("help", route, {'usage':True})
             try:
                 args = parse_args(self.argspec, argv, environ)
-                return Action("call", path, args)
+                return Action("call", route, args)
             except BadArg as e:
-                return e.action(path)
+                return e.action(route)
 
     def help(self, path, *, usage=False):
         if path and path[0] in self.subcommands:
@@ -445,7 +458,8 @@ class CommandDescription:
         output = []
         full_name = list(self.prefix)
         full_name.append(self.name)
-        output.append("{}{}{}".format(" ".join(full_name), (" - " if self.short else ""), self.short or ""))
+        full_name = "{}{}{}".format(full_name[0], (" " if full_name[1:] else ""), ":".join(full_name[1:]))
+        output.append("{}{}{}".format(full_name, ("- " if self.short else ""), self.short or ""))
 
         output.append("")
 
@@ -475,6 +489,8 @@ class CommandDescription:
         args = []
         full_name = list(self.prefix)
         full_name.append(self.name)
+        help_full_name = "{} [help]{}{}".format(full_name[0], (" " if full_name[1:] else ""), ":".join(full_name[1:]))
+        full_name = "{}{}{}".format(full_name[0], (" " if full_name[1:] else ""), ":".join(full_name[1:]))
         if self.argspec:
             if self.argspec.switches:
                 args.extend("[--{0}]".format(o) for o in self.argspec.switches)
@@ -489,9 +505,12 @@ class CommandDescription:
             if self.argspec.tail:
                 args.append("[<{}>...]".format(self.argspec.tail))
 
-            output.append("usage: {0} {1}".format(" ".join(full_name), " ".join(args)))
-        if self.subcommands:
-            output.append("usage: {0} [help] <{1}> [--help]".format(" ".join(full_name), "|".join(self.subcommands)))
+
+            output.append("usage: {0} {1}".format(full_name, " ".join(args)))
+        if not self.prefix and self.subcommands:
+            output.append("usage: {0} [help] <{1}> [--help]".format(self.name, "|".join(self.subcommands)))
+        elif self.subcommands:
+            output.append("usage: {0}:<{1}> [--help]".format(help_full_name, "|".join(self.subcommands)))
         return "\n".join(output)
 
 
@@ -521,6 +540,8 @@ class Command:
     # -- builder methods
 
     def subcommand(self, name, short=None):
+        if self.argspec:
+            raise Exception('bad')
         cmd = Command(name, short)
         cmd.prefix.extend(self.prefix)
         cmd.prefix.append(self.name)
@@ -529,6 +550,9 @@ class Command:
 
     def run(self, argspec=None):
         """A decorator for setting the function to be run"""
+
+        if self.subcommands:
+            raise Exception('bad')
 
         if argspec is not None:
             self.nargs, self.argspec = parse_argspec(argspec)
@@ -597,23 +621,32 @@ def main(root, argv, environ):
 
     if 'COMP_LINE' in environ and 'COMP_POINT' in environ:
         arg, offset =  environ['COMP_LINE'], int(environ['COMP_POINT'])
-        tmp = arg[:offset].rsplit(' ', 1)
-        tmp[0] = tmp[0].lstrip()
+        prefix, arg = arg[:offset].rsplit(' ', 1)
+        tmp = prefix.split(' ', 1)
         if len(tmp) > 1:
-            action = Action('complete', tmp[0].split(' ')[1:], tmp[1])
+            path = tmp[1].split(' ',1)[0].split(':')
         else:
-            action = Action('complete', [], tmp[0])
+            path, arg = arg.split(':'), ""
+
+        action = Action('complete', path, arg)
+
     elif argv and argv[0] in ("help"):
         argv.pop(0)
         use_help = True
-        action = obj.parse_args([], argv, environ)
+        path = []
+        if argv and argv[0]:
+            path = argv.pop(0).strip().split(':')
+        action = obj.parse_args(path, argv, environ, [])
         action = Action("help", action.path, {'manual': True})
     elif argv and argv[0] == '--version':
         action = Action("version", [], {})
     elif argv and argv[0] == '--help':
         action = Action("help", [], {'usage': True})
     else:
-        action = obj.parse_args([], argv, environ)
+        path = []
+        if argv and argv[0]:
+            path = argv.pop(0).strip().split(':')
+        action = obj.parse_args(path, argv, environ, [])
 
 
     if action.mode == "complete":
