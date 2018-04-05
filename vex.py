@@ -247,55 +247,31 @@ class BlobStore:
             return codec.parse(fh.read())
 
 
-class HistoryStore:
+class ActionLog:
     START = 'init'
     def __init__(self, dir):
         self.dir = dir
         self.store = BlobStore(os.path.join(dir,'entries'))
         self.redos = DirStore(os.path.join(dir,'redos' ))
         self.settings = DirStore(dir)
+        self.lockfile = os.path.join(dir, 'lock')
 
     def makedirs(self):
         os.makedirs(self.dir, exist_ok=True)
         self.store.makedirs()
         self.redos.makedirs()
         self.settings.set("last", self.START)
+        self.settings.set("new", self.START)
+
+    def empty(self):
+        return self.last() == self.START
+
+    def clean_state(self):
+        if self.settings.exists("last") and self.settings.exists("new"):
+            return self.settings.get("last") == self.settings.get("new")
 
     def last(self):
         return self.settings.get("last")
-
-    @contextmanager
-    def do(self, lock, action):
-        obj = objects.Do(self.last(), action)
-        buf = codec.dump(obj)
-
-        addr = self.store.addr_for_buf(buf)
-        with lock(action):
-            yield action
-            self.store.put_buf(buf, addr=addr)
-            self.settings.set("last", addr) 
-
-    @contextmanager
-    def undo(self, lock):
-        last = self.last()
-        if last == self.START:
-            yield None
-            return
-
-        obj = self.store.get_obj(last)
-
-        if self.redos.exists(last):
-            next = self.redos.get(last)
-        else:
-            next = None
-        dos = [last] 
-        if obj.prev and self.redos.exists(obj.prev):
-            dos.extend(self.redos.get(obj.prev).dos) 
-        redo = objects.Redo(next, dos)
-        with lock(obj.action):
-            yield obj.action
-            new_next = self.redos.set(obj.prev, redo)
-            self.settings.set("last", obj.prev)
 
     def entries(self):
         last = self.last()
@@ -311,7 +287,61 @@ class HistoryStore:
         return out
 
     @contextmanager
-    def redo(self, lock, n=0):
+    def lock(self, action):
+        try:
+            with open(self.lockfile, 'wb+') as fh:
+                fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                fh.truncate(0)
+                fh.write(b'# locked by %d at %a\n'%(os.getpid(), str(NOW())))
+                fh.write(codec.dump(action))
+                fh.write(b'\n')
+                fh.flush()
+                yield
+                fh.write(b'# released by %d %a\n'%(os.getpid(), str(NOW())))
+        except (IOError, FileNotFoundError):
+            raise Exception('lock')
+
+    @contextmanager
+    def do(self, action):
+        if not self.clean_state():
+            raise Exception('corrupt history')
+        obj = objects.Do(self.last(), action)
+
+        addr = self.store.put_obj(obj)
+        self.settings.set("new", addr) 
+        with self.lock(action):
+            yield action
+            self.settings.set("last", addr) 
+
+    @contextmanager
+    def undo(self):
+        if not self.clean_state():
+            raise Exception('corrupt history')
+        last = self.last()
+        if last == self.START:
+            yield None
+            return
+
+        obj = self.store.get_obj(last)
+
+        if self.redos.exists(last):
+            next = self.redos.get(last)
+        else:
+            next = None
+        dos = [last] 
+        if obj.prev and self.redos.exists(obj.prev):
+            dos.extend(self.redos.get(obj.prev).dos) 
+        redo = objects.Redo(next, dos)
+        self.settings.set("new", obj.prev) 
+        with self.lock(obj.action):
+            yield obj.action
+            new_next = self.redos.set(obj.prev, redo)
+            self.settings.set("last", obj.prev)
+
+    @contextmanager
+    def redo(self, n=0):
+        if not self.clean_state():
+            raise Exception('corrupt history')
         last = self.last()
 
         if not self.redos.exists(last):
@@ -324,7 +354,8 @@ class HistoryStore:
 
         obj = self.store.get_obj(do)
         redo = objects.Redo(next.next, next.dos)
-        with lock(obj.action):
+        self.settings.set("new", do) 
+        with self.lock(obj.action):
             yield obj.action
             self.redos.set(last, redo)
             self.settings.set("last", do)
@@ -420,8 +451,7 @@ class Project:
         self.names = DirStore(os.path.join(dir, 'branches', 'names'))
         self.sessions = DirStore(os.path.join(dir, 'sessions'))
         self.state = DirStore(os.path.join(dir, 'state'))
-        self.history_log = HistoryStore(os.path.join(dir, 'history'))
-        self.lockfile = os.path.join(dir, 'lock')
+        self.actions = ActionLog(os.path.join(dir, 'history'))
 
     def makedirs(self):
         os.makedirs(self.dir, exist_ok=True)
@@ -432,36 +462,23 @@ class Project:
         self.branches.makedirs()
         self.names.makedirs()
         self.state.makedirs()
-        self.history_log.makedirs()
+        self.actions.makedirs()
 
     def exists(self):
         return os.path.exists(self.dir)
 
-    def uncreated(self):
-        return self.history_log.last() == self.history_log.START
-
-    @contextmanager
-    def _lock(self, action):
-        try:
-            with open(self.lockfile, 'wb+') as fh:
-                fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                fh.truncate(0)
-                fh.write(b'# locked by %d at %a\n'%(os.getpid(), str(NOW())))
-                fh.write(codec.dump(action))
-                fh.write(b'\n')
-                fh.flush()
-                yield
-                fh.write(b'# released by %d %a\n'%(os.getpid(), str(NOW())))
-        except (IOError, FileNotFoundError):
-            raise Exception('lock')
+    def clean_state(self):
+        return self.actions.clean_state()
 
     @contextmanager
     def do(self, command):
+        if not self.actions.clean_state():
+            raise Exception('corrupt history')
         txn = Transaction(self, command)
         yield txn
         action = txn.action()
 
-        with self.history_log.do(self._lock, action):
+        with self.actions.do(action):
             if not action:
                 return
             for key in action.changes:
@@ -481,7 +498,7 @@ class Project:
                     raise Exception('unknown')
 
     def undo(self):
-        with self.history_log.undo(self._lock) as action:
+        with self.actions.undo() as action:
             if not action:
                 return
 
@@ -502,7 +519,7 @@ class Project:
                     raise Exception('unknown')
 
     def redo(self, choice):
-        with self.history_log.redo(self._lock, choice) as action:
+        with self.actions.redo(choice) as action:
             if not action:
                 return
             for key in action.changes:
@@ -522,30 +539,13 @@ class Project:
                     raise Exception('unknown')
 
     def redo_choices(self):
-        return self.history_log.redo_choices()
+        return self.actions.redo_choices()
 
-    def init(self, prefix, options):
-        self.makedirs()
-        if not self.uncreated():
-            return None
-        with self.do('init') as txn:
-            branch_uuid = UUID()
-            branch_name = 'latest'
-            commit = objects.Init(txn.now, branch_uuid, {})
-            commit_uuid = txn.put_change(commit)
-
-            branch = objects.Branch(branch_uuid, commit_uuid, None, branch_uuid)
-            txn.put_branch(branch)
-            txn.set_name(branch_name, branch) 
-
-            session_uuid = UUID()
-            session = objects.Session(session_uuid, prefix, branch_uuid, commit_uuid, commit_uuid)
-            txn.put_session(session)
-
-            txn.set_state("session", session_uuid)
+    def history_isempty(self):
+        return self.actions.empty()
 
     def history(self):
-        return self.history_log.entries()
+        return self.actions.entries()
 
     def log(self):
         session_uuid = self.state.get("session")
@@ -562,6 +562,49 @@ class Project:
             out.append('committed {}: {}'.format(obj.__class__.__name__, commit))
             commit = getattr(obj, 'prev', None)
         return out
+
+    def status(self):
+        # get list of working directory diles
+        out = []
+        session_uuid = self.state.get("session")
+        if session_uuid and self.sessions.exists(session_uuid):
+            session = self.sessions.get(session_uuid)
+            out.append("session: {}".format(session_uuid))
+            out.append("at {}, started at {}".format(session.prepare, session.commit))
+
+            branch = self.branches.get(session.branch)
+            out.append("commiting to branch {}".format(branch.uuid))
+
+            commit = self.changes.get_obj(session.prepare)
+            out.append("last commit: {}".format(commit.__class__.__name__))
+        else:
+            if self.history_isempty():
+                out.append("you undid the creation. try vex redo")
+            else:
+                out.append("no active session, but history, weird")
+        out.append("")
+        return "\n".join(out)
+
+
+    def init(self, prefix, options):
+        self.makedirs()
+        if not self.history_isempty():
+            return None
+        with self.do('init') as txn:
+            branch_uuid = UUID()
+            branch_name = 'latest'
+            commit = objects.Init(txn.now, branch_uuid, {})
+            commit_uuid = txn.put_change(commit)
+
+            branch = objects.Branch(branch_uuid, commit_uuid, None, branch_uuid)
+            txn.put_branch(branch)
+            txn.set_name(branch_name, branch) 
+
+            session_uuid = UUID()
+            session = objects.Session(session_uuid, prefix, branch_uuid, commit_uuid, commit_uuid)
+            txn.put_session(session)
+
+            txn.set_state("session", session_uuid)
 
     def prepare(self, files):
         with self.do('prepare') as txn:
@@ -591,28 +634,6 @@ class Project:
             session.commit = commit_uuid
             txn.put_session(session)
 
-    def status(self):
-        out = []
-        session_uuid = self.state.get("session")
-        if session_uuid and self.sessions.exists(session_uuid):
-            session = self.sessions.get(session_uuid)
-            out.append("session: {}".format(session_uuid))
-            out.append("at {}, started at {}".format(session.prepare, session.commit))
-
-            branch = self.branches.get(session.branch)
-            out.append("commiting to branch {}".format(branch.uuid))
-
-            commit = self.changes.get_obj(session.prepare)
-            out.append("last commit: {}".format(commit.__class__.__name__))
-        else:
-            if self.uncreated():
-                out.append("you undid the creation. try vex redo")
-            else:
-                out.append("no active session, but history, weird")
-        out.append("")
-        return "\n".join(out)
-
-
     def add(self, files):
         # get current session
         # get head commit
@@ -638,8 +659,11 @@ def Init(directory):
     directory = directory or os.getcwd()
     directory = os.path.join(directory, DOTVEX)
     p = Project(directory)
-    if p.exists() and not p.uncreated():
+
+    if p.exists() and not p.history_isempty():
         print('A vex project already exists here')
+    elif p.exists() and not p.clean_state():
+        print('This vex project is unwell')
     else:
         print('Creating vex project in "{}"...'.format(directory))
         p.init('/prefix', {})
@@ -699,7 +723,7 @@ def Undo():
     action = p.undo()
     if action:
         print('undid', action.command)
-    if p.uncreated():
+    if p.history_isempty():
         print('vex project uninitalised')
 
 vex_redo = vex_cmd.subcommand('redo')
