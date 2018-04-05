@@ -16,10 +16,6 @@ def UUID(): return str(uuid4())
 def NOW(): return datetime.now(timezone.utc)
 DOTVEX = '.vex'
 
-def get_project_directory(start_dir):
-    # hunt down .vex
-    return os.path.join(start_dir, DOTVEX)
-
 class Codec:
     classes = {}
     def __init__(self):
@@ -268,29 +264,29 @@ class ActionLog:
         os.makedirs(self.dir, exist_ok=True)
         self.store.makedirs()
         self.redos.makedirs()
-        self.settings.set("last", self.START)
-        self.settings.set("new", self.START)
+        self.settings.set("current", self.START)
+        self.settings.set("next", self.START)
 
     def empty(self):
-        return self.last() == self.START
+        return self.current() == self.START
 
     def clean_state(self):
-        if self.settings.exists("last") and self.settings.exists("new"):
-            return self.settings.get("last") == self.settings.get("new")
+        if self.settings.exists("current") and self.settings.exists("next"):
+            return self.settings.get("current") == self.settings.get("next")
 
-    def last(self):
-        return self.settings.get("last")
+    def current(self):
+        return self.settings.get("current")
 
     def entries(self):
-        last = self.last()
+        current = self.current()
         out = []
-        while last != self.START:
-            obj = self.store.get_obj(last)
+        while current != self.START:
+            obj = self.store.get_obj(current)
             redos = ()
-            if self.redos.exists(last):
-                redos = [self.store.get_obj(x).action.command for x in self.redos.get(last).dos]
+            if self.redos.exists(current):
+                redos = [self.store.get_obj(x).action.command for x in self.redos.get(current).dos]
             out.append((obj.action, redos))
-            last = obj.prev
+            current = obj.prev
 
         return out
 
@@ -313,68 +309,82 @@ class ActionLog:
     def do(self, action):
         if not self.clean_state():
             raise Exception('corrupt history')
-        obj = objects.Do(self.last(), action)
+        obj = objects.Do(self.current(), action)
 
         addr = self.store.put_obj(obj)
-        self.settings.set("new", addr) 
+        self.settings.set("next", addr) 
         with self.lock(action):
             yield action
-            self.settings.set("last", addr) 
+            self.settings.set("current", addr) 
 
     @contextmanager
     def undo(self):
         if not self.clean_state():
             raise Exception('corrupt history')
-        last = self.last()
-        if last == self.START:
+        current = self.current()
+        if current == self.START:
             yield None
             return
 
-        obj = self.store.get_obj(last)
+        obj = self.store.get_obj(current)
 
-        if self.redos.exists(last):
-            next = self.redos.get(last)
+        if self.redos.exists(current):
+            next = self.redos.get(current)
         else:
             next = None
-        dos = [last] 
+        dos = [current] 
         if obj.prev and self.redos.exists(obj.prev):
             dos.extend(self.redos.get(obj.prev).dos) 
         redo = objects.Redo(next, dos)
-        self.settings.set("new", obj.prev) 
+        self.settings.set("next", obj.prev) 
         with self.lock(obj.action):
             yield obj.action
             new_next = self.redos.set(obj.prev, redo)
-            self.settings.set("last", obj.prev)
+            self.settings.set("current", obj.prev)
 
     @contextmanager
     def redo(self, n=0):
         if not self.clean_state():
             raise Exception('corrupt history')
-        last = self.last()
+        current = self.current()
 
-        if not self.redos.exists(last):
+        if not self.redos.exists(current):
             yield None
             return
 
-        next = self.redos.get(last)
+        next = self.redos.get(current)
 
         do = next.dos.pop(n)
 
         obj = self.store.get_obj(do)
         redo = objects.Redo(next.next, next.dos)
-        self.settings.set("new", do) 
+        self.settings.set("next", do) 
         with self.lock(obj.action):
             yield obj.action
-            self.redos.set(last, redo)
-            self.settings.set("last", do)
+            self.redos.set(current, redo)
+            self.settings.set("current", do)
+
+    @contextmanager
+    def rollback_new(self):
+        if self.clean_state():
+            yield
+            return
+        yield 
+
+    @contextmanager
+    def restart_new(self):
+        if self.clean_state():
+            yield
+            return
+        yield 
 
     def redo_choices(self):
-        last = self.last()
+        current = self.current()
 
-        if not self.redos.exists(last):
+        if not self.redos.exists(current):
             return
 
-        next = self.redos.get(last)
+        next = self.redos.get(current)
 
         if next is None:
             return
@@ -495,6 +505,49 @@ class Project:
     def clean_state(self):
         return self.actions.clean_state()
 
+    # Take Action.changes and applies them to project
+    def apply_changes(self, kind, changes):
+        for key in changes:
+            if key == 'branches':
+                for name,value in changes['branches'][kind].items():
+                    self.branches.set(name, value)
+            elif key == 'names':
+                for name,value in changes['names'][kind].items():
+                    self.names.set(name, value)
+            elif key == 'sessions':
+                for name,value in changes['sessions'][kind].items():
+                    self.sessions.set(name, value)
+            elif key == 'state':
+                for name,value in changes['state'][kind].items():
+                    self.state.set(name, value)
+            else:
+                raise Exception('unknown')
+
+    # Takes Action.blobs and copies them out of the scratch directory
+    def copy_blobs(self, blobs):
+        for key in blobs:
+            if key == 'changes':
+                for addr in blobs['changes']:
+                    self.changes.move_from(self.scratch, addr)
+            elif key == 'manifests':
+                for addr in blobs['manifests']:
+                    self.manifests.move_from(self.scratch, addr)
+            elif key =='files':
+                for addr in blobs['files']:
+                    self.files.move_from(self.scratch, addr)
+
+    def rollback_new_action(self):
+        with self.actions.rollback_new() as action:
+            if action:
+                self.apply_changes('old', action.blobs)
+            return action
+
+    def restart_new_action(self):
+        with self.actions.restart_new() as action:
+            if action:
+                self.apply_changes('old', action.blobs)
+            return action
+
     @contextmanager
     def do(self, command):
         if not self.actions.clean_state():
@@ -506,72 +559,21 @@ class Project:
         with self.actions.do(action):
             if not action:
                 return
-            for key in action.changes:
-                if key == 'branches':
-                    for name,value in action.changes['branches']['new'].items():
-                        self.branches.set(name, value)
-                elif key == 'names':
-                    for name,value in action.changes['names']['new'].items():
-                        self.names.set(name, value)
-                elif key == 'sessions':
-                    for name,value in action.changes['sessions']['new'].items():
-                        self.sessions.set(name, value)
-                elif key == 'state':
-                    for name,value in action.changes['state']['new'].items():
-                        self.state.set(name, value)
-                else:
-                    raise Exception('unknown')
-            for key in action.blobs:
-                if key == 'changes':
-                    for addr in action.blobs['changes']:
-                        self.changes.move_from(self.scratch, addr)
-                elif key == 'manifests':
-                    for addr in action.blobs['manifests']:
-                        self.manifests.move_from(self.scratch, addr)
-                elif key =='files':
-                    for addr in action.blobs['files']:
-                        self.files.move_from(self.scratch, addr)
+            self.apply_changes('new', action.changes)
+            self.copy_blobs(action.blobs)
+
 
     def undo(self):
         with self.actions.undo() as action:
             if not action:
                 return
-
-            for key in action.changes:
-                if key == 'branches':
-                    for name,value in action.changes['branches']['old'].items():
-                        self.branches.set(name, value)
-                elif key == 'names':
-                    for name,value in action.changes['names']['old'].items():
-                        self.names.set(name, value)
-                elif key == 'sessions':
-                    for name,value in action.changes['sessions']['old'].items():
-                        self.sessions.set(name, value)
-                elif key == 'state':
-                    for name,value in action.changes['state']['old'].items():
-                        self.state.set(name, value)
-                else:
-                    raise Exception('unknown')
+            self.apply_changes('old', action.changes)
 
     def redo(self, choice):
         with self.actions.redo(choice) as action:
             if not action:
                 return
-            for key in action.changes:
-                if key == 'branches':
-                    for name,value in action.changes['branches']['new'].items():
-                        self.branches.set(name, value)
-                elif key == 'names':
-                    for name,value in action.changes['names']['new'].items():
-                        self.names.set(name, value)
-                elif key == 'sessions':
-                    for name,value in action.changes['sessions']['new'].items():
-                        self.sessions.set(name, value)
-                elif key == 'state':
-                    for name,value in action.changes['state']['new'].items():
-                        self.state.set(name, value)
-                else:
-                    raise Exception('unknown')
+            self.apply_changes('old', action.changes)
 
     def redo_choices(self):
         return self.actions.redo_choices()
@@ -689,6 +691,13 @@ class Project:
         # set prepare
         pass
 
+def get_project_directory(start_dir):
+    # hunt down .vex
+    return os.path.join(start_dir, DOTVEX)
+
+def get_project():
+    directory = get_project_directory(os.getcwd())
+    return Project(directory)
 
 
 vex_cmd = Command('vex', 'a database for files')
@@ -710,24 +719,21 @@ def Init(directory):
 vex_prepare = vex_cmd.subcommand('prepare')
 @vex_prepare.run('[files...]')
 def Prepare(files):
-    directory = get_project_directory(os.getcwd())
-    p = Project(directory)
+    p = get_project()
     print('Preparing')
     p.prepare(files)
 
 vex_commit = vex_cmd.subcommand('commit')
 @vex_commit.run('[files...]')
 def Commit(files):
-    directory = get_project_directory(os.getcwd())
-    p = Project(directory)
+    p = get_project()
     print('Committing')
     p.commit(files)
 
 vex_log = vex_cmd.subcommand('log')
 @vex_log.run()
 def Log():
-    directory = get_project_directory(os.getcwd())
-    p = Project(directory)
+    p = get_project()
     for entry in p.log():
         print(entry)
         print()
@@ -735,8 +741,7 @@ def Log():
 vex_history = vex_cmd.subcommand('history')
 @vex_history.run()
 def History():
-    directory = get_project_directory(os.getcwd())
-    p = Project(directory)
+    p = get_project()
     for entry,redos in p.history():
         alternative = ""
         if len(redos) == 1:
@@ -750,42 +755,59 @@ def History():
 vex_status = vex_cmd.subcommand('status')
 @vex_status.run()
 def Status():
-    directory = get_project_directory(os.getcwd())
-    p = Project(directory)
+    p = get_project()
     print(p.status())
 
 vex_undo = vex_cmd.subcommand('undo')
 @vex_undo.run()
 def Undo():
-    directory = get_project_directory(os.getcwd())
-    p = Project(directory)
-    action = p.undo()
-    if action:
-        print('undid', action.command)
+    p = get_project()
     if p.history_isempty():
         print('At beginning of history, cannot undo any further')
+    else:
+        action = p.undo()
+        if action:
+            print('undid', action.command)
 
 vex_redo = vex_cmd.subcommand('redo')
 @vex_redo.run('--list? --choice')
 def Redo(list, choice):
-    directory = get_project_directory(os.getcwd())
-    p = Project(directory)
+    p = get_project()
+    choices = p.redo_choices()
     if list:
-        choices = p.redo_choices()
         if choices:
             for n, choice in enumerate(choices):
                 print(n, choice.time, choice.command)
-    else:
+        else:
+            print('Nothing to redo')
+    elif choices:
         choice = choice or 0
         action = p.redo(choice)
         if action:
             print('redid', action.command)
+    else:
+        print('Nothing to redo')
 
 vex_debug = vex_cmd.subcommand('debug')
 @vex_debug.run()
 def Debug():
     print('inspect')
 
-debug_nop = vex_debug.subcommand('nop')
+debug_restart = vex_debug.subcommand('restart')
+@debug_restart.run()
+def Restart():
+    p = get_project()
+    p.restart_new_action()
+    if p.clean_state():
+        print('Project has recovered')
+
+
+debug_rollback = vex_debug.subcommand('rollback')
+@debug_rollback.run()
+def Rollback():
+    p = get_project()
+    p.rollback_new_action()
+    if p.clean_state():
+        print('Project has recovered')
 
 vex_cmd.main(__name__)
