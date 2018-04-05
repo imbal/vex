@@ -565,6 +565,10 @@ class Project:
 
     def status(self):
         # get list of working directory diles
+        # get list of snapshot files
+        # work out changes
+        # update dirstate
+        # print ...
         out = []
         session_uuid = self.state.get("session")
         if session_uuid and self.sessions.exists(session_uuid):
@@ -743,6 +747,9 @@ def Redo(list, choice):
             print('redid', action.command)
 
 vex_debug = vex_cmd.subcommand('debug')
+@vex_debug.run()
+def Debug():
+    print('inspect')
 
 debug_nop = vex_debug.subcommand('nop')
 

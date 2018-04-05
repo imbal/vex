@@ -372,27 +372,47 @@ class CommandDescription:
     def version(self):
         return "<None>"
 
-    def complete(self, path, text):
-        if self.subcommands:
-            if path and path[0] in self.subcommands:
-                return self.subcommands[path[0]].complete(path[1:], text)
+    def complete_path(self, route, path):
+        if path and path[0] in self.subcommands:
+            return self.subcommands[path[0]].complete_path(route+[path[0]], path[1:])
+        if path:
             output = []
+            prefix = ""
             for name,cmd in self.subcommands.items():
-                if not path or name.startswith(path[0]):
-                    if cmd.subcommands:
-                        output.append("{}:".format(name))
+                if not path[0] or name.startswith(path[0]):
+                    if cmd.subcommands and cmd.argspec:
+                        output.append("{}{}".format(prefix, name))
+                    elif cmd.subcommands and not cmd.argspec:
+                        output.append("{}{}:".format(prefix, name))
                     else:
-                        output.append("{} ".format(name))
+                        output.append("{}{} ".format(prefix, name))
             return output
+        elif route:
+            output = []
+            prefix = route[-1]
+            if self.subcommands:
+                output.append("{}:".format(prefix))
+                if self.argspec:
+                    output.append("{} ".format(prefix))
+            else:
+                output.append("{} ".format(prefix))
+            return output
+        return ()
 
-        if text.startswith('--'):
-            return self.complete_flag(text[2:])
-        elif text.startswith('-'):
-            return self.complete_flag(text[1:])
+    def complete_arg(self, path, text):
+        if path: 
+            if path[0] in self.subcommands:
+                return self.subcommands[path[0]].complete_arg(path[1:], text)
         else:
-            # work out which positional, optional, or tail arg it is
-            # suggest type
-            return ()
+            if text.startswith('--'):
+                return self.complete_flag(text[2:])
+            elif text.startswith('-'):
+                return self.complete_flag(text[1:])
+            else:
+                pass
+                # work out which positional, optional, or tail arg it is
+                # suggest type
+        return ()
 
     def complete_flag(self, prefix):
         if '=' in prefix:
@@ -410,7 +430,7 @@ class CommandDescription:
         
 
     def parse_args(self, path, argv, environ, route):
-        if self.subcommands:
+        if path:
             if path and path[0] in self.subcommands:
                 return self.subcommands[path[0]].parse_args(path[1:], argv, environ, route+[path[0]])
             elif path:
@@ -540,8 +560,8 @@ class Command:
     # -- builder methods
 
     def subcommand(self, name, short=None):
-        if self.argspec:
-            raise Exception('bad')
+        #if self.argspec:
+        #    raise Exception('bad')
         cmd = Command(name, short)
         cmd.prefix.extend(self.prefix)
         cmd.prefix.append(self.name)
@@ -551,8 +571,8 @@ class Command:
     def run(self, argspec=None):
         """A decorator for setting the function to be run"""
 
-        if self.subcommands:
-            raise Exception('bad')
+        #if self.subcommands:
+        #    raise Exception('bad')
 
         if argspec is not None:
             self.nargs, self.argspec = parse_argspec(argspec)
@@ -625,12 +645,15 @@ def main(root, argv, environ):
         tmp = prefix.split(' ', 1)
         if len(tmp) > 1:
             path = tmp[1].split(' ',1)[0].split(':')
+            result = obj.complete_arg(path, arg)
         else:
-            path, arg = arg.split(':'), ""
+            result = obj.complete_path([], arg.split(':'))
+        for line in result:
+            print(line)
+        return 0
 
-        action = Action('complete', path, arg)
 
-    elif argv and argv[0] in ("help"):
+    if argv and argv[0] in ("help"):
         argv.pop(0)
         use_help = True
         path = []
@@ -648,12 +671,6 @@ def main(root, argv, environ):
             path = argv.pop(0).strip().split(':')
         action = obj.parse_args(path, argv, environ, [])
 
-
-    if action.mode == "complete":
-        result = obj.complete(action.path, action.argv)
-        for line in result:
-            print(line)
-        return 0
 
     if action.mode == "version":
         result = obj.version()
