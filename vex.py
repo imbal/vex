@@ -563,8 +563,8 @@ class Project:
     def restart_new_action(self):
         with self.actions.restart_new() as action:
             if action:
-                self.apply_changes('new', action.changes)
                 self.copy_blobs(action.blobs)
+                self.apply_changes('new', action.changes)
             return action
 
     @contextmanager
@@ -578,8 +578,8 @@ class Project:
         with self.actions.do(action):
             if not action:
                 return
-            self.apply_changes('new', action.changes)
             self.copy_blobs(action.blobs)
+            self.apply_changes('new', action.changes)
 
 
     def undo(self):
