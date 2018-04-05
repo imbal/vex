@@ -728,7 +728,7 @@ def Undo():
     if action:
         print('undid', action.command)
     if p.history_isempty():
-        print('vex project uninitalised')
+        print('At beginning of history, cannot undo any further')
 
 vex_redo = vex_cmd.subcommand('redo')
 @vex_redo.run('--list? --choice')
