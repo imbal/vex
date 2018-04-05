@@ -160,10 +160,11 @@ class objects:
 
     @codec.register
     class Action:
-        def __init__(self, time, command, changes=()):
+        def __init__(self, time, command, changes=(), blobs=()):
             self.time = time
             self.command = command
             self.changes = changes
+            self.blobs = blobs
 
     @codec.register
     class Do:
@@ -207,6 +208,13 @@ class BlobStore:
     def makedirs(self):
         os.makedirs(self.dir, exist_ok=True)
 
+    def move_from(self, other, addr):
+        if other.exists(addr) and not self.exists(addr):
+            src, dest = other.filename(addr), self.filename(addr)
+            os.rename(src, dest)
+        elif not self.exists(addr):
+            raise Exception('missing file {}'.format(other.filename(addr)))
+
     def addr_for_file(self, file):
         hash = hashlib.shake_256()
         with open(file,'b') as fh:
@@ -249,12 +257,12 @@ class BlobStore:
 
 class ActionLog:
     START = 'init'
-    def __init__(self, dir):
+    def __init__(self, dir, lockfile):
         self.dir = dir
         self.store = BlobStore(os.path.join(dir,'entries'))
         self.redos = DirStore(os.path.join(dir,'redos' ))
         self.settings = DirStore(dir)
-        self.lockfile = os.path.join(dir, 'lock')
+        self.lockfile = lockfile
 
     def makedirs(self):
         os.makedirs(self.dir, exist_ok=True)
@@ -377,8 +385,9 @@ class ActionLog:
         return out
 
 class Transaction:
-    def __init__(self, project, command):
+    def __init__(self, project, scratch, command):
         self.project = project
+        self.scratch = scratch
         self.command = command
         self.now = NOW()
         self.old_branches = {}
@@ -389,16 +398,21 @@ class Transaction:
         self.new_sessions = {}
         self.old_state = {}
         self.new_state = {}
+        self.new_changes = set()
+        self.new_manifests = set()
+        self.new_files = set()
 
     def current_session(self):
         return self.project.sessions.get(self.project.state.get('session'))
 
-    def put_change(self, obj):
-        return self.project.changes.put_obj(obj)
+    def get_change(self, obj):
+        pass
 
-    def get_branch(self, uuid):
-        return self.project.branches.get(uuid)
-    
+    def put_change(self, obj):
+        addr = self.scratch.put_obj(obj)
+        self.new_changes.add(addr)
+        return addr
+
     def put_session(self, session):
         if session.uuid not in self.old_sessions:
             if self.project.sessions.exists(session.uuid):
@@ -406,6 +420,12 @@ class Transaction:
             else:
                 self.old_sessions[session.uuid] = None
         self.new_sessions[session.uuid] = session
+
+    def get_branch(self, uuid):
+        if branch.uuid in self.new_branches:
+            return self.new_branches[uuid]
+
+        return self.project.branches.get(uuid)
 
     def put_branch(self, branch):
         if branch.uuid not in self.old_branches:
@@ -437,8 +457,10 @@ class Transaction:
         names = dict(old=self.old_names, new=self.new_names)
         sessions = dict(old=self.old_sessions, new=self.new_sessions)
         state = dict(old=self.old_state, new=self.new_state)
+
+        blobs = dict(changes=self.new_changes, manifests=self.new_manifests, files=self.new_files)
         changes = dict(branches=branches,names=names, sessions=sessions, state=state)
-        return objects.Action(self.now, self.command, changes)
+        return objects.Action(self.now, self.command, changes, blobs)
 
 class Project:
     def __init__(self, dir):    
@@ -451,7 +473,9 @@ class Project:
         self.names = DirStore(os.path.join(dir, 'branches', 'names'))
         self.sessions = DirStore(os.path.join(dir, 'sessions'))
         self.state = DirStore(os.path.join(dir, 'state'))
-        self.actions = ActionLog(os.path.join(dir, 'history'))
+        self.lockfile = os.path.join(dir, 'lock')
+        self.actions = ActionLog(os.path.join(dir, 'history'), self.lockfile)
+        self.scratch = BlobStore(os.path.join(dir, 'scratch'))
 
     def makedirs(self):
         os.makedirs(self.dir, exist_ok=True)
@@ -463,6 +487,7 @@ class Project:
         self.names.makedirs()
         self.state.makedirs()
         self.actions.makedirs()
+        self.scratch.makedirs()
 
     def exists(self):
         return os.path.exists(self.dir)
@@ -474,7 +499,7 @@ class Project:
     def do(self, command):
         if not self.actions.clean_state():
             raise Exception('corrupt history')
-        txn = Transaction(self, command)
+        txn = Transaction(self, self.scratch, command)
         yield txn
         action = txn.action()
 
@@ -496,6 +521,16 @@ class Project:
                         self.state.set(name, value)
                 else:
                     raise Exception('unknown')
+            for key in action.blobs:
+                if key == 'changes':
+                    for addr in action.blobs['changes']:
+                        self.changes.move_from(self.scratch, addr)
+                elif key == 'manifests':
+                    for addr in action.blobs['manifests']:
+                        self.manifests.move_from(self.scratch, addr)
+                elif key =='files':
+                    for addr in action.blobs['files']:
+                        self.files.move_from(self.scratch, addr)
 
     def undo(self):
         with self.actions.undo() as action:
