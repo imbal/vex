@@ -39,28 +39,33 @@ codec = Codec()
 class objects:
     @codec.register
     class Init:
-        def __init__(self, timestamp, uuid, settings):
+        def __init__(self,n, timestamp, uuid, root, settings):
+            self.n = n
             self.timestamp = timestamp
             self.uuid = uuid
             self.settings = settings
+            self.root = root
 
     @codec.register
     class Create:
-        def __init__(self, base, timestamp, uuid, settings):
+        def __init__(self, n, base, timestamp, uuid, settings):
+            self.n =n
             self.base = base
             self.timestamp = timestamp
             self.uuid = uuid
 
     @codec.register
     class Close:
-        def __init__(self, prev, timestamp, reason):
+        def __init__(self, n, prev, timestamp, reason):
+            self.n =n
             self.prev = prev
             self.timestamp = timestamp
             self.reason = reason
 
     @codec.register
     class Update:
-        def __init__(self, prev, timestamp, base, settings):
+        def __init__(self, n, prev, timestamp, base, settings):
+            self.n =n
             self.prev = prev
             self.base = base
             self.timestamp = timestamp
@@ -68,14 +73,16 @@ class objects:
     
     @codec.register
     class Prepare:
-        def __init__(self, prev, timestamp, changelog):
+        def __init__(self, n, prev, timestamp, changelog):
+            self.n =n
             self.prev = prev
             self.timestamp = timestamp
             self.changelog = changelog
     
     @codec.register
     class Commit:
-        def __init__(self, prev, timestamp, root, changelog):
+        def __init__(self, n, prev, timestamp, root, changelog):
+            self.n =n
             self.prev = prev
             self.timestamp = timestamp
             self.root = root
@@ -83,7 +90,8 @@ class objects:
 
     @codec.register
     class Revert:
-        def __init__(self, prev, timestamp, root, changelog):
+        def __init__(self, n, prev, timestamp, root, changelog):
+            self.n =n
             self.prev = prev
             self.timestamp = timestamp
             self.root = root
@@ -91,7 +99,8 @@ class objects:
 
     @codec.register
     class Amend:
-        def __init__(self, prev, timestamp, root, changelog):
+        def __init__(self, n, prev, timestamp, root, changelog):
+            self.n =n
             self.prev = prev
             self.timestamp = timestamp
             self.root = root
@@ -433,8 +442,10 @@ class Transaction:
     def current_session(self):
         return self.project.sessions.get(self.project.state.get('session'))
 
-    def get_change(self, obj):
-        pass
+    def get_change(self, addr):
+        if addr in self.new_changes:
+            return self.scratch.get_obj(addr)
+        return self.project.changes.get_obj(addr)
 
     def put_change(self, obj):
         addr = self.scratch.put_obj(obj)
@@ -610,12 +621,13 @@ class Project:
         out = []
         while commit != session.commit:
             obj = self.changes.get_obj(commit)
-            out.append('*uncommitted* {}: {}'.format(obj.__class__.__name__, commit))
+            out.append('{}: *uncommitted* {}: {}'.format(obj.n, obj.__class__.__name__, commit))
             commit = getattr(obj, 'prev', None)
+            # print \t date, file, message
 
         while commit != None:
             obj = self.changes.get_obj(commit)
-            out.append('committed {}: {}'.format(obj.__class__.__name__, commit))
+            out.append('{}: committed {}: {}'.format(obj.n, obj.__class__.__name__, commit))
             commit = getattr(obj, 'prev', None)
         return out
 
@@ -653,7 +665,9 @@ class Project:
         with self.do('init') as txn:
             branch_uuid = UUID()
             branch_name = 'latest'
-            commit = objects.Init(txn.now, branch_uuid, {})
+            # root = objects.Tree
+            root = None
+            commit = objects.Init(0, txn.now, branch_uuid, None, {})
             commit_uuid = txn.put_change(commit)
 
             branch = objects.Branch(branch_uuid, commit_uuid, None, branch_uuid)
@@ -671,7 +685,9 @@ class Project:
             session = txn.current_session()
             commit = session.prepare
 
-            prepare = objects.Prepare(commit, txn.now, None)
+            old = txn.get_change(commit)
+
+            prepare = objects.Prepare(old.n+1, commit, txn.now, None)
             prepare_uuid = txn.put_change(prepare)
 
             session.prepare = prepare_uuid
@@ -681,7 +697,8 @@ class Project:
         with self.do('commit') as txn:
             session = txn.current_session()
 
-            commit = objects.Commit(session.prepare, txn.now, None, None)
+            old = txn.get_change(session.prepare)
+            commit = objects.Commit(old.n+1, session.prepare, txn.now, None, None)
             commit_uuid = txn.put_change(commit)
 
             branch = txn.get_branch(session.branch)
@@ -727,10 +744,10 @@ def Init(directory):
     directory = os.path.join(directory, DOTVEX)
     p = Project(directory)
 
-    if p.exists() and not p.history_isempty():
+    if p.exists() and not p.clean_state():
+        print('This vex project is unwell. Try `vex debug:status`')
+    elif p.exists() and not p.history_isempty():
         print('A vex project already exists here')
-    elif p.exists() and not p.clean_state():
-        print('This vex project is unwell')
     else:
         print('Creating vex project in "{}"...'.format(directory))
         p.init('/prefix', {})
@@ -739,6 +756,8 @@ vex_prepare = vex_cmd.subcommand('prepare')
 @vex_prepare.run('[files...]')
 def Prepare(files):
     p = get_project()
+    if not p.clean_state(): 
+        print('Another change is already in progress. Try `vex debug:status`')
     print('Preparing')
     p.prepare(files)
 
@@ -746,6 +765,9 @@ vex_commit = vex_cmd.subcommand('commit')
 @vex_commit.run('[files...]')
 def Commit(files):
     p = get_project()
+    if not p.clean_state(): 
+        print('Another change is already in progress. Try `vex debug:status`')
+        return()
     print('Committing')
     p.commit(files)
 
@@ -753,14 +775,21 @@ vex_log = vex_cmd.subcommand('log')
 @vex_log.run()
 def Log():
     p = get_project()
-    for entry in p.log():
-        print(entry)
-        print()
+    if not p.clean_state(): 
+        print('Another change is already in progress. Try `vex debug:status`')
+    else:
+        for entry in p.log():
+            print(entry)
+            print()
 
 vex_history = vex_cmd.subcommand('history')
 @vex_history.run()
 def History():
     p = get_project()
+    if not p.clean_state(): 
+        print('Another change is already in progress. Try `vex debug:status`')
+        return 
+
     for entry,redos in p.history():
         alternative = ""
         if len(redos) == 1:
@@ -775,15 +804,19 @@ vex_status = vex_cmd.subcommand('status')
 @vex_status.run()
 def Status():
     p = get_project()
-    if p.clean_state():
-        print(p.status())
-    else:
-        print('Project has unfinished actions')
+    if not p.clean_state():
+        print('Another change is already in progress. Try `vex debug:status`')
+        return
+    print(p.status())
 
 vex_undo = vex_cmd.subcommand('undo')
 @vex_undo.run()
 def Undo():
     p = get_project()
+    if not p.clean_state():
+        print('Another change is already in progress. Try `vex debug:status`')
+        return
+
     if p.history_isempty():
         print('At beginning of history, cannot undo any further')
     else:
@@ -795,6 +828,10 @@ vex_redo = vex_cmd.subcommand('redo')
 @vex_redo.run('--list? --choice')
 def Redo(list, choice):
     p = get_project()
+    if not p.clean_state():
+        print('Another change is already in progress. Try `vex debug:status`')
+        return
+
     choices = p.redo_choices()
     if list:
         if choices:
@@ -813,23 +850,42 @@ def Redo(list, choice):
 vex_debug = vex_cmd.subcommand('debug')
 @vex_debug.run()
 def Debug():
-    print('inspect')
+    if not p.clean_state():
+        print('Another change is already in progress. Try `vex debug:status`')
+
+debug_status = vex_debug.subcommand('status')
+@debug_status.run()
+def DebugStatus():
+    p = get_project()
+    print("Clean history", p.clean_state())
+
 
 debug_restart = vex_debug.subcommand('restart')
 @debug_restart.run()
-def Restart():
+def DebugRestart():
     p = get_project()
+    if p.clean_state():
+        print('There is no change in progress to restart')
+        return
+    print('Restarting current action...')
     p.restart_new_action()
     if p.clean_state():
         print('Project has recovered')
-
+    else:
+        print('Oh dear')
 
 debug_rollback = vex_debug.subcommand('rollback')
 @debug_rollback.run()
-def Rollback():
+def DebugRollback():
     p = get_project()
     p.rollback_new_action()
     if p.clean_state():
+        print('There is no change in progress to rollback')
+        return
+    print('Restarting current action...')
+    if p.clean_state():
         print('Project has recovered')
+    else:
+        print('Oh dear')
 
 vex_cmd.main(__name__)
