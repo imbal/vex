@@ -369,14 +369,32 @@ class ActionLog:
         if self.clean_state():
             yield
             return
-        yield 
+
+        next = self.settings.get("next")
+        obj = self.store.get_obj(next)
+        old_current = obj.prev
+        current = self.settings.get("current")
+        if current != old_current:
+            raise Exception('History is really corrupted: Interrupted transaction did not come after current change')
+        with self.lock(obj.action):
+            yield obj.action
+            self.settings.set("next", current)
 
     @contextmanager
     def restart_new(self):
         if self.clean_state():
             yield
             return
-        yield 
+        next = self.settings.get("next")
+        obj = self.store.get_obj(next)
+        old_current = obj.prev
+        current = self.settings.get("current")
+        if current != old_current:
+            raise Exception('History is really corrupted: Interrupted transaction did not come after current change')
+        with self.lock(obj.action):
+            yield obj.action
+            self.settings.set("current", next)
+
 
     def redo_choices(self):
         current = self.current()
@@ -432,7 +450,7 @@ class Transaction:
         self.new_sessions[session.uuid] = session
 
     def get_branch(self, uuid):
-        if branch.uuid in self.new_branches:
+        if uuid in self.new_branches:
             return self.new_branches[uuid]
 
         return self.project.branches.get(uuid)
@@ -539,13 +557,14 @@ class Project:
     def rollback_new_action(self):
         with self.actions.rollback_new() as action:
             if action:
-                self.apply_changes('old', action.blobs)
+                self.apply_changes('old', action.changes)
             return action
 
     def restart_new_action(self):
         with self.actions.restart_new() as action:
             if action:
-                self.apply_changes('old', action.blobs)
+                self.apply_changes('new', action.changes)
+                self.copy_blobs(action.blobs)
             return action
 
     @contextmanager
@@ -756,7 +775,10 @@ vex_status = vex_cmd.subcommand('status')
 @vex_status.run()
 def Status():
     p = get_project()
-    print(p.status())
+    if p.clean_state():
+        print(p.status())
+    else:
+        print('Project has unfinished actions')
 
 vex_undo = vex_cmd.subcommand('undo')
 @vex_undo.run()
