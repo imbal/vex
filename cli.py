@@ -642,7 +642,7 @@ def main(root, argv, environ):
     if 'COMP_LINE' in environ and 'COMP_POINT' in environ:
         arg, offset =  environ['COMP_LINE'], int(environ['COMP_POINT'])
         prefix, arg = arg[:offset].rsplit(' ', 1)
-        tmp = prefix.split(' ', 1)
+        tmp = prefix.lstrip().split(' ', 1)
         if len(tmp) > 1:
             path = tmp[1].split(' ',1)[0].split(':')
             result = obj.complete_arg(path, arg)
