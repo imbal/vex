@@ -5,6 +5,7 @@ import time
 import types
 import itertools
 import subprocess
+import traceback
 
 
 ### Argspec / Parsing
@@ -556,8 +557,15 @@ class Command:
         self.long = None
         self.argspec = None
         self.nargs = 0
+        self.err_fn = None
 
     # -- builder methods
+
+    def on_error(self):
+        def _decorator(fn):
+            self.err_fn = fn
+            return fn
+        return _decorator
 
     def subcommand(self, name, short=None):
         #if self.argspec:
@@ -675,7 +683,15 @@ def main(root, argv, environ):
     if action.mode == "version":
         result = obj.version()
     elif action.mode == "call":
-        result =  root.call(action.path, action.argv)
+        try:
+            result =  root.call(action.path, action.argv)
+        except Exception as e:
+            tb = traceback.format_exception(*sys.exc_info())
+            if root.err_fn:
+                result = root.err_fn(action.path, action.argv, e, tb)
+                exit_code = -127
+            else:
+                result = Response(-1, tb)
     elif action.mode == "help":
         result = obj.help(action.path, usage=action.argv.get('usage'))
     elif action.mode == "error":

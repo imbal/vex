@@ -737,6 +737,25 @@ def get_project():
 
 
 vex_cmd = Command('vex', 'a database for files')
+@vex_cmd.on_error()
+def Error(path, args, exception, traceback):
+    message = getattr(exception, "message", exception.__class__.__name__)
+    if path:
+        print("Something went wrong while running {}: {}".format(':'.join(path), message))
+    else:
+        print("Something went wrong: {}".format(message))
+
+    print()
+
+    p = get_project()
+    if p and not p.clean_state():
+        p.rollback_new_action()
+
+        if not p.clean_state():
+            print('This is bad: The project history is corrupt, try `vex debug:status` for more information')
+
+
+
 vex_init = vex_cmd.subcommand('init')
 @vex_init.run('[directory]')
 def Init(directory):
@@ -747,6 +766,7 @@ def Init(directory):
     if p.exists() and not p.clean_state():
         print('This vex project is unwell. Try `vex debug:status`')
     elif p.exists() and not p.history_isempty():
+        sys.exit(-1)
         print('A vex project already exists here')
     else:
         print('Creating vex project in "{}"...'.format(directory))
@@ -758,6 +778,7 @@ def Prepare(files):
     p = get_project()
     if not p.clean_state(): 
         print('Another change is already in progress. Try `vex debug:status`')
+        sys.exit(-1)
     print('Preparing')
     p.prepare(files)
 
@@ -767,7 +788,7 @@ def Commit(files):
     p = get_project()
     if not p.clean_state(): 
         print('Another change is already in progress. Try `vex debug:status`')
-        return()
+        sys.exit(-1)
     print('Committing')
     p.commit(files)
 
