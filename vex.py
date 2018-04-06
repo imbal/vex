@@ -203,6 +203,14 @@ class objects:
             self.next = next
             self.dos = dos
 
+    @codec.register
+    class WorkingDirectory:
+        def __init__(self, session, branch, prefix, files):
+            self.session = session
+            self.branch = branch
+            self.prefix = prefix
+            self.files = files
+
 # Stores
 
 class DirStore:
@@ -459,8 +467,11 @@ class Transaction:
         self.new_manifests = set()
         self.new_files = set()
 
+
+    def working_copy(self):
+        return self.project.working_copy()
     def current_session(self):
-        return self.project.sessions.get(self.project.state.get('session'))
+        return self.project.sessions.get(self.working_copy().session)
 
     def get_change(self, addr):
         if addr in self.new_changes:
@@ -635,8 +646,11 @@ class Project:
     def history(self):
         return self.actions.entries()
 
+    def working_copy(self):
+        return self.state.get("working")
+
     def log(self):
-        session_uuid = self.state.get("session")
+        session_uuid = self.working_copy().session
         session = self.sessions.get(session_uuid)
         commit = session.prepare
         out = []
@@ -659,7 +673,7 @@ class Project:
         # update dirstate
         # print ...
         out = []
-        session_uuid = self.state.get("session")
+        session_uuid = self.working_copy().session
         if session_uuid and self.sessions.exists(session_uuid):
             session = self.sessions.get(session_uuid)
             out.append("session: {}".format(session_uuid))
@@ -706,7 +720,7 @@ class Project:
             session = objects.Session(session_uuid, prefix, branch_uuid, commit_uuid, commit_uuid)
             txn.put_session(session)
 
-            txn.set_state("session", session_uuid)
+            txn.set_state("working", objects.WorkingDirectory(session_uuid, branch_uuid, '/', {}))
 
     def prepare(self, files):
         with self.do('prepare') as txn:
