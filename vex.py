@@ -144,33 +144,64 @@ class objects:
 
     @codec.register
     class Changelog:
-        def __init__(self, prev, changes):
-            self.changes = changes
+        def __init__(self, prev, summary, changes, message):
             self.prev = prev
+            self.summary = summary
+            self.message = message
+            self.changes = changes
+
     @codec.register
-    class AddFile:
-        def __init__(self, filename, timestamp, message): 
+    class Add:
+        def __init__(self, filename, addr, properties): 
+            self.filename = filename
+            self.addr = addr
+            self.properties = ()
+
+    @codec.register
+    class Delete:
+        def __init__(self, timestamp, filename): 
+            self.filename = filename
+
+    @codec.register
+    class Change:
+        def __init__(self, timestamp, filename, addr, properties): 
             self.timestamp = timestamp
             self.filename = filename
-            self.message = message
+            self.addr = addr
+            self.properites = properties
 
-    # Add File, Remove File, 
-    # Manifest
     
     @codec.register
-    class Tree:
-        def __init__(self, contents):
-            self.contents = contents
+    class Directory:
+        def __init__(self, entries):
+            self.entries = entries
 
     @codec.register
-    class TreeEntry:
-        pass
+    class Prefix:
+        def __init__(self, prefix, entries):
+            self.prefix = prefix
+            self.entries = entries
+            
+    @codec.register
+    class Subdirectory:
+        def __init__(self, filename, addr, properties):
+            self.filename = filename
+            self.addr = addr
+            self.properites = properties
 
     @codec.register
-    class BlobList:
-        pass
+    class File:
+        def __init__(self, filename, addr, properties):
+            self.filename = filename
+            self.addr = addr
+            self.properites = properties
 
-    # No types for Files, stored directly
+    @codec.register
+    class Blob:
+        def __init__(self, filename, addrs, properties):
+            self.filename = filename
+            self.addrs = addrs
+            self.properites = properties
 
     # Non Blob store:
     
@@ -214,8 +245,9 @@ class objects:
             self.dos = dos
 
     @codec.register
-    class WorkingCopy:
-        def __init__(self, session, branch, prefix, files):
+    class WorkingDir:
+        def __init__(self, commit, session, branch, prefix, files):
+            self.commit = commit
             self.session = session
             self.branch = branch
             self.prefix = prefix
@@ -223,9 +255,11 @@ class objects:
 
     @codec.register
     class WorkingFile:
-        def __init__(self, state, path):
+        def __init__(self, state, path, addr=None, stat=None):
             self.state = state
             self.path = path
+            self.addr = addr
+            self.stat = stat
 
 # Stores
 
@@ -473,10 +507,16 @@ class StateChange:
         name = "working"
         if name not in self.old_state:
             if self.project.state.exists(name):
-                self.old_state[name] = self.project.state.get(name)
+                old = self.project.state.get(name)
             else:
-                self.old_state[name] = None
-        self.new_state[name] = value
+                old = None
+        else:
+            old = self.old_state[name]
+
+        if value!= old:
+
+            self.new_state[name] = value
+            self.old_state[name] = old
 
     def working_copy(self):
         if "working" in self.new_state:
@@ -493,10 +533,12 @@ class StateChange:
         else:
             return objects.Action(self.now, self.command, {}, ())
 
-    def build_working_copy(self, session, prefix):
-        s = self.sessions.get(session)
-        branch= s.branch
-        return objects.WorkingCopy(session, branch, prefix, files)
+    def build_working_copy(self, commit):
+        working_copy = self.working_copy()
+        files = {}
+
+
+        return objects.WorkingDir(commit, working_copy.session, working_copy.branch, working_copy.prefix, working_copy.files)
 
     def refresh_working_copy(self):
         old = self.working_copy()
@@ -506,7 +548,7 @@ class StateChange:
             # if state ... tracked .. check stat if present, else md5 and stat
             files[name]= objects.WorkingFile(entry.state, entry.path)
 
-        new = objects.WorkingCopy(old.session, old.branch, old.prefix, files)
+        new = objects.WorkingDir(old.commit, old.session, old.branch, old.prefix, files)
         self.set_working_copy(new)
         return new
 
@@ -514,6 +556,8 @@ class ProjectChange:
     working_copy = StateChange.working_copy
     set_working_copy = StateChange.set_working_copy
     current_session = StateChange.current_session
+    build_working_copy = StateChange.build_working_copy
+    refresh_working_copy = StateChange.refresh_working_copy
 
     def __init__(self, project, scratch, command):
         self.project = project
@@ -532,7 +576,25 @@ class ProjectChange:
         self.new_manifests = set()
         self.new_files = set()
 
+    def working_copy_changes(self, files=None):
+        return ()
 
+    def build_tree(self, files=None):
+        return ()
+
+    def update_working_copy(self, commit, changes):
+        working = self.working_copy()
+        working.commit = commit
+        for change in changes:
+            if isinstance(change, objects.Add):
+                pass # files[change.filename
+            elif isinstance(change, objects.Delete):
+                pass # files[...]
+            elif isinstance(change, objects.Modify):
+                pass # 
+        self.set_working_copy(working)
+        return working
+        
     def get_change(self, addr):
         if addr in self.new_changes:
             return self.scratch.get_obj(addr)
@@ -542,6 +604,11 @@ class ProjectChange:
         addr = self.scratch.put_obj(obj)
         self.new_changes.add(addr)
         return addr
+
+    def get_session(self, uuid):
+        if uuid in self.new_sessions:
+            return self.new_sessions[uuid]
+        return self.project.sessions.get(uuid)
 
     def put_session(self, session):
         if session.uuid not in self.old_sessions:
@@ -742,7 +809,7 @@ class Project:
         return self.state.get("working")
 
     def log(self):
-        with self.do_nohistory() as txn:
+        with self.do_nohistory('log') as txn:
             session = txn.current_session()
 
         commit = session.prepare
@@ -758,8 +825,6 @@ class Project:
             out.append('{}: committed {}: {}'.format(obj.n, obj.__class__.__name__, commit))
             commit = getattr(obj, 'prev', None)
         return out
-
-
 
     def status(self):
         with self.do_nohistory('status') as txn:
@@ -791,29 +856,45 @@ class Project:
             session = objects.Session(session_uuid, prefix, branch_uuid, commit_uuid, commit_uuid)
             txn.put_session(session)
 
-            txn.set_working_copy(objects.WorkingCopy(session_uuid, branch_uuid, os.path.join('/',prefix), {}))
+            txn.set_working_copy(objects.WorkingDir(commit_uuid, session_uuid, branch_uuid, os.path.join('/',prefix), {}))
         
 
     def prepare(self, files):
         with self.do('prepare') as txn:
-            session = txn.current_session()
+            working = txn.refresh_working_copy()
+            session = txn.get_session(working.session)
             commit = session.prepare
+            if commit != working.commit:
+                raise VexCorruption('Conflict???')
 
             old = txn.get_change(commit)
             n = txn.next_commit_number(old, 'prepare')
-            prepare = objects.Prepare(n, txn.now, prev=commit, changes=[])
+
+            changes = txn.working_copy_changes(files)
+            # add files to the store?
+
+            prepare = objects.Prepare(n, txn.now, prev=commit, changes=changes)
             prepare_uuid = txn.put_change(prepare)
 
             session.prepare = prepare_uuid
             txn.put_session(session)
+            txn.update_working_copy(prepare_uuid, changes)
 
     def commit(self, files):
         with self.do('commit') as txn:
-            session = txn.current_session()
+            working = txn.refresh_working_copy()
+            session = txn.get_session(working.session)
+            if session.prepare != working.commit:
+                raise VexCorruption('Conflict???')
 
             old = txn.get_change(session.prepare)
             n = txn.next_commit_number(old, 'commit')
-            commit = objects.Commit(n, txn.now, prev=session.prepare, root=None, changelog=None)
+
+            changes = txn.working_copy_changes(files)
+            changelog = objects.Changelog(prev=None, summary="Summary", message="Message", changes=changes)
+            root = txn.build_tree(changes)
+
+            commit = objects.Commit(n, txn.now, prev=session.prepare, root=root, changelog=None)
             commit_uuid = txn.put_change(commit)
 
             branch = txn.get_branch(session.branch)
@@ -823,15 +904,18 @@ class Project:
             session.prepare = commit_uuid
             session.commit = commit_uuid
             txn.put_session(session)
+            # update working.files
+            txn.update_working_copy(commit_uuid, changes)
 
     def add(self, files):
         with self.do('add') as txn:
-            working_copy = txn.working_copy()
+            working_copy = txn.refresh_working_copy()
             names = {}
             for filename in files:
                 if not filename.startswith(self.working_dir):
                     raise VexError("{} is outside project".format(filename))
                 name = os.path.join(working_copy.prefix, os.path.relpath(filename, self.working_dir))
+                # normalize name to NFC?
                 names[name] = filename
                 for name, filename in names.items():
                     if name in working_copy.files:
