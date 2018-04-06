@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from uuid import uuid4
 from contextlib import contextmanager
 
-from cli import Command
+from cli import Command, Result
 import rson
 
 def UUID(): return str(uuid4())
@@ -501,8 +501,10 @@ class StateChange:
     def refresh_working_copy(self):
         old = self.working_copy()
         files = {}
-        for name, entry in files.items():
-            files[name ]= objects.WorkingFile(entry.state, entry.path)
+        for name, entry in old.files.items():
+            # if state ... modified? added? removed? ignored
+            # if state ... tracked .. check stat if present, else md5 and stat
+            files[name]= objects.WorkingFile(entry.state, entry.path)
 
         new = objects.WorkingCopy(old.session, old.branch, old.prefix, files)
         self.set_working_copy(new)
@@ -619,6 +621,10 @@ class Project:
         self.actions.makedirs()
         self.scratch.makedirs()
 
+    def makelock(self):
+        with open(self.lockfile, 'xb') as fh:
+            fh.write(b'# created by %d at %a\n'%(os.getpid(), str(NOW())))
+
     def exists(self):
         return os.path.exists(self.dir)
 
@@ -627,7 +633,7 @@ class Project:
     @contextmanager
     def lock(self, command):
         try:
-            with open(self.lockfile, 'wb+') as fh:
+            with open(self.lockfile, 'wb') as fh:
                 fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 fh.truncate(0)
                 fh.write(b'# locked by %d at %a\n'%(os.getpid(), str(NOW())))
@@ -786,6 +792,7 @@ class Project:
             txn.put_session(session)
 
             txn.set_working_copy(objects.WorkingCopy(session_uuid, branch_uuid, os.path.join('/',prefix), {}))
+        
 
     def prepare(self, files):
         with self.do('prepare') as txn:
@@ -810,9 +817,7 @@ class Project:
             commit_uuid = txn.put_change(commit)
 
             branch = txn.get_branch(session.branch)
-            if branch.head != session.commit: # descendent check
-                print('branch has diverged, not applying commit')
-            else:
+            if branch.head == session.commit: # descendent check
                 branch.head = commit_uuid
                 txn.put_branch(branch)
             session.prepare = commit_uuid
@@ -868,15 +873,15 @@ vex_cmd = Command('vex', 'a database for files')
 def Error(path, args, exception, traceback):
     message = str(exception)
     if path:
-        print("{}: {}".format(':'.join(path), message))
+        yield ("{}: {}".format(':'.join(path), message))
     else:
-        print("vex: {}".format(message))
+        yield ("vex: {}".format(message))
 
     if not isinstance(exception, VexError):
-        print()
-        print("Worse still, it's an error vex doesn't recognize yet. A python traceback follows:")
-        print()
-        print(traceback)
+        yield ""
+        yield ("Worse still, it's an error vex doesn't recognize yet. A python traceback follows:")
+        yield ""
+        yield (traceback)
 
     p = get_project(check=False)
 
@@ -884,9 +889,9 @@ def Error(path, args, exception, traceback):
         p.rollback_new_action()
 
         if not p.clean_state():
-            print('This is bad: The project history is corrupt, try `vex debug:status` for more information')
+            yield ('This is bad: The project history is corrupt, try `vex debug:status` for more information')
         else:
-            print('Good news: The changes that were attempted have been undone')
+            yield ('Good news: The changes that were attempted have been undone')
 
 
 vex_init = vex_cmd.subcommand('init')
@@ -899,18 +904,19 @@ def Init(directory, working, config, prefix):
     p = Project(config_dir, working_dir)
 
     if p.exists() and not p.clean_state():
-        print('This vex project is unwell. Try `vex debug:status`')
+        yield ('This vex project is unwell. Try `vex debug:status`')
     elif p.exists():
         if not p.history_isempty():
-            print('A vex project already exists here')
-            sys.exit(-1)
+            yield ('A vex project already exists here')
+            yield Result(-1, None)
         else:
-            print('A empty project was round, re-creating project in "{}"...'.format(directory))
+            yield ('A empty project was round, re-creating project in "{}"...'.format(directory))
             with p.lock('init') as p:
                 p.init(prefix, {})
     else:
-        print('Creating vex project in "{}"...'.format(directory))
+        yield ('Creating vex project in "{}"...'.format(directory))
         p.init(prefix, {})
+        p.makelock()
 
 vex_add = vex_cmd.subcommand('add','add files to the project')
 @vex_add.run('[file...]')
@@ -926,7 +932,7 @@ vex_prepare = vex_cmd.subcommand('prepare')
 @vex_prepare.run('[files...]')
 def Prepare(files):
     p = get_project()
-    print('Preparing')
+    yield ('Preparing')
     with p.lock('prepare') as p:
         p.prepare(files)
 
@@ -934,17 +940,19 @@ vex_commit = vex_cmd.subcommand('commit')
 @vex_commit.run('[files...]')
 def Commit(files):
     p = get_project()
-    print('Committing')
+    yield ('Committing')
     with p.lock('commit') as p:
         p.commit(files)
+
+        # check that session() and branch()
 
 vex_log = vex_cmd.subcommand('log')
 @vex_log.run()
 def Log():
     p = get_project()
     for entry in p.log():
-        print(entry)
-        print()
+        yield (entry)
+        yield ""
 
 vex_history = vex_cmd.subcommand('history')
 @vex_history.run()
@@ -958,8 +966,8 @@ def History():
         elif len(redos) > 0:
             alternative = "(can redo {}, or {})".format(",".join(redos[:-1]), redos[-1])
 
-        print(entry.time, entry.command,alternative)
-        print()
+        yield "{}\t{}\t{}".format(entry.time, entry.command,alternative)
+        yield ""
 
 vex_status = vex_cmd.subcommand('status')
 @vex_status.run()
@@ -969,7 +977,7 @@ def Status():
         for filename, entry in p.status().items():
             path = os.path.relpath(entry.path)
 
-            print(entry.state, filename, sep='\t')
+            yield "{}\t{}".format(entry.state, filename)
 
 vex_undo = vex_cmd.subcommand('undo')
 @vex_undo.run()
@@ -979,7 +987,7 @@ def Undo():
     with p.lock('undo') as p:
         action = p.undo()
     if action:
-        print('undid', action.command)
+        yield ('undid', action.command)
 
 vex_redo = vex_cmd.subcommand('redo')
 @vex_redo.run('--list? --choice')
@@ -992,28 +1000,28 @@ def Redo(list, choice):
         if list:
             if choices:
                 for n, choice in enumerate(choices):
-                    print(n, choice.time, choice.command)
+                    yield (n, choice.time, choice.command)
             else:
-                print('Nothing to redo')
+                yield ('Nothing to redo')
         elif choices:
             choice = choice or 0
             action = p.redo(choice)
             if action:
-                print('redid', action.command)
+                yield ('redid', action.command)
         else:
-            print('Nothing to redo')
+            yield ('Nothing to redo')
 
 vex_debug = vex_cmd.subcommand('debug', 'run a command without capturing exceptions')
 @vex_debug.run()
 def Debug():
-    print('Use vex debug <cmd> to run <cmd>, or use `vex debug:status`')
+    yield ('Use vex debug <cmd> to run <cmd>, or use `vex debug:status`')
 
 debug_status = vex_debug.subcommand('status')
 @debug_status.run()
 def DebugStatus():
     p = get_project(check=False)
     with p.lock('debug:status') as p:
-        print("Clean history", p.clean_state())
+        yield ("Clean history", p.clean_state())
         working_copy = p.working_copy()
         session_uuid = working_copy.session
         out = []
@@ -1043,14 +1051,14 @@ def DebugRestart():
     p = get_project(check=False)
     with p.lock('debug:restart') as p:
         if p.clean_state():
-            print('There is no change in progress to restart')
+            yield ('There is no change in progress to restart')
             return
-        print('Restarting current action...')
+        yield ('Restarting current action...')
         p.restart_new_action()
         if p.clean_state():
-            print('Project has recovered')
+            yield ('Project has recovered')
         else:
-            print('Oh dear')
+            yield ('Oh dear')
 
 debug_rollback = vex_debug.subcommand('rollback')
 @debug_rollback.run()
@@ -1058,13 +1066,13 @@ def DebugRollback():
     p = get_project(check=False)
     with p.lock('debug:rollback') as p:
         if p.clean_state():
-            print('There is no change in progress to rollback')
+            yield ('There is no change in progress to rollback')
             return
-        print('Rolling back current action...')
+        yield ('Rolling back current action...')
         p.rollback_new_action()
         if p.clean_state():
-            print('Project has recovered')
+            yield ('Project has recovered')
         else:
-            print('Oh dear')
+            yield ('Oh dear')
 
 vex_cmd.main(__name__)

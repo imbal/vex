@@ -532,7 +532,7 @@ class Action:
         self.argv = argv
         self.errors = errors
 
-class Response:
+class Result:
     def __init__(self, exit_code, value) :
         self.exit_code = exit_code
         self.value = value
@@ -599,18 +599,18 @@ class Command:
             if len(argv) == self.nargs:
                 return self.spawn(argv)
             else:
-                return Response(-1, "bad options")
+                return Result(-1, "bad options")
         else:
             if len(argv) == 0:
-                return Response(0, self.render().manual())
+                return Result(0, self.render().manual())
             else:
-                return Response(-1, self.render().usage())
+                return Result(-1, self.render().usage())
 
     def spawn(self, argv):
         result = self.run_fn(**argv)
-        if isinstance(result, types.GeneratorType):
+        if result and not isinstance(result, types.GeneratorType):
             result = list(result)
-        return Response(0, result)
+        return Result(0, result)
 
     def main(self, name):
         if name == '__main__':
@@ -697,28 +697,32 @@ def main(root, argv, environ):
                 raise
             tb = "".join(traceback.format_exception(*sys.exc_info()))
             if root.err_fn:
-                result = root.err_fn(action.path, action.argv, e, tb)
-                exit_code = -1
+                result = Result(-1, root.err_fn(action.path, action.argv, e, tb))
             else:
-                result = Response(-1, tb)
+                result = Result(-1, tb)
     elif action.mode == "help":
         result = obj.help(action.path, usage=action.argv.get('usage'))
     elif action.mode == "error":
         print("error: {}".format(", ".join(action.errors)))
         result = obj.help(action.path, usage=action.argv.get('usage'))
 
-    if isinstance(result, Response):
+    if isinstance(result, Result):
         exit_code = result.exit_code
         result = result.value
     else:
         exit_code = -len(action.errors)
 
     if result is not None:
-        if isinstance(result, (bytes, bytearray)):
-            sys.stdout.buffer.write(result)
-        else:
-            print(result)
-        sys.stdout.flush()
+        line = None
+        for line in result:
+            if isinstance(line, Result):
+                exit_code = line.exit_code
+                line = line.value
+            if isinstance(line, (bytes, bytearray)):
+                sys.stdout.buffer.write(line)
+            elif line:
+                print(line)
+            sys.stdout.flush()
 
     return exit_code
 
