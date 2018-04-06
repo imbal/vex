@@ -204,12 +204,18 @@ class objects:
             self.dos = dos
 
     @codec.register
-    class WorkingDirectory:
+    class WorkingCopy:
         def __init__(self, session, branch, prefix, files):
             self.session = session
             self.branch = branch
             self.prefix = prefix
             self.files = files
+
+    @codec.register
+    class WorkingFile:
+        def __init__(self, state, path):
+            self.state = state
+            self.path = path
 
 # Stores
 
@@ -533,19 +539,20 @@ class Transaction:
         return objects.Action(self.now, self.command, changes, blobs)
 
 class Project:
-    def __init__(self, dir):    
-        self.dir = dir
-        blobs = os.path.join(dir, 'blobs')
+    def __init__(self, config_dir, working_dir):    
+        self.working_dir = working_dir
+        self.dir = config_dir
+        blobs = os.path.join(config_dir, 'blobs')
         self.changes = BlobStore(os.path.join(blobs, 'changes'))
         self.manifests = BlobStore(os.path.join(blobs, 'manifests'))
         self.files = BlobStore(os.path.join(blobs, 'files'))
-        self.branches = DirStore(os.path.join(dir, 'branches'))
-        self.names = DirStore(os.path.join(dir, 'branches', 'names'))
-        self.sessions = DirStore(os.path.join(dir, 'sessions'))
-        self.state = DirStore(os.path.join(dir, 'state'))
-        self.lockfile = os.path.join(dir, 'lock')
-        self.actions = ActionLog(os.path.join(dir, 'history'), self.lockfile)
-        self.scratch = BlobStore(os.path.join(dir, 'scratch'))
+        self.branches = DirStore(os.path.join(config_dir, 'branches'))
+        self.names = DirStore(os.path.join(config_dir, 'branches', 'names'))
+        self.sessions = DirStore(os.path.join(config_dir, 'sessions'))
+        self.state = DirStore(os.path.join(config_dir, 'state'))
+        self.lockfile = os.path.join(config_dir, 'lock')
+        self.actions = ActionLog(os.path.join(config_dir, 'history'), self.lockfile)
+        self.scratch = BlobStore(os.path.join(config_dir, 'scratch'))
 
     def makedirs(self):
         os.makedirs(self.dir, exist_ok=True)
@@ -667,30 +674,10 @@ class Project:
         return out
 
     def status(self):
-        # get list of working directory diles
-        # get list of snapshot files
-        # work out changes
-        # update dirstate
-        # print ...
         out = []
-        session_uuid = self.working_copy().session
-        if session_uuid and self.sessions.exists(session_uuid):
-            session = self.sessions.get(session_uuid)
-            out.append("session: {}".format(session_uuid))
-            out.append("at {}, started at {}".format(session.prepare, session.commit))
-
-            branch = self.branches.get(session.branch)
-            out.append("commiting to branch {}".format(branch.uuid))
-
-            commit = self.changes.get_obj(session.prepare)
-            out.append("last commit: {}".format(commit.__class__.__name__))
-        else:
-            if self.history_isempty():
-                out.append("you undid the creation. try vex redo")
-            else:
-                out.append("no active session, but history, weird")
-        out.append("")
-        return "\n".join(out)
+        working_copy = self.working_copy()
+        return working_copy.files
+        
 
     def next_commit_number(self, old_obj, new_kind):
         n = old_obj.n
@@ -720,7 +707,7 @@ class Project:
             session = objects.Session(session_uuid, prefix, branch_uuid, commit_uuid, commit_uuid)
             txn.put_session(session)
 
-            txn.set_state("working", objects.WorkingDirectory(session_uuid, branch_uuid, '/', {}))
+            txn.set_state("working", objects.WorkingCopy(session_uuid, branch_uuid, os.path.join('/',prefix), {}))
 
     def prepare(self, files):
         with self.do('prepare') as txn:
@@ -755,12 +742,21 @@ class Project:
             txn.put_session(session)
 
     def add(self, files):
-        # get current session
-        # get head commit
-        # create a change entry
-        # 
-        # set prepare
-        pass
+        working_copy = self.working_copy()
+        names = {}
+        for filename in files:
+            if not filename.startswith(self.working_dir):
+                raise VexError("{} is outside project".format(filename))
+            name = os.path.join(working_copy.prefix, os.path.relpath(filename, self.working_dir))
+            names[name] = filename
+        with self.do('add') as txn:
+            for name, filename in names.items():
+                if name in working_copy.files:
+
+                    working_copy.files[name] = objects.WorkingFile("modified", filename)
+                else:
+                    working_copy.files[name] = objects.WorkingFile("added", filename)
+            txn.set_state("working", working_copy)
 
     def ignore(self, files):
         # set prepare
@@ -774,10 +770,22 @@ def get_project_directory(start_dir):
     # hunt down .vex
     return os.path.join(start_dir, DOTVEX)
 
-def get_project():
-    directory = get_project_directory(os.getcwd())
-    return Project(directory)
+def get_project(clean=True):
+    working_dir = os.getcwd()
+    config_dir = os.path.join(working_dir, DOTVEX)
+    p = Project(config_dir, working_dir)
+    return p
 
+    if p == None or not p.exists():
+        print('No vex project found')
+        return
+    elif p.history_isempty():
+        print('Vex project is uninitialized')
+        return
+    elif not p.clean_state(): 
+        print('Another change is already in progress. Try `vex debug:status`')
+        return
+    return p
 
 vex_cmd = Command('vex', 'a database for files')
 @vex_cmd.on_error()
@@ -805,13 +813,22 @@ def Error(path, args, exception, traceback):
         print('Good news, nothing seems broken')
 
 
+vex_add = vex_cmd.subcommand('add','add files to the project')
+@vex_add.run('[file...]')
+def Add(file):
+    p = get_project()
+    cwd = os.getcwd()
+    files = [os.path.join(cwd, f) for f in file]
+    p.add(files)
+
 
 vex_init = vex_cmd.subcommand('init')
-@vex_init.run('[directory]')
-def Init(directory):
-    directory = directory or os.getcwd()
-    directory = os.path.join(directory, DOTVEX)
-    p = Project(directory)
+@vex_init.run('--working --config --prefix [directory]')
+def Init(directory, working, config, prefix):
+    working_dir = working or directory or os.getcwd()
+    config_dir = config or os.path.join(working_dir, DOTVEX)
+    prefix = prefix or os.path.split(working_dir)[1]
+    p = Project(config_dir, working_dir)
 
     if p.exists() and not p.clean_state():
         print('This vex project is unwell. Try `vex debug:status`')
@@ -822,7 +839,7 @@ def Init(directory):
         else:
             print('A vex project already exists, but it is unitialized')
     print('Creating vex project in "{}"...'.format(directory))
-    p.init('/prefix', {})
+    p.init(prefix, {})
 
 vex_prepare = vex_cmd.subcommand('prepare')
 @vex_prepare.run('[files...]')
@@ -886,7 +903,12 @@ def Status():
     if not p.clean_state():
         print('Another change is already in progress. Try `vex debug:status`')
         return
-    print(p.status())
+    prefix = p.working_copy().prefix
+    for filename, entry in p.status().items():
+        filename = os.path.relpath(filename, prefix)
+        path = os.path.relpath(entry.path)
+
+        print(entry.state, filename, sep='\t')
 
 vex_undo = vex_cmd.subcommand('undo')
 @vex_undo.run()
@@ -934,14 +956,35 @@ def Debug():
 debug_status = vex_debug.subcommand('status')
 @debug_status.run()
 def DebugStatus():
-    p = get_project()
+    p = get_project(clean=False)
     print("Clean history", p.clean_state())
+    working_copy = p.working_copy()
+    session_uuid = working_copy.session
+    out = []
+
+    if session_uuid and p.sessions.exists(session_uuid):
+        session = p.sessions.get(session_uuid)
+        out.append("session: {}".format(session_uuid))
+        out.append("at {}, started at {}".format(session.prepare, session.commit))
+
+        branch = p.branches.get(session.branch)
+        out.append("commiting to branch {}".format(branch.uuid))
+
+        commit = p.changes.get_obj(session.prepare)
+        out.append("last commit: {}".format(commit.__class__.__name__))
+    else:
+        if p.history_isempty():
+            out.append("you undid the creation. try vex redo")
+        else:
+            out.append("no active session, but history, weird")
+    out.append("")
+    return "\n".join(out)
 
 
 debug_restart = vex_debug.subcommand('restart')
 @debug_restart.run()
 def DebugRestart():
-    p = get_project()
+    p = get_project(clean=False)
     if p.clean_state():
         print('There is no change in progress to restart')
         return
@@ -955,7 +998,7 @@ def DebugRestart():
 debug_rollback = vex_debug.subcommand('rollback')
 @debug_rollback.run()
 def DebugRollback():
-    p = get_project()
+    p = get_project(clean=False)
     p.rollback_new_action()
     if p.clean_state():
         print('There is no change in progress to rollback')
