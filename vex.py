@@ -16,6 +16,15 @@ def UUID(): return str(uuid4())
 def NOW(): return datetime.now(timezone.utc)
 DOTVEX = '.vex'
 
+class VexError(Exception):
+    pass
+
+class VexBug(VexError):
+    pass
+
+class VexCorrupt(VexError):
+    pass
+
 class Codec:
     classes = {}
     def __init__(self):
@@ -25,7 +34,7 @@ class Codec:
         return cls
     def to_tag(self, obj):
         name = obj.__class__.__name__
-        if name not in self.classes: raise Exception('bad')
+        if name not in self.classes: raise VexBug('An {} object cannot be turned into RSON'.format(name))
         return name, obj.__dict__
     def from_tag(self, tag, value):
         return self.classes[tag](**value)
@@ -218,7 +227,7 @@ class BlobStore:
             src, dest = other.filename(addr), self.filename(addr)
             os.rename(src, dest)
         elif not self.exists(addr):
-            raise Exception('missing file {}'.format(other.filename(addr)))
+            raise VexCorrupt('Missing file {}'.format(other.filename(addr)))
 
     def addr_for_file(self, file):
         hash = hashlib.shake_256()
@@ -312,12 +321,12 @@ class ActionLog:
                 yield
                 fh.write(b'# released by %d %a\n'%(os.getpid(), str(NOW())))
         except (IOError, FileNotFoundError):
-            raise Exception('lock')
+            raise VexError('Cannot open project lockfile: {}'.format(self.lockfile))
 
     @contextmanager
     def do(self, action):
         if not self.clean_state():
-            raise Exception('corrupt history')
+            raise VexCorrupt('Project history not in a clean state.')
         obj = objects.Do(self.current(), action)
 
         addr = self.store.put_obj(obj)
@@ -329,7 +338,7 @@ class ActionLog:
     @contextmanager
     def undo(self):
         if not self.clean_state():
-            raise Exception('corrupt history')
+            raise VexCorrupt('Project history not in a clean state.')
         current = self.current()
         if current == self.START:
             yield None
@@ -354,7 +363,7 @@ class ActionLog:
     @contextmanager
     def redo(self, n=0):
         if not self.clean_state():
-            raise Exception('corrupt history')
+            raise VexCorrupt('Project history not in a clean state.')
         current = self.current()
 
         if not self.redos.exists(current):
@@ -384,7 +393,7 @@ class ActionLog:
         old_current = obj.prev
         current = self.settings.get("current")
         if current != old_current:
-            raise Exception('History is really corrupted: Interrupted transaction did not come after current change')
+            raise VexCorrupt('History is really corrupted: Interrupted transaction did not come after current change')
         with self.lock(obj.action):
             yield obj.action
             self.settings.set("next", current)
@@ -399,7 +408,7 @@ class ActionLog:
         old_current = obj.prev
         current = self.settings.get("current")
         if current != old_current:
-            raise Exception('History is really corrupted: Interrupted transaction did not come after current change')
+            raise VexCorrupt('History is really corrupted: Interrupted transaction did not come after current change')
         with self.lock(obj.action):
             yield obj.action
             self.settings.set("current", next)
@@ -550,7 +559,7 @@ class Project:
                 for name,value in changes['state'][kind].items():
                     self.state.set(name, value)
             else:
-                raise Exception('unknown')
+                raise VexBug('Project change has unknown values')
 
     # Takes Action.blobs and copies them out of the scratch directory
     def copy_blobs(self, blobs):
@@ -564,6 +573,8 @@ class Project:
             elif key =='files':
                 for addr in blobs['files']:
                     self.files.move_from(self.scratch, addr)
+            else:
+                raise VexBug('Project change has unknown values')
 
     def rollback_new_action(self):
         with self.actions.rollback_new() as action:
@@ -581,7 +592,7 @@ class Project:
     @contextmanager
     def do(self, command):
         if not self.actions.clean_state():
-            raise Exception('corrupt history')
+            raise VexCorrupt('Project history not in a clean state.')
         txn = Transaction(self, self.scratch, command)
         yield txn
         action = txn.action()
@@ -738,11 +749,15 @@ def get_project():
 vex_cmd = Command('vex', 'a database for files')
 @vex_cmd.on_error()
 def Error(path, args, exception, traceback):
-    message = getattr(exception, "message", exception.__class__.__name__)
+    message = str(exception)
     if path:
         print("Something went wrong while running {}: {}".format(':'.join(path), message))
     else:
         print("Something went wrong: {}".format(message))
+
+    if not isinstance(exception, VexError):
+        print()
+        print(traceback)
 
     p = get_project()
     if p and not p.clean_state():
@@ -795,7 +810,6 @@ vex_log = vex_cmd.subcommand('log')
 @vex_log.run()
 def Log():
     p = get_project()
-    raise Exception('no')
     if p == None or not p.exists():
         print('No vex project found')
         return
