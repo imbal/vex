@@ -698,7 +698,7 @@ def main(root, argv, environ):
             tb = "".join(traceback.format_exception(*sys.exc_info()))
             if root.err_fn:
                 result = root.err_fn(action.path, action.argv, e, tb)
-                exit_code = -127
+                exit_code = -1
             else:
                 result = Response(-1, tb)
     elif action.mode == "help":

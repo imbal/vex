@@ -479,6 +479,8 @@ class StateChange:
         self.new_state[name] = value
 
     def working_copy(self):
+        if "working" in self.new_state:
+            return self.new_state["working"]
         return self.project.working_copy()
 
     def current_session(self):
@@ -496,8 +498,15 @@ class StateChange:
         branch= s.branch
         return objects.WorkingCopy(session, branch, prefix, files)
 
-    def refresh_working_copy(self, old):
-        pass
+    def refresh_working_copy(self):
+        old = self.working_copy()
+        files = {}
+        for name, entry in files.items():
+            files[name ]= objects.WorkingFile(entry.state, entry.path)
+
+        new = objects.WorkingCopy(old.session, old.branch, old.prefix, files)
+        self.set_working_copy(new)
+        return new
 
 class ProjectChange:
     working_copy = StateChange.working_copy
@@ -749,7 +758,7 @@ class Project:
     def status(self):
         with self.do_nohistory('status') as txn:
             out = {}
-            working_copy = txn.working_copy()
+            working_copy = txn.refresh_working_copy()
         for filename, entry in working_copy.files.items():
             filename = os.path.relpath(filename, working_copy.prefix)
             out[filename] = entry
