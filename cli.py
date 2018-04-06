@@ -599,17 +599,15 @@ class Command:
             if len(argv) == self.nargs:
                 return self.spawn(argv)
             else:
-                return Result(-1, "bad options")
+                return Result(-1, ("bad options"),)
         else:
             if len(argv) == 0:
-                return Result(0, self.render().manual())
+                return Result(0, (self.render().manual(),))
             else:
-                return Result(-1, self.render().usage())
+                return Result(-1, (self.render().usage(),))
 
     def spawn(self, argv):
         result = self.run_fn(**argv)
-        if result and not isinstance(result, types.GeneratorType):
-            result = list(result)
         return Result(0, result)
 
     def main(self, name):
@@ -714,6 +712,8 @@ def main(root, argv, environ):
 
     if result is not None:
         line = None
+        if not isinstance(result, types.GeneratorType):
+            result = (result,)
         for line in result:
             if isinstance(line, Result):
                 exit_code = line.exit_code

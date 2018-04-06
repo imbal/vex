@@ -33,6 +33,8 @@ class Codec:
     def __init__(self):
         self.codec = rson.Codec(self.to_tag, self.from_tag)
     def register(self, cls):
+        if cls.__name__ in self.classes:
+            raise VexBug('Duplicate wire type')
         self.classes[cls.__name__] = cls
         return cls
     def to_tag(self, obj):
@@ -51,21 +53,31 @@ codec = Codec()
 class objects:
     @codec.register
     class Start:
-        def __init__(self,n, timestamp, *, root, uuid, changelog):
-            self.n = n
+        n = 0
+        def __init__(self, timestamp, *, root, uuid, changelog):
             self.timestamp = timestamp
             self.uuid = uuid
             self.root = root
             self.changelog = changelog
 
+        def next_n(self, kind):
+            if kind == "amend":
+                return self.n
+            return self.n+1
+
     @codec.register
     class Fork:
-        def __init__(self, n, timestamp, *, base, uuid, changelog):
-            self.n =n
+        n = 0
+        def __init__(self, timestamp, *, base, uuid, changelog):
             self.base = base
             self.timestamp = timestamp
             self.uuid = uuid
             self.changelog = changelog
+
+        def next_n(self, kind):
+            if kind == "amend":
+                return self.n
+            return self.n+1
 
     @codec.register
     class Stop:
@@ -78,12 +90,18 @@ class objects:
 
     @codec.register
     class Restart:
-        def __init__(self, n,timestamp, *, prev, base, changelog):
-            self.n =n
+        n = 0
+        def __init__(self, timestamp, *, prev, base, changelog):
             self.prev = prev
             self.base = base
             self.timestamp = timestamp
             self.changelog = changelog
+
+        def next_n(self, kind):
+            if kind == "amend":
+                return self.n
+            return self.n+1
+
     
     @codec.register
     class Prepare:
@@ -92,6 +110,11 @@ class objects:
             self.prev = prev
             self.timestamp = timestamp
             self.changes = changes
+
+        def next_n(self, kind):
+            if kind in ("commit", "prepare"):
+                return self.n
+            return self.n+1
     
     @codec.register
     class Commit:
@@ -102,6 +125,11 @@ class objects:
             self.root = root
             self.changelog = changelog
 
+        def next_n(self, kind):
+            if kind == "amend":
+                return self.n
+            return self.n+1
+
     @codec.register
     class Amend:
         def __init__(self, n, timestamp, *, prev, root, changelog):
@@ -111,6 +139,11 @@ class objects:
             self.root = root
             self.changelog = changelog
 
+        def next_n(self, kind):
+            if kind == "amend":
+                return self.n
+            return self.n+1
+
     @codec.register
     class Revert:
         def __init__(self, n, timestamp, *, prev, root, changelog):
@@ -119,6 +152,9 @@ class objects:
             self.timestamp = timestamp
             self.root = root
             self.changelog = changelog
+
+        def next_n(self, kind):
+            return self.n+1
 
 
     @codec.register
@@ -131,8 +167,12 @@ class objects:
             self.root = root
             self.uuid = uuid
             self.changelog = changelog
-    # Apply
 
+        def next_n(self, kind):
+            return self.n+1
+
+    # Apply
+    # Replay (instead of Commit)
 
     @codec.register
     class Purge:
@@ -152,30 +192,28 @@ class objects:
 
     @codec.register
     class Add:
-        def __init__(self, filename, addr, properties): 
-            self.filename = filename
+        def __init__(self, addr, properties): 
             self.addr = addr
             self.properties = ()
 
     @codec.register
     class Delete:
-        def __init__(self, timestamp, filename): 
-            self.filename = filename
+        def __init__(self): 
+            pass
 
     @codec.register
     class Change:
-        def __init__(self, timestamp, filename, addr, properties): 
-            self.timestamp = timestamp
-            self.filename = filename
-            self.addr = addr
+        def __init__(self, addr, properties): 
             self.properites = properties
+            self.addr = addr
 
-    
     @codec.register
     class Directory:
         def __init__(self, entries):
             self.entries = entries
 
+
+    # Entries in a directory
     @codec.register
     class Prefix:
         def __init__(self, prefix, entries):
@@ -255,11 +293,14 @@ class objects:
 
     @codec.register
     class WorkingFile:
-        def __init__(self, state, path, addr=None, stat=None):
+        States = set(('added', 'modified', 'deleted', 'ignored', 'tracked','invisible'))
+        def __init__(self, state, path, addr=None, stat=None, properties=None):
+            if state not in self.States: raise VexBug('bad')
             self.state = state
             self.path = path
             self.addr = addr
             self.stat = stat
+            self.properties = properties
 
 # Stores
 
@@ -300,7 +341,7 @@ class BlobStore:
 
     def addr_for_file(self, file):
         hash = hashlib.shake_256()
-        with open(file,'b') as fh:
+        with open(file,'rb') as fh:
             hash.update(fh.read())
         return "shake-256-20-{}".format(hash.hexdigest(20))
 
@@ -533,30 +574,23 @@ class StateChange:
         else:
             return objects.Action(self.now, self.command, {}, ())
 
-    def build_working_copy(self, commit):
-        working_copy = self.working_copy()
-        files = {}
-
-
-        return objects.WorkingDir(commit, working_copy.session, working_copy.branch, working_copy.prefix, working_copy.files)
-
     def refresh_working_copy(self):
-        old = self.working_copy()
-        files = {}
-        for name, entry in old.files.items():
+        copy = self.working_copy()
+        for name, entry in copy.files.items():
+            if entry.state == "tracked":
+                new_addr = self.project.files.addr_for_file(entry.path)
+                if new_addr != entry.addr:
+                    entry.state = "modified"
             # if state ... modified? added? removed? ignored
             # if state ... tracked .. check stat if present, else md5 and stat
-            files[name]= objects.WorkingFile(entry.state, entry.path)
 
-        new = objects.WorkingDir(old.commit, old.session, old.branch, old.prefix, files)
-        self.set_working_copy(new)
-        return new
+        self.set_working_copy(copy)
+        return copy
 
 class ProjectChange:
     working_copy = StateChange.working_copy
     set_working_copy = StateChange.set_working_copy
     current_session = StateChange.current_session
-    build_working_copy = StateChange.build_working_copy
     refresh_working_copy = StateChange.refresh_working_copy
 
     def __init__(self, project, scratch, command):
@@ -577,23 +611,51 @@ class ProjectChange:
         self.new_files = set()
 
     def working_copy_changes(self, files=None):
-        return ()
+        working = self.refresh_working_copy()
+        out = {}
 
-    def build_tree(self, files=None):
-        return ()
+        for file, entry in working.files.items():
+            filename = os.path.relpath(entry.path, self.project.working_dir)
+            if os.path.isfile(filename):
+                if entry.state == "added":
+                    out[file]=objects.Add(self.scratch.addr_for_file(filename), properties={})
+                elif entry.state == "modified":
+                    out[file]=objects.Change(addr=self.scratch.addr_for_file(filename), properties={})
+        return out
 
     def update_working_copy(self, commit, changes):
         working = self.working_copy()
         working.commit = commit
-        for change in changes:
+        for file, change in changes.items():
+            filename = os.path.join(self.project.working_dir, os.path.relpath(file, working.prefix))
             if isinstance(change, objects.Add):
-                pass # files[change.filename
+                working.files[file] = objects.WorkingFile("tracked",  filename, addr=change.addr)
             elif isinstance(change, objects.Delete):
-                pass # files[...]
-            elif isinstance(change, objects.Modify):
-                pass # 
+                working.files.pop(file)
+            elif isinstance(change, objects.Change):
+                working.files[file] = objects.WorkingFile("tracked",  filename, addr=change.addr)
         self.set_working_copy(working)
         return working
+        
+    def get_file(self, addr):
+        if addr in self.new_files:
+            return self.scratch.get_file(addr)
+        return self.project.files.get_file(addr)
+
+    def put_file(self, file):
+        addr = self.scratch.put_file(file)
+        self.new_files.add(addr)
+        return addr
+
+    def get_manifest(self, addr):
+        if addr in self.new_manifests:
+            return self.scratch.get_file(addr)
+        return self.project.manifests.get_file(addr)
+
+    def put_manifest(self, file):
+        addr = self.scratch.put_file(file)
+        self.new_manifests.add(addr)
+        return addr
         
     def get_change(self, addr):
         if addr in self.new_changes:
@@ -640,12 +702,6 @@ class ProjectChange:
             else:
                 self.old_names[name] = None
         self.new_names[name] = branch.uuid
-
-    def next_commit_number(self, old_obj, new_kind):
-        n = old_obj.n
-        if new_kind in ("prepare", "amend"):
-            return n
-        return n+1
 
     def action(self):
         if self.new_branches or self.new_names or self.new_sessions or self.new_state or self.new_changes or self.new_manfiests or self.new_files:
@@ -845,7 +901,7 @@ class Project:
             branch_name = 'latest'
             # root = objects.Tree
             root = None
-            commit = objects.Start(0, txn.now, uuid=branch_uuid, changelog=None, root=None)
+            commit = objects.Start(txn.now, uuid=branch_uuid, changelog=None, root=None)
             commit_uuid = txn.put_change(commit)
 
             branch = objects.Branch(branch_uuid, commit_uuid, None, branch_uuid)
@@ -860,6 +916,8 @@ class Project:
         
 
     def prepare(self, files):
+        prefix = self.working_copy().prefix
+        files = [os.path.relpath(filename, prefix) for filename in files] if files else None
         with self.do('prepare') as txn:
             working = txn.refresh_working_copy()
             session = txn.get_session(working.session)
@@ -868,9 +926,15 @@ class Project:
                 raise VexCorruption('Conflict???')
 
             old = txn.get_change(commit)
-            n = txn.next_commit_number(old, 'prepare')
+            n = old.next_n('prepare')
 
             changes = txn.working_copy_changes(files)
+            for file, change in changes.items():
+                filename = os.path.join(self.working_dir, os.path.relpath(file, working.prefix))
+                if os.path.isfile(filename) and isinstance(change, (objects.Add, objects.Change)):
+                    addr = txn.put_file(filename)
+                    if addr != change.addr:
+                        raise VexCorrupt('Sync')
             # add files to the store?
 
             prepare = objects.Prepare(n, txn.now, prev=commit, changes=changes)
@@ -881,6 +945,8 @@ class Project:
             txn.update_working_copy(prepare_uuid, changes)
 
     def commit(self, files):
+        prefix = self.working_copy().prefix
+        files = [os.path.relpath(filename, prefix) for filename in files] if files else None
         with self.do('commit') as txn:
             working = txn.refresh_working_copy()
             session = txn.get_session(working.session)
@@ -888,13 +954,18 @@ class Project:
                 raise VexCorruption('Conflict???')
 
             old = txn.get_change(session.prepare)
-            n = txn.next_commit_number(old, 'commit')
+            n = old.next_n('commit')
+            while old.n == n:
+                old = txn.get_change(old.prev)
+
+            print('old', old)
 
             changes = txn.working_copy_changes(files)
             changelog = objects.Changelog(prev=None, summary="Summary", message="Message", changes=changes)
-            root = txn.build_tree(changes)
+            root = None
+            # build root
 
-            commit = objects.Commit(n, txn.now, prev=session.prepare, root=root, changelog=None)
+            commit = objects.Commit(n, txn.now, prev=session.prepare, root=root, changelog=changelog)
             commit_uuid = txn.put_change(commit)
 
             branch = txn.get_branch(session.branch)
@@ -904,26 +975,30 @@ class Project:
             session.prepare = commit_uuid
             session.commit = commit_uuid
             txn.put_session(session)
-            # update working.files
             txn.update_working_copy(commit_uuid, changes)
 
     def add(self, files):
         with self.do('add') as txn:
             working_copy = txn.refresh_working_copy()
             names = {}
+            if working_copy.prefix not in working_copy.files:
+                names[working_copy.prefix] = self.working_dir
             for filename in files:
                 if not filename.startswith(self.working_dir):
                     raise VexError("{} is outside project".format(filename))
-                name = os.path.join(working_copy.prefix, os.path.relpath(filename, self.working_dir))
+                filename = os.path.relpath(filename, self.working_dir)
+                name = os.path.join(working_copy.prefix, filename)
                 # normalize name to NFC?
+                # add any parents missing
+                # recurse into directories
                 names[name] = filename
-                for name, filename in names.items():
-                    if name in working_copy.files:
+            for name, filename in names.items():
+                if name in working_copy.files:
 
-                        working_copy.files[name] = objects.WorkingFile("modified", filename)
-                    else:
-                        working_copy.files[name] = objects.WorkingFile("added", filename)
-                txn.set_working_copy(working_copy)
+                    working_copy.files[name] = objects.WorkingFile("modified", filename)
+                else:
+                    working_copy.files[name] = objects.WorkingFile("added", filename)
+            txn.set_working_copy(working_copy)
 
     def ignore(self, files):
         # set prepare
@@ -1003,29 +1078,34 @@ def Init(directory, working, config, prefix):
         p.makelock()
 
 vex_add = vex_cmd.subcommand('add','add files to the project')
-@vex_add.run('[file...]')
+@vex_add.run('file...')
 def Add(file):
-    p = get_project()
-    with p.lock('add') as p:
-        cwd = os.getcwd()
-        files = [os.path.join(cwd, f) for f in file]
-        p.add(files)
+    if file:
+        p = get_project()
+        with p.lock('add') as p:
+            cwd = os.getcwd()
+            files = [os.path.join(cwd, f) for f in file]
+            p.add(files)
 
 
 vex_prepare = vex_cmd.subcommand('prepare')
-@vex_prepare.run('[files...]')
-def Prepare(files):
+@vex_prepare.run('[file...]')
+def Prepare(file):
     p = get_project()
     yield ('Preparing')
     with p.lock('prepare') as p:
+        cwd = os.getcwd()
+        files = [os.path.join(cwd, f) for f in file] if file else None
         p.prepare(files)
 
 vex_commit = vex_cmd.subcommand('commit')
-@vex_commit.run('[files...]')
-def Commit(files):
+@vex_commit.run('[file...]')
+def Commit(file):
     p = get_project()
     yield ('Committing')
     with p.lock('commit') as p:
+        cwd = os.getcwd()
+        files = [os.path.join(cwd, f) for f in file] if file else None
         p.commit(files)
 
         # check that session() and branch()
