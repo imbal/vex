@@ -48,41 +48,43 @@ codec = Codec()
 class objects:
     @codec.register
     class Init:
-        def __init__(self,n, timestamp, uuid, root, settings):
+        def __init__(self,n, timestamp, *, root, uuid, changelog):
             self.n = n
             self.timestamp = timestamp
             self.uuid = uuid
-            self.settings = settings
             self.root = root
+            self.changelog = changelog
 
     @codec.register
     class Create:
-        def __init__(self, n, base, timestamp, uuid, settings):
+        def __init__(self, n, timestamp, *, base, uuid, changelog):
             self.n =n
             self.base = base
             self.timestamp = timestamp
             self.uuid = uuid
+            self.changelog = changelog
 
     @codec.register
     class Close:
-        def __init__(self, n, prev, timestamp, reason):
+        def __init__(self, n, timestamp, *, prev, uuid, changelog):
             self.n =n
             self.prev = prev
             self.timestamp = timestamp
-            self.reason = reason
+            self.uuid = uuid
+            self.changelog = changelog
 
     @codec.register
     class Update:
-        def __init__(self, n, prev, timestamp, base, settings):
+        def __init__(self, n,timestamp, *, prev, base, changelog):
             self.n =n
             self.prev = prev
             self.base = base
             self.timestamp = timestamp
-            self.settings = settings
+            self.changelog = changelog
     
     @codec.register
     class Prepare:
-        def __init__(self, n, prev, timestamp, changelog):
+        def __init__(self, n, timestamp, *, prev, changelog):
             self.n =n
             self.prev = prev
             self.timestamp = timestamp
@@ -90,7 +92,7 @@ class objects:
     
     @codec.register
     class Commit:
-        def __init__(self, n, prev, timestamp, root, changelog):
+        def __init__(self, n, timestamp, *, prev, root, changelog):
             self.n =n
             self.prev = prev
             self.timestamp = timestamp
@@ -99,7 +101,7 @@ class objects:
 
     @codec.register
     class Revert:
-        def __init__(self, n, prev, timestamp, root, changelog):
+        def __init__(self, n, timestamp, *, prev, root, changelog):
             self.n =n
             self.prev = prev
             self.timestamp = timestamp
@@ -108,14 +110,23 @@ class objects:
 
     @codec.register
     class Amend:
-        def __init__(self, n, prev, timestamp, root, changelog):
+        def __init__(self, n, timestamp, *, prev, root, changelog):
             self.n =n
             self.prev = prev
             self.timestamp = timestamp
             self.root = root
             self.changelog = changelog
 
-    # Revert
+    @codec.register
+    class Apply:
+        def __init__(self, n, timestamp, *, prev, src, root, uuid, changelog):
+            self.n =n
+            self.prev = prev
+            self.src=src
+            self.timestamp = timestamp
+            self.root = root
+            self.uuid = uuid
+            self.changelog = changelog
     # Apply
 
 
@@ -667,6 +678,13 @@ class Project:
         out.append("")
         return "\n".join(out)
 
+    def next_commit_number(self, old_obj, new_kind):
+        n = old_obj.n
+        if new_kind in ("prepare", "amend"):
+            return n
+        return n+1
+        
+
 
     def init(self, prefix, options):
         self.makedirs()
@@ -677,7 +695,7 @@ class Project:
             branch_name = 'latest'
             # root = objects.Tree
             root = None
-            commit = objects.Init(0, txn.now, branch_uuid, None, {})
+            commit = objects.Init(0, txn.now, uuid=branch_uuid, changelog=None, root=None)
             commit_uuid = txn.put_change(commit)
 
             branch = objects.Branch(branch_uuid, commit_uuid, None, branch_uuid)
@@ -696,8 +714,8 @@ class Project:
             commit = session.prepare
 
             old = txn.get_change(commit)
-
-            prepare = objects.Prepare(old.n+1, commit, txn.now, None)
+            n = self.next_commit_number(old, 'prepare')
+            prepare = objects.Prepare(n, txn.now, prev=commit, changelog=None)
             prepare_uuid = txn.put_change(prepare)
 
             session.prepare = prepare_uuid
@@ -708,7 +726,8 @@ class Project:
             session = txn.current_session()
 
             old = txn.get_change(session.prepare)
-            commit = objects.Commit(old.n+1, session.prepare, txn.now, None, None)
+            n = self.next_commit_number(old, 'commit')
+            commit = objects.Commit(n, txn.now, prev=session.prepare, root=None, changelog=None)
             commit_uuid = txn.put_change(commit)
 
             branch = txn.get_branch(session.branch)
@@ -756,6 +775,7 @@ def Error(path, args, exception, traceback):
         print("Something went wrong: {}".format(message))
 
     if not isinstance(exception, VexError):
+        print("Worse still, it's an error vex doesn't recognize yet. A python traceback follows:")
         print()
         print(traceback)
 
@@ -765,6 +785,10 @@ def Error(path, args, exception, traceback):
 
         if not p.clean_state():
             print('This is bad: The project history is corrupt, try `vex debug:status` for more information')
+        else:
+            print('Good news: The changes that were attempted have been undone')
+    else:
+        print('Good news, nothing seems broken')
 
 
 
