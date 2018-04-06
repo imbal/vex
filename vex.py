@@ -19,11 +19,15 @@ DOTVEX = '.vex'
 class VexError(Exception):
     pass
 
-class VexBug(VexError):
-    pass
+class VexBug(VexError): pass
 
-class VexCorrupt(VexError):
-    pass
+class VexCorrupt(VexError): pass
+
+class VexMissing(VexError): pass
+
+class VexEmpty(VexError): pass
+
+class VexUnclean(VexError): pass
 
 class Codec:
     classes = {}
@@ -47,7 +51,7 @@ codec = Codec()
 
 class objects:
     @codec.register
-    class Init:
+    class Start:
         def __init__(self,n, timestamp, *, root, uuid, changelog):
             self.n = n
             self.timestamp = timestamp
@@ -56,7 +60,7 @@ class objects:
             self.changelog = changelog
 
     @codec.register
-    class Create:
+    class Fork:
         def __init__(self, n, timestamp, *, base, uuid, changelog):
             self.n =n
             self.base = base
@@ -65,7 +69,7 @@ class objects:
             self.changelog = changelog
 
     @codec.register
-    class Close:
+    class Stop:
         def __init__(self, n, timestamp, *, prev, uuid, changelog):
             self.n =n
             self.prev = prev
@@ -74,7 +78,7 @@ class objects:
             self.changelog = changelog
 
     @codec.register
-    class Update:
+    class Restart:
         def __init__(self, n,timestamp, *, prev, base, changelog):
             self.n =n
             self.prev = prev
@@ -84,14 +88,23 @@ class objects:
     
     @codec.register
     class Prepare:
-        def __init__(self, n, timestamp, *, prev, changelog):
+        def __init__(self, n, timestamp, *, prev, changes):
             self.n =n
             self.prev = prev
             self.timestamp = timestamp
-            self.changelog = changelog
+            self.changes = changes
     
     @codec.register
     class Commit:
+        def __init__(self, n, timestamp, *, prev, root, changelog):
+            self.n =n
+            self.prev = prev
+            self.timestamp = timestamp
+            self.root = root
+            self.changelog = changelog
+
+    @codec.register
+    class Amend:
         def __init__(self, n, timestamp, *, prev, root, changelog):
             self.n =n
             self.prev = prev
@@ -108,14 +121,6 @@ class objects:
             self.root = root
             self.changelog = changelog
 
-    @codec.register
-    class Amend:
-        def __init__(self, n, timestamp, *, prev, root, changelog):
-            self.n =n
-            self.prev = prev
-            self.timestamp = timestamp
-            self.root = root
-            self.changelog = changelog
 
     @codec.register
     class Apply:
@@ -140,9 +145,15 @@ class objects:
 
     @codec.register
     class Changelog:
-        def __init__(self, changes, older):
+        def __init__(self, prev, changes):
             self.changes = changes
-            self.older = older
+            self.prev = prev
+    @codec.register
+    class AddFile:
+        def __init__(self, filename, timestamp, message): 
+            self.timestamp = timestamp
+            self.filename = filename
+            self.message = message
 
     # Add File, Remove File, 
     # Manifest
@@ -333,17 +344,19 @@ class ActionLog:
 
         return out
 
+    __locked = object()
+
     @contextmanager
-    def lock(self, action):
+    def lock(self, command):
         try:
             with open(self.lockfile, 'wb+') as fh:
                 fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 fh.truncate(0)
                 fh.write(b'# locked by %d at %a\n'%(os.getpid(), str(NOW())))
-                fh.write(codec.dump(action))
+                fh.write(codec.dump(command))
                 fh.write(b'\n')
                 fh.flush()
-                yield
+                yield self.__locked
                 fh.write(b'# released by %d %a\n'%(os.getpid(), str(NOW())))
         except (IOError, FileNotFoundError):
             raise VexError('Cannot open project lockfile: {}'.format(self.lockfile))
@@ -356,9 +369,10 @@ class ActionLog:
 
         addr = self.store.put_obj(obj)
         self.settings.set("next", addr) 
-        with self.lock(action):
-            yield action
-            self.settings.set("current", addr) 
+
+        yield action
+
+        self.settings.set("current", addr) 
 
     @contextmanager
     def undo(self):
@@ -380,10 +394,11 @@ class ActionLog:
             dos.extend(self.redos.get(obj.prev).dos) 
         redo = objects.Redo(next, dos)
         self.settings.set("next", obj.prev) 
-        with self.lock(obj.action):
-            yield obj.action
-            new_next = self.redos.set(obj.prev, redo)
-            self.settings.set("current", obj.prev)
+
+        yield obj.action
+
+        new_next = self.redos.set(obj.prev, redo)
+        self.settings.set("current", obj.prev)
 
     @contextmanager
     def redo(self, n=0):
@@ -402,10 +417,11 @@ class ActionLog:
         obj = self.store.get_obj(do)
         redo = objects.Redo(next.next, next.dos)
         self.settings.set("next", do) 
-        with self.lock(obj.action):
-            yield obj.action
-            self.redos.set(current, redo)
-            self.settings.set("current", do)
+
+        yield obj.action
+
+        self.redos.set(current, redo)
+        self.settings.set("current", do)
 
     @contextmanager
     def rollback_new(self):
@@ -455,7 +471,59 @@ class ActionLog:
             out.append(obj.action)
         return out
 
-class Transaction:
+        
+class StateChange:
+    def __init__(self, project, command):
+        self.project = project
+        self.command = command
+        self.now = NOW()
+        self.old_state = {}
+        self.new_state = {}
+
+    def get_change(self, uuid):
+        return self.project.changes.get_obj(uuid)
+
+    def get_branch(self, uuid):
+        return self.project.changes.get_obj(uuid)
+
+    def get_session(self, uuid):
+        return self.project.changes.get_obj(uuid)
+
+    def set_working_copy(self, value):
+        name = "working"
+        if name not in self.old_state:
+            if self.project.state.exists(name):
+                self.old_state[name] = self.project.state.get(name)
+            else:
+                self.old_state[name] = None
+        self.new_state[name] = value
+
+    def working_copy(self):
+        return self.project.working_copy()
+
+    def current_session(self):
+        return self.project.sessions.get(self.working_copy().session)
+
+    def action(self):
+        if self.new_state:
+            changes = dict(state=dict(old=self.old_state, new=self.new_state))
+            return objects.Action(self.now, self.command, changes, ())
+        else:
+            return objects.Action(self.now, self.command, {}, ())
+
+    def build_working_copy(self, session, prefix):
+        s = self.sessions.get(session)
+        branch= s.branch
+        return objects.WorkingCopy(session, branch, prefix, files)
+
+    def refresh_working_copy(self, old):
+        pass
+
+class ProjectChange:
+    working_copy = StateChange.working_copy
+    set_working_copy = StateChange.set_working_copy
+    current_session = StateChange.current_session
+
     def __init__(self, project, scratch, command):
         self.project = project
         self.scratch = scratch
@@ -473,11 +541,6 @@ class Transaction:
         self.new_manifests = set()
         self.new_files = set()
 
-
-    def working_copy(self):
-        return self.project.working_copy()
-    def current_session(self):
-        return self.project.sessions.get(self.working_copy().session)
 
     def get_change(self, addr):
         if addr in self.new_changes:
@@ -520,23 +583,24 @@ class Transaction:
                 self.old_names[name] = None
         self.new_names[name] = branch.uuid
 
-    def set_state(self, name, value):
-        if name not in self.old_state:
-            if self.project.state.exists(name):
-                self.old_state[name] = self.project.state.get(name)
-            else:
-                self.old_state[name] = None
-        self.new_state[name] = value
+    def next_commit_number(self, old_obj, new_kind):
+        n = old_obj.n
+        if new_kind in ("prepare", "amend"):
+            return n
+        return n+1
 
     def action(self):
-        branches = dict(old=self.old_branches, new=self.new_branches)
-        names = dict(old=self.old_names, new=self.new_names)
-        sessions = dict(old=self.old_sessions, new=self.new_sessions)
-        state = dict(old=self.old_state, new=self.new_state)
+        if self.new_branches or self.new_names or self.new_sessions or self.new_state or self.new_changes or self.new_manfiests or self.new_files:
+            branches = dict(old=self.old_branches, new=self.new_branches)
+            names = dict(old=self.old_names, new=self.new_names)
+            sessions = dict(old=self.old_sessions, new=self.new_sessions)
+            state = dict(old=self.old_state, new=self.new_state)
 
-        blobs = dict(changes=self.new_changes, manifests=self.new_manifests, files=self.new_files)
-        changes = dict(branches=branches,names=names, sessions=sessions, state=state)
-        return objects.Action(self.now, self.command, changes, blobs)
+            blobs = dict(changes=self.new_changes, manifests=self.new_manifests, files=self.new_files, prepared={})
+            changes = dict(branches=branches,names=names, sessions=sessions, state=state)
+            return objects.Action(self.now, self.command, changes, blobs)
+        else:
+            return objects.Action(self.now, self.command, {}, ())
 
 class Project:
     def __init__(self, config_dir, working_dir):    
@@ -602,6 +666,8 @@ class Project:
             elif key =='files':
                 for addr in blobs['files']:
                     self.files.move_from(self.scratch, addr)
+            elif key == 'prepared':
+                pass
             else:
                 raise VexBug('Project change has unknown values')
 
@@ -619,30 +685,41 @@ class Project:
             return action
 
     @contextmanager
+    def do_nohistory(self, command):
+        with self.actions.lock(command):
+            txn = StateChange(self, command)
+            yield txn
+            action = txn.action()
+            if action.changes:
+                self.apply_changes('new', {'state': action.changes['state']})
+
+    @contextmanager
     def do(self, command):
         if not self.actions.clean_state():
             raise VexCorrupt('Project history not in a clean state.')
-        txn = Transaction(self, self.scratch, command)
-        yield txn
-        action = txn.action()
 
-        with self.actions.do(action):
-            if not action:
-                return
-            self.copy_blobs(action.blobs)
-            self.apply_changes('new', action.changes)
+        with self.actions.lock(command):
+            txn = ProjectChange(self, self.scratch, command)
+            yield txn
+            with self.actions.do(txn.action()) as action:
+                if not action:
+                    return
+                self.copy_blobs(action.blobs)
+                self.apply_changes('new', action.changes)
 
     def undo(self):
-        with self.actions.undo() as action:
-            if not action:
-                return
-            self.apply_changes('old', action.changes)
+        with self.actions.lock('undo'):
+            with self.actions.undo() as action:
+                if not action:
+                    return
+                self.apply_changes('old', action.changes)
 
     def redo(self, choice):
-        with self.actions.redo(choice) as action:
-            if not action:
-                return
-            self.apply_changes('old', action.changes)
+        with self.actions.lock('redo'):
+            with self.actions.redo(choice) as action:
+                if not action:
+                    return
+                self.apply_changes('old', action.changes)
 
     def redo_choices(self):
         return self.actions.redo_choices()
@@ -657,8 +734,9 @@ class Project:
         return self.state.get("working")
 
     def log(self):
-        session_uuid = self.working_copy().session
-        session = self.sessions.get(session_uuid)
+        with self.do_nohistory('log') as txn:
+            session = txn.current_session()
+
         commit = session.prepare
         out = []
         while commit != session.commit:
@@ -673,19 +751,17 @@ class Project:
             commit = getattr(obj, 'prev', None)
         return out
 
+
+
     def status(self):
-        out = []
-        working_copy = self.working_copy()
-        return working_copy.files
+        with self.do_nohistory('status') as txn:
+            out = {}
+            working_copy = txn.working_copy()
+        for filename, entry in working_copy.files.items():
+            filename = os.path.relpath(filename, working_copy.prefix)
+            out[filename] = entry
+        return out
         
-
-    def next_commit_number(self, old_obj, new_kind):
-        n = old_obj.n
-        if new_kind in ("prepare", "amend"):
-            return n
-        return n+1
-        
-
 
     def init(self, prefix, options):
         self.makedirs()
@@ -696,7 +772,7 @@ class Project:
             branch_name = 'latest'
             # root = objects.Tree
             root = None
-            commit = objects.Init(0, txn.now, uuid=branch_uuid, changelog=None, root=None)
+            commit = objects.Start(0, txn.now, uuid=branch_uuid, changelog=None, root=None)
             commit_uuid = txn.put_change(commit)
 
             branch = objects.Branch(branch_uuid, commit_uuid, None, branch_uuid)
@@ -707,7 +783,7 @@ class Project:
             session = objects.Session(session_uuid, prefix, branch_uuid, commit_uuid, commit_uuid)
             txn.put_session(session)
 
-            txn.set_state("working", objects.WorkingCopy(session_uuid, branch_uuid, os.path.join('/',prefix), {}))
+            txn.set_working_copy(objects.WorkingCopy(session_uuid, branch_uuid, os.path.join('/',prefix), {}))
 
     def prepare(self, files):
         with self.do('prepare') as txn:
@@ -715,8 +791,8 @@ class Project:
             commit = session.prepare
 
             old = txn.get_change(commit)
-            n = self.next_commit_number(old, 'prepare')
-            prepare = objects.Prepare(n, txn.now, prev=commit, changelog=None)
+            n = txn.next_commit_number(old, 'prepare')
+            prepare = objects.Prepare(n, txn.now, prev=commit, changes=[])
             prepare_uuid = txn.put_change(prepare)
 
             session.prepare = prepare_uuid
@@ -727,7 +803,7 @@ class Project:
             session = txn.current_session()
 
             old = txn.get_change(session.prepare)
-            n = self.next_commit_number(old, 'commit')
+            n = txn.next_commit_number(old, 'commit')
             commit = objects.Commit(n, txn.now, prev=session.prepare, root=None, changelog=None)
             commit_uuid = txn.put_change(commit)
 
@@ -742,21 +818,21 @@ class Project:
             txn.put_session(session)
 
     def add(self, files):
-        working_copy = self.working_copy()
-        names = {}
-        for filename in files:
-            if not filename.startswith(self.working_dir):
-                raise VexError("{} is outside project".format(filename))
-            name = os.path.join(working_copy.prefix, os.path.relpath(filename, self.working_dir))
-            names[name] = filename
         with self.do('add') as txn:
-            for name, filename in names.items():
-                if name in working_copy.files:
+            working_copy = txn.working_copy()
+            names = {}
+            for filename in files:
+                if not filename.startswith(self.working_dir):
+                    raise VexError("{} is outside project".format(filename))
+                name = os.path.join(working_copy.prefix, os.path.relpath(filename, self.working_dir))
+                names[name] = filename
+                for name, filename in names.items():
+                    if name in working_copy.files:
 
-                    working_copy.files[name] = objects.WorkingFile("modified", filename)
-                else:
-                    working_copy.files[name] = objects.WorkingFile("added", filename)
-            txn.set_state("working", working_copy)
+                        working_copy.files[name] = objects.WorkingFile("modified", filename)
+                    else:
+                        working_copy.files[name] = objects.WorkingFile("added", filename)
+                txn.set_working_copy(working_copy)
 
     def ignore(self, files):
         # set prepare
@@ -766,51 +842,48 @@ class Project:
         # set prepare
         pass
 
-def get_project_directory(start_dir):
-    # hunt down .vex
-    return os.path.join(start_dir, DOTVEX)
-
-def get_project(clean=True):
+def get_project(check=True):
     working_dir = os.getcwd()
-    config_dir = os.path.join(working_dir, DOTVEX)
+    while True:
+        config_dir = os.path.join(working_dir, DOTVEX)
+        if os.path.exists(config_dir):
+            break
+        new_working_dir = os.path.split(working_dir)[0]
+        if new_working_dir == working_dir:
+            raise VexMissing('No vex project found in {}'.format(os.getcwd()))
+        working_dir = new_working_dir
     p = Project(config_dir, working_dir)
+    if check:
+        if p.history_isempty():
+            raise VexEmpty('Vex project exists, but `vex init` has not been run (or has been undone)')
+        elif not p.clean_state(): 
+            raise VexUnclean('Another change is already in progress. Try `vex debug:status`')
     return p
 
-    if p == None or not p.exists():
-        print('No vex project found')
-        return
-    elif p.history_isempty():
-        print('Vex project is uninitialized')
-        return
-    elif not p.clean_state(): 
-        print('Another change is already in progress. Try `vex debug:status`')
-        return
-    return p
-
+# CLI bits. Should handle environs, cwd, etc
 vex_cmd = Command('vex', 'a database for files')
 @vex_cmd.on_error()
 def Error(path, args, exception, traceback):
     message = str(exception)
     if path:
-        print("Something went wrong while running {}: {}".format(':'.join(path), message))
+        print("{}: {}".format(':'.join(path), message))
     else:
-        print("Something went wrong: {}".format(message))
+        print("vex: {}".format(message))
 
     if not isinstance(exception, VexError):
+        print()
         print("Worse still, it's an error vex doesn't recognize yet. A python traceback follows:")
         print()
         print(traceback)
 
-    p = get_project()
-    if p and not p.clean_state():
+    p = get_project(check=False)
+    if p.exists() and not p.clean_state():
         p.rollback_new_action()
 
         if not p.clean_state():
             print('This is bad: The project history is corrupt, try `vex debug:status` for more information')
         else:
             print('Good news: The changes that were attempted have been undone')
-    else:
-        print('Good news, nothing seems broken')
 
 
 vex_add = vex_cmd.subcommand('add','add files to the project')
@@ -827,7 +900,8 @@ vex_init = vex_cmd.subcommand('init')
 def Init(directory, working, config, prefix):
     working_dir = working or directory or os.getcwd()
     config_dir = config or os.path.join(working_dir, DOTVEX)
-    prefix = prefix or os.path.split(working_dir)[1]
+    prefix = prefix or os.path.split(working_dir)[1] or '/root'
+
     p = Project(config_dir, working_dir)
 
     if p.exists() and not p.clean_state():
@@ -845,9 +919,6 @@ vex_prepare = vex_cmd.subcommand('prepare')
 @vex_prepare.run('[files...]')
 def Prepare(files):
     p = get_project()
-    if not p.clean_state(): 
-        print('Another change is already in progress. Try `vex debug:status`')
-        sys.exit(-1)
     print('Preparing')
     p.prepare(files)
 
@@ -855,9 +926,6 @@ vex_commit = vex_cmd.subcommand('commit')
 @vex_commit.run('[files...]')
 def Commit(files):
     p = get_project()
-    if not p.clean_state(): 
-        print('Another change is already in progress. Try `vex debug:status`')
-        sys.exit(-1)
     print('Committing')
     p.commit(files)
 
@@ -865,15 +933,6 @@ vex_log = vex_cmd.subcommand('log')
 @vex_log.run()
 def Log():
     p = get_project()
-    if p == None or not p.exists():
-        print('No vex project found')
-        return
-    elif p.history_isempty():
-        print('Vex project is uninitialized')
-        return
-    elif not p.clean_state(): 
-        print('Another change is already in progress. Try `vex debug:status`')
-        return
     for entry in p.log():
         print(entry)
         print()
@@ -882,9 +941,6 @@ vex_history = vex_cmd.subcommand('history')
 @vex_history.run()
 def History():
     p = get_project()
-    if not p.clean_state(): 
-        print('Another change is already in progress. Try `vex debug:status`')
-        return 
 
     for entry,redos in p.history():
         alternative = ""
@@ -900,12 +956,7 @@ vex_status = vex_cmd.subcommand('status')
 @vex_status.run()
 def Status():
     p = get_project()
-    if not p.clean_state():
-        print('Another change is already in progress. Try `vex debug:status`')
-        return
-    prefix = p.working_copy().prefix
     for filename, entry in p.status().items():
-        filename = os.path.relpath(filename, prefix)
         path = os.path.relpath(entry.path)
 
         print(entry.state, filename, sep='\t')
@@ -914,24 +965,15 @@ vex_undo = vex_cmd.subcommand('undo')
 @vex_undo.run()
 def Undo():
     p = get_project()
-    if not p.clean_state():
-        print('Another change is already in progress. Try `vex debug:status`')
-        return
 
-    if p.history_isempty():
-        print('At beginning of history, cannot undo any further')
-    else:
-        action = p.undo()
-        if action:
-            print('undid', action.command)
+    action = p.undo()
+    if action:
+        print('undid', action.command)
 
 vex_redo = vex_cmd.subcommand('redo')
 @vex_redo.run('--list? --choice')
 def Redo(list, choice):
     p = get_project()
-    if not p.clean_state():
-        print('Another change is already in progress. Try `vex debug:status`')
-        return
 
     choices = p.redo_choices()
     if list:
@@ -956,7 +998,7 @@ def Debug():
 debug_status = vex_debug.subcommand('status')
 @debug_status.run()
 def DebugStatus():
-    p = get_project(clean=False)
+    p = get_project(check=False)
     print("Clean history", p.clean_state())
     working_copy = p.working_copy()
     session_uuid = working_copy.session
@@ -984,7 +1026,7 @@ def DebugStatus():
 debug_restart = vex_debug.subcommand('restart')
 @debug_restart.run()
 def DebugRestart():
-    p = get_project(clean=False)
+    p = get_project(check=False)
     if p.clean_state():
         print('There is no change in progress to restart')
         return
@@ -998,7 +1040,7 @@ def DebugRestart():
 debug_rollback = vex_debug.subcommand('rollback')
 @debug_rollback.run()
 def DebugRollback():
-    p = get_project(clean=False)
+    p = get_project(check=False)
     p.rollback_new_action()
     if p.clean_state():
         print('There is no change in progress to rollback')
