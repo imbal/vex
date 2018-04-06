@@ -592,7 +592,6 @@ class Project:
             self.copy_blobs(action.blobs)
             self.apply_changes('new', action.changes)
 
-
     def undo(self):
         with self.actions.undo() as action:
             if not action:
@@ -745,8 +744,6 @@ def Error(path, args, exception, traceback):
     else:
         print("Something went wrong: {}".format(message))
 
-    print()
-
     p = get_project()
     if p and not p.clean_state():
         p.rollback_new_action()
@@ -765,12 +762,14 @@ def Init(directory):
 
     if p.exists() and not p.clean_state():
         print('This vex project is unwell. Try `vex debug:status`')
-    elif p.exists() and not p.history_isempty():
-        sys.exit(-1)
-        print('A vex project already exists here')
-    else:
-        print('Creating vex project in "{}"...'.format(directory))
-        p.init('/prefix', {})
+    elif p.exists():
+        if not p.history_isempty():
+            print('A vex project already exists here')
+            sys.exit(-1)
+        else:
+            print('A vex project already exists, but it is unitialized')
+    print('Creating vex project in "{}"...'.format(directory))
+    p.init('/prefix', {})
 
 vex_prepare = vex_cmd.subcommand('prepare')
 @vex_prepare.run('[files...]')
@@ -796,12 +795,19 @@ vex_log = vex_cmd.subcommand('log')
 @vex_log.run()
 def Log():
     p = get_project()
-    if not p.clean_state(): 
+    raise Exception('no')
+    if p == None or not p.exists():
+        print('No vex project found')
+        return
+    elif p.history_isempty():
+        print('Vex project is uninitialized')
+        return
+    elif not p.clean_state(): 
         print('Another change is already in progress. Try `vex debug:status`')
-    else:
-        for entry in p.log():
-            print(entry)
-            print()
+        return
+    for entry in p.log():
+        print(entry)
+        print()
 
 vex_history = vex_cmd.subcommand('history')
 @vex_history.run()
@@ -868,11 +874,10 @@ def Redo(list, choice):
     else:
         print('Nothing to redo')
 
-vex_debug = vex_cmd.subcommand('debug')
+vex_debug = vex_cmd.subcommand('debug', 'run a command without capturing exceptions')
 @vex_debug.run()
 def Debug():
-    if not p.clean_state():
-        print('Another change is already in progress. Try `vex debug:status`')
+    print('Use vex debug <cmd> to run <cmd>, or use `vex debug:status`')
 
 debug_status = vex_debug.subcommand('status')
 @debug_status.run()

@@ -431,29 +431,19 @@ class CommandDescription:
         
 
     def parse_args(self, path, argv, environ, route):
-        if path:
-            if path and path[0] in self.subcommands:
+        if self.subcommands and path:
+            if path[0] in self.subcommands:
                 return self.subcommands[path[0]].parse_args(path[1:], argv, environ, route+[path[0]])
-            elif path:
+            else:
                 if route:
                     error="unknown subcommand {} for {}".format(path[0],":".join(route))
                     return Action("error", route, {'usage':True}, errors=(error,))
                 return Action("error", route, {'usage':True}, errors=("an unknown command: {}".format(path[0]),))
-            elif argv and argv[0]:
-                if argv[0] == "help":
-                    return Action("help", route, {'usage': False})
-                elif "--help" in argv:
-                    return Action("help", route, {'usage': True})
-                return Action("error", route, {'usage':True}, errors=("unknown command: {}".format(argv[0]),))
-
-            return Action("help", route, {'usage': False})
 
             # no argspec, print usage
         elif not self.argspec:
             if argv and argv[0]:
-                if argv[0] == "help":
-                    return Action("help", route, {'usage': False})
-                elif "--help" in argv:
+                if "--help" in argv:
                     return Action("help", route, {'usage': True})
                 return Action("error", route, {'usage':True}, errors=("unknown option: {}".format(argv[0]),))
 
@@ -603,9 +593,7 @@ class Command:
     # -- end of builder methods
 
     def call(self, path, argv):
-        if path and path[0] == 'help':
-            return self.help(path[1:])
-        elif path and path[0] in self.subcommands:
+        if path and path[0] in self.subcommands:
             return self.subcommands[path[0]].call(path[1:], argv)
         elif self.run_fn:
             if len(argv) == self.nargs:
@@ -652,41 +640,62 @@ def main(root, argv, environ):
         prefix, arg = arg[:offset].rsplit(' ', 1)
         tmp = prefix.lstrip().split(' ', 1)
         if len(tmp) > 1:
-            path = tmp[1].split(' ',1)[0].split(':')
-            result = obj.complete_arg(path, arg)
+            path = tmp[1].split(' ')
+            if path[0] in ('help', 'debug'):
+                if len(path) > 1:
+                    path = path[1].split(':') 
+                    result = obj.complete_arg(path, arg)
+                else:
+                    result = obj.complete_path([], arg.split(':'))
+            else:
+                path = path[0].split(':')
+                result = obj.complete_arg(path, arg)
         else:
             result = obj.complete_path([], arg.split(':'))
+            if "help".startswith(arg):
+                print("help ")
         for line in result:
             print(line)
         return 0
 
 
-    if argv and argv[0] in ("help"):
+    if argv and argv[0] == "help":
         argv.pop(0)
-        use_help = True
         path = []
-        if argv and argv[0]:
+        if argv and not argv[0].startswith('--'):
             path = argv.pop(0).strip().split(':')
         action = obj.parse_args(path, argv, environ, [])
         action = Action("help", action.path, {'manual': True})
+    elif argv and argv[0] == "debug" and any(argv[1:]):
+        argv.pop(0)
+        path = []
+        if argv and not argv[0].startswith('--'):
+            path = argv.pop(0).strip().split(':')
+        action = obj.parse_args(path, argv, environ, [])
+        if action.path == []:
+            action = Action(action.mode, ["debug"], action.argv)
+        elif action.mode == "call":
+            action = Action("debug", action.path, action.argv)
     elif argv and argv[0] == '--version':
         action = Action("version", [], {})
     elif argv and argv[0] == '--help':
         action = Action("help", [], {'usage': True})
     else:
         path = []
-        if argv and argv[0]:
+        if argv and not argv[0].startswith('--'):
             path = argv.pop(0).strip().split(':')
         action = obj.parse_args(path, argv, environ, [])
 
 
     if action.mode == "version":
         result = obj.version()
-    elif action.mode == "call":
+    elif action.mode == "call" or action.mode == "debug":
         try:
             result =  root.call(action.path, action.argv)
         except Exception as e:
-            tb = traceback.format_exception(*sys.exc_info())
+            if action.mode =="debug":
+                raise
+            tb = "".join(traceback.format_exception(*sys.exc_info()))
             if root.err_fn:
                 result = root.err_fn(action.path, action.argv, e, tb)
                 exit_code = -127
