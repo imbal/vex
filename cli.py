@@ -532,10 +532,11 @@ class Action:
         self.argv = argv
         self.errors = errors
 
-class Result:
+class Error(Exception):
     def __init__(self, exit_code, value) :
         self.exit_code = exit_code
         self.value = value
+        Exception.__init__(self)
         
 class Command:
     def __init__(self, name, short=None, long=None):
@@ -597,18 +598,15 @@ class Command:
             return self.subcommands[path[0]].call(path[1:], argv)
         elif self.run_fn:
             if len(argv) == self.nargs:
-                return self.spawn(argv)
+                return self.run_fn(**argv)
             else:
-                return Result(-1, ("bad options"),)
+                raise Error(-1, "bad options")
         else:
             if len(argv) == 0:
-                return Result(0, (self.render().manual(),))
+                return (self.render().manual())
             else:
-                return Result(-1, (self.render().usage(),))
+                raise Error(-1, self.render().usage())
 
-    def spawn(self, argv):
-        result = self.run_fn(**argv)
-        return Result(0, result)
 
     def main(self, name):
         if name == '__main__':
@@ -685,46 +683,50 @@ def main(root, argv, environ):
         action = obj.parse_args(path, argv, environ, [])
 
 
-    if action.mode == "version":
-        result = obj.version()
-    elif action.mode == "call" or action.mode == "debug":
-        try:
+    try:
+        if action.mode == "version":
+            result = obj.version()
+        elif action.mode == "call" or action.mode == "debug":
             result =  root.call(action.path, action.argv)
-        except Exception as e:
-            if action.mode =="debug":
-                raise
-            tb = "".join(traceback.format_exception(*sys.exc_info()))
-            if root.err_fn:
-                result = Result(-1, root.err_fn(action.path, action.argv, e, tb))
-            else:
-                result = Result(-1, tb)
-    elif action.mode == "help":
-        result = obj.help(action.path, usage=action.argv.get('usage'))
-    elif action.mode == "error":
-        print("error: {}".format(", ".join(action.errors)))
-        result = obj.help(action.path, usage=action.argv.get('usage'))
+        elif action.mode == "help":
+            result = obj.help(action.path, usage=action.argv.get('usage'))
+        elif action.mode == "error":
+            print("error: {}".format(", ".join(action.errors)))
+            result = obj.help(action.path, usage=action.argv.get('usage'))
 
-    if isinstance(result, Result):
-        exit_code = result.exit_code
-        result = result.value
-    else:
-        exit_code = -len(action.errors)
+        if result is not None:
+            line = None
+            if not isinstance(result, types.GeneratorType):
+                result = (result,)
 
-    if result is not None:
-        line = None
+            for line in result:
+                if isinstance(line, (bytes, bytearray)):
+                    sys.stdout.buffer.write(line)
+                elif line:
+                    print(line)
+                sys.stdout.flush()
+            return 0
+    except Error as e:
+        print()
+        print(e.value)
+        return e.exit_code
+
+    except Exception as e:
+        if action.mode =="debug":
+            raise
+        result= "".join(traceback.format_exception(*sys.exc_info()))
+        if root.err_fn:
+            result = root.err_fn(action.path, action.argv, e, result)
+
         if not isinstance(result, types.GeneratorType):
             result = (result,)
         for line in result:
-            if isinstance(line, Result):
-                exit_code = line.exit_code
-                line = line.value
             if isinstance(line, (bytes, bytearray)):
                 sys.stdout.buffer.write(line)
             elif line:
                 print(line)
-            sys.stdout.flush()
-
-    return exit_code
+        sys.stdout.flush()
+        return -1
 
 
 

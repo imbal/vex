@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from uuid import uuid4
 from contextlib import contextmanager
 
-from cli import Command, Result
+from cli import Command
 import rson
 
 def UUID(): return str(uuid4())
@@ -958,8 +958,6 @@ class Project:
             while old.n == n:
                 old = txn.get_change(old.prev)
 
-            print('old', old)
-
             changes = txn.working_copy_changes(files)
             changelog = objects.Changelog(prev=None, summary="Summary", message="Message", changes=changes)
             root = None
@@ -1066,8 +1064,7 @@ def Init(directory, working, config, prefix):
         yield ('This vex project is unwell. Try `vex debug:status`')
     elif p.exists():
         if not p.history_isempty():
-            yield ('A vex project already exists here')
-            yield Result(-1, None)
+            raise VexError("A vex project already exists here")
         else:
             yield ('A empty project was round, re-creating project in "{}"...'.format(directory))
             with p.lock('init') as p:
