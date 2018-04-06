@@ -16,8 +16,7 @@ def UUID(): return str(uuid4())
 def NOW(): return datetime.now(timezone.utc)
 DOTVEX = '.vex'
 
-class VexError(Exception):
-    pass
+class VexError(Exception): pass
 
 class VexBug(VexError): pass
 
@@ -307,12 +306,11 @@ class BlobStore:
 
 class ActionLog:
     START = 'init'
-    def __init__(self, dir, lockfile):
+    def __init__(self, dir):
         self.dir = dir
         self.store = BlobStore(os.path.join(dir,'entries'))
         self.redos = DirStore(os.path.join(dir,'redos' ))
         self.settings = DirStore(dir)
-        self.lockfile = lockfile
 
     def makedirs(self):
         os.makedirs(self.dir, exist_ok=True)
@@ -344,22 +342,6 @@ class ActionLog:
 
         return out
 
-    __locked = object()
-
-    @contextmanager
-    def lock(self, command):
-        try:
-            with open(self.lockfile, 'wb+') as fh:
-                fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                fh.truncate(0)
-                fh.write(b'# locked by %d at %a\n'%(os.getpid(), str(NOW())))
-                fh.write(codec.dump(command))
-                fh.write(b'\n')
-                fh.flush()
-                yield self.__locked
-                fh.write(b'# released by %d %a\n'%(os.getpid(), str(NOW())))
-        except (IOError, FileNotFoundError):
-            raise VexError('Cannot open project lockfile: {}'.format(self.lockfile))
 
     @contextmanager
     def do(self, action):
@@ -435,9 +417,8 @@ class ActionLog:
         current = self.settings.get("current")
         if current != old_current:
             raise VexCorrupt('History is really corrupted: Interrupted transaction did not come after current change')
-        with self.lock(obj.action):
-            yield obj.action
-            self.settings.set("next", current)
+        yield obj.action
+        self.settings.set("next", current)
 
     @contextmanager
     def restart_new(self):
@@ -450,9 +431,8 @@ class ActionLog:
         current = self.settings.get("current")
         if current != old_current:
             raise VexCorrupt('History is really corrupted: Interrupted transaction did not come after current change')
-        with self.lock(obj.action):
-            yield obj.action
-            self.settings.set("current", next)
+        yield obj.action
+        self.settings.set("current", next)
 
 
     def redo_choices(self):
@@ -615,7 +595,7 @@ class Project:
         self.sessions = DirStore(os.path.join(config_dir, 'sessions'))
         self.state = DirStore(os.path.join(config_dir, 'state'))
         self.lockfile = os.path.join(config_dir, 'lock')
-        self.actions = ActionLog(os.path.join(config_dir, 'history'), self.lockfile)
+        self.actions = ActionLog(os.path.join(config_dir, 'history'))
         self.scratch = BlobStore(os.path.join(config_dir, 'scratch'))
 
     def makedirs(self):
@@ -633,8 +613,59 @@ class Project:
     def exists(self):
         return os.path.exists(self.dir)
 
+    __locked = object()
+
+    @contextmanager
+    def lock(self, command):
+        try:
+            with open(self.lockfile, 'wb+') as fh:
+                fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                fh.truncate(0)
+                fh.write(b'# locked by %d at %a\n'%(os.getpid(), str(NOW())))
+                fh.write(codec.dump(command))
+                fh.write(b'\n')
+                fh.flush()
+                yield self
+                fh.write(b'# released by %d %a\n'%(os.getpid(), str(NOW())))
+        except (IOError, FileNotFoundError):
+            raise VexError('Cannot open project lockfile: {}'.format(self.lockfile))
+
     def clean_state(self):
         return self.actions.clean_state()
+
+    def rollback_new_action(self):
+        with self.actions.rollback_new() as action:
+            if action:
+                self.apply_changes('old', action.changes)
+            return action
+
+    def restart_new_action(self):
+        with self.actions.restart_new() as action:
+            if action:
+                self.copy_blobs(action.blobs)
+                self.apply_changes('new', action.changes)
+            return action
+
+    @contextmanager
+    def do_nohistory(self, command):
+        txn = StateChange(self, command)
+        yield txn
+        action = txn.action()
+        if action.changes:
+            self.apply_changes('new', {'state': action.changes['state']})
+
+    @contextmanager
+    def do(self, command):
+        if not self.actions.clean_state():
+            raise VexCorrupt('Project history not in a clean state.')
+
+        txn = ProjectChange(self, self.scratch, command)
+        yield txn
+        with self.actions.do(txn.action()) as action:
+            if not action:
+                return
+            self.copy_blobs(action.blobs)
+            self.apply_changes('new', action.changes)
 
     # Take Action.changes and applies them to project
     def apply_changes(self, kind, changes):
@@ -671,55 +702,17 @@ class Project:
             else:
                 raise VexBug('Project change has unknown values')
 
-    def rollback_new_action(self):
-        with self.actions.rollback_new() as action:
-            if action:
-                self.apply_changes('old', action.changes)
-            return action
-
-    def restart_new_action(self):
-        with self.actions.restart_new() as action:
-            if action:
-                self.copy_blobs(action.blobs)
-                self.apply_changes('new', action.changes)
-            return action
-
-    @contextmanager
-    def do_nohistory(self, command):
-        with self.actions.lock(command):
-            txn = StateChange(self, command)
-            yield txn
-            action = txn.action()
-            if action.changes:
-                self.apply_changes('new', {'state': action.changes['state']})
-
-    @contextmanager
-    def do(self, command):
-        if not self.actions.clean_state():
-            raise VexCorrupt('Project history not in a clean state.')
-
-        with self.actions.lock(command):
-            txn = ProjectChange(self, self.scratch, command)
-            yield txn
-            with self.actions.do(txn.action()) as action:
-                if not action:
-                    return
-                self.copy_blobs(action.blobs)
-                self.apply_changes('new', action.changes)
-
     def undo(self):
-        with self.actions.lock('undo'):
-            with self.actions.undo() as action:
-                if not action:
-                    return
-                self.apply_changes('old', action.changes)
+        with self.actions.undo() as action:
+            if not action:
+                return
+            self.apply_changes('old', action.changes)
 
     def redo(self, choice):
-        with self.actions.lock('redo'):
-            with self.actions.redo(choice) as action:
-                if not action:
-                    return
-                self.apply_changes('old', action.changes)
+        with self.actions.redo(choice) as action:
+            if not action:
+                return
+            self.apply_changes('old', action.changes)
 
     def redo_choices(self):
         return self.actions.redo_choices()
@@ -734,7 +727,7 @@ class Project:
         return self.state.get("working")
 
     def log(self):
-        with self.do_nohistory('log') as txn:
+        with self.do_nohistory() as txn:
             session = txn.current_session()
 
         commit = session.prepare
@@ -877,6 +870,7 @@ def Error(path, args, exception, traceback):
         print(traceback)
 
     p = get_project(check=False)
+
     if p.exists() and not p.clean_state():
         p.rollback_new_action()
 
@@ -884,15 +878,6 @@ def Error(path, args, exception, traceback):
             print('This is bad: The project history is corrupt, try `vex debug:status` for more information')
         else:
             print('Good news: The changes that were attempted have been undone')
-
-
-vex_add = vex_cmd.subcommand('add','add files to the project')
-@vex_add.run('[file...]')
-def Add(file):
-    p = get_project()
-    cwd = os.getcwd()
-    files = [os.path.join(cwd, f) for f in file]
-    p.add(files)
 
 
 vex_init = vex_cmd.subcommand('init')
@@ -911,23 +896,38 @@ def Init(directory, working, config, prefix):
             print('A vex project already exists here')
             sys.exit(-1)
         else:
-            print('A vex project already exists, but it is unitialized')
-    print('Creating vex project in "{}"...'.format(directory))
-    p.init(prefix, {})
+            print('A empty project was round, re-creating project in "{}"...'.format(directory))
+            with p.lock('init') as p:
+                p.init(prefix, {})
+    else:
+        print('Creating vex project in "{}"...'.format(directory))
+        p.init(prefix, {})
+
+vex_add = vex_cmd.subcommand('add','add files to the project')
+@vex_add.run('[file...]')
+def Add(file):
+    p = get_project()
+    with p.lock('add') as p:
+        cwd = os.getcwd()
+        files = [os.path.join(cwd, f) for f in file]
+        p.add(files)
+
 
 vex_prepare = vex_cmd.subcommand('prepare')
 @vex_prepare.run('[files...]')
 def Prepare(files):
     p = get_project()
     print('Preparing')
-    p.prepare(files)
+    with p.lock('prepare') as p:
+        p.prepare(files)
 
 vex_commit = vex_cmd.subcommand('commit')
 @vex_commit.run('[files...]')
 def Commit(files):
     p = get_project()
     print('Committing')
-    p.commit(files)
+    with p.lock('commit') as p:
+        p.commit(files)
 
 vex_log = vex_cmd.subcommand('log')
 @vex_log.run()
@@ -956,17 +956,19 @@ vex_status = vex_cmd.subcommand('status')
 @vex_status.run()
 def Status():
     p = get_project()
-    for filename, entry in p.status().items():
-        path = os.path.relpath(entry.path)
+    with p.lock('status') as p:
+        for filename, entry in p.status().items():
+            path = os.path.relpath(entry.path)
 
-        print(entry.state, filename, sep='\t')
+            print(entry.state, filename, sep='\t')
 
 vex_undo = vex_cmd.subcommand('undo')
 @vex_undo.run()
 def Undo():
     p = get_project()
 
-    action = p.undo()
+    with p.lock('undo') as p:
+        action = p.undo()
     if action:
         print('undid', action.command)
 
@@ -975,20 +977,22 @@ vex_redo = vex_cmd.subcommand('redo')
 def Redo(list, choice):
     p = get_project()
 
-    choices = p.redo_choices()
-    if list:
-        if choices:
-            for n, choice in enumerate(choices):
-                print(n, choice.time, choice.command)
+    with p.lock('redo') as p:
+        choices = p.redo_choices()
+
+        if list:
+            if choices:
+                for n, choice in enumerate(choices):
+                    print(n, choice.time, choice.command)
+            else:
+                print('Nothing to redo')
+        elif choices:
+            choice = choice or 0
+            action = p.redo(choice)
+            if action:
+                print('redid', action.command)
         else:
             print('Nothing to redo')
-    elif choices:
-        choice = choice or 0
-        action = p.redo(choice)
-        if action:
-            print('redid', action.command)
-    else:
-        print('Nothing to redo')
 
 vex_debug = vex_cmd.subcommand('debug', 'run a command without capturing exceptions')
 @vex_debug.run()
@@ -999,56 +1003,59 @@ debug_status = vex_debug.subcommand('status')
 @debug_status.run()
 def DebugStatus():
     p = get_project(check=False)
-    print("Clean history", p.clean_state())
-    working_copy = p.working_copy()
-    session_uuid = working_copy.session
-    out = []
+    with p.lock('debug:status') as p:
+        print("Clean history", p.clean_state())
+        working_copy = p.working_copy()
+        session_uuid = working_copy.session
+        out = []
 
-    if session_uuid and p.sessions.exists(session_uuid):
-        session = p.sessions.get(session_uuid)
-        out.append("session: {}".format(session_uuid))
-        out.append("at {}, started at {}".format(session.prepare, session.commit))
+        if session_uuid and p.sessions.exists(session_uuid):
+            session = p.sessions.get(session_uuid)
+            out.append("session: {}".format(session_uuid))
+            out.append("at {}, started at {}".format(session.prepare, session.commit))
 
-        branch = p.branches.get(session.branch)
-        out.append("commiting to branch {}".format(branch.uuid))
+            branch = p.branches.get(session.branch)
+            out.append("commiting to branch {}".format(branch.uuid))
 
-        commit = p.changes.get_obj(session.prepare)
-        out.append("last commit: {}".format(commit.__class__.__name__))
-    else:
-        if p.history_isempty():
-            out.append("you undid the creation. try vex redo")
+            commit = p.changes.get_obj(session.prepare)
+            out.append("last commit: {}".format(commit.__class__.__name__))
         else:
-            out.append("no active session, but history, weird")
-    out.append("")
-    return "\n".join(out)
+            if p.history_isempty():
+                out.append("you undid the creation. try vex redo")
+            else:
+                out.append("no active session, but history, weird")
+        out.append("")
+        return "\n".join(out)
 
 
 debug_restart = vex_debug.subcommand('restart')
 @debug_restart.run()
 def DebugRestart():
     p = get_project(check=False)
-    if p.clean_state():
-        print('There is no change in progress to restart')
-        return
-    print('Restarting current action...')
-    p.restart_new_action()
-    if p.clean_state():
-        print('Project has recovered')
-    else:
-        print('Oh dear')
+    with p.lock('debug:restart') as p:
+        if p.clean_state():
+            print('There is no change in progress to restart')
+            return
+        print('Restarting current action...')
+        p.restart_new_action()
+        if p.clean_state():
+            print('Project has recovered')
+        else:
+            print('Oh dear')
 
 debug_rollback = vex_debug.subcommand('rollback')
 @debug_rollback.run()
 def DebugRollback():
     p = get_project(check=False)
-    p.rollback_new_action()
-    if p.clean_state():
-        print('There is no change in progress to rollback')
-        return
-    print('Restarting current action...')
-    if p.clean_state():
-        print('Project has recovered')
-    else:
-        print('Oh dear')
+    with p.lock('debug:rollback') as p:
+        if p.clean_state():
+            print('There is no change in progress to rollback')
+            return
+        print('Rolling back current action...')
+        p.rollback_new_action()
+        if p.clean_state():
+            print('Project has recovered')
+        else:
+            print('Oh dear')
 
 vex_cmd.main(__name__)
