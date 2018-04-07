@@ -20,6 +20,8 @@ class VexError(Exception): pass
 
 class VexBug(VexError): pass
 
+class VexArgument(VexError): pass
+
 class VexCorrupt(VexError): pass
 
 class VexMissing(VexError): pass
@@ -51,6 +53,7 @@ class Codec:
 codec = Codec()
 
 class objects:
+    # Entries in commits
     @codec.register
     class Start:
         n = 0
@@ -182,6 +185,8 @@ class objects:
     class Truncate:
         pass
 
+
+    # Changelog and entries
     @codec.register
     class Changelog:
         def __init__(self, prev, summary, changes, message):
@@ -191,29 +196,44 @@ class objects:
             self.changes = changes
 
     @codec.register
-    class Add:
+    class AddFile:
         def __init__(self, addr, properties): 
             self.addr = addr
             self.properties = ()
 
     @codec.register
-    class Delete:
+    class DeleteFile:
         def __init__(self): 
             pass
 
     @codec.register
-    class Change:
+    class ChangeFile:
         def __init__(self, addr, properties): 
             self.properites = properties
             self.addr = addr
 
     @codec.register
+    class AddDir:
+        def __init__(self, properties): 
+            self.properties = ()
+
+    @codec.register
+    class DeleteDir:
+        def __init__(self): 
+            pass
+
+    @codec.register
+    class ChangeDir:
+        def __init__(self, addr, properties): 
+            self.properites = properties
+            self.addr = addr
+
+    # Manfest Objects: Directories and entries
+    @codec.register
     class Directory:
         def __init__(self, entries):
             self.entries = entries
 
-
-    # Entries in a directory
     @codec.register
     class Prefix:
         def __init__(self, prefix, entries):
@@ -241,8 +261,9 @@ class objects:
             self.addrs = addrs
             self.properites = properties
 
-    # Non Blob store:
     
+    # Repository State
+
     @codec.register
     class Session:
         def __init__(self,uuid, prefix, branch, prepare, commit, mode=None, state=None):
@@ -261,6 +282,8 @@ class objects:
             self.head = head
             self.base = base
             self.upstream = upstream
+
+    # History state
 
     @codec.register
     class Action:
@@ -282,6 +305,8 @@ class objects:
             self.next = next
             self.dos = dos
 
+    # Working copy state
+
     @codec.register
     class WorkingDir:
         def __init__(self, commit, session, branch, prefix, files):
@@ -293,7 +318,10 @@ class objects:
 
     @codec.register
     class WorkingFile:
-        States = set(('added', 'modified', 'deleted', 'ignored', 'tracked','invisible'))
+        States = set(('dir', 'added', 'modified', 'deleted', 'ignored', 'file','invisible'))
+        Unchanged = set(('ignored', 'dir', 'file', 'invisible'))
+        Changed = set(('added', 'modified', 'deleted'))
+
         def __init__(self, state, path, addr=None, stat=None, properties=None):
             if state not in self.States: raise VexBug('bad')
             self.state = state
@@ -377,6 +405,9 @@ class BlobStore:
     def get_obj(self, addr):
         with open(self.filename(addr), 'rb') as fh:
             return codec.parse(fh.read())
+
+
+# Action log: Used to track undo/redo and changes to repository state
 
 
 class ActionLog:
@@ -577,12 +608,25 @@ class StateChange:
     def refresh_working_copy(self):
         copy = self.working_copy()
         for name, entry in copy.files.items():
-            if entry.state == "tracked":
-                new_addr = self.project.files.addr_for_file(entry.path)
-                if new_addr != entry.addr:
-                    entry.state = "modified"
-            # if state ... modified? added? removed? ignored
-            # if state ... tracked .. check stat if present, else md5 and stat
+            if entry.state == "file":
+                if not os.path.exists(entry.path):
+                    entry.state = "deleted"
+                    entry.addr, entry.properties = None, None
+                elif os.path.isdir(entry.path):
+                    entry.state = "added"
+                else:
+                    new_addr = self.project.files.addr_for_file(entry.path)
+                    if new_addr != entry.addr:
+                        entry.state = "modified"
+            if entry.state == "dir":
+                if not os.path.exists(entry.path):
+                    entry.state = "deleted"
+                    entry.properties = None
+                elif os.path.isfile(entry.path):
+                    entry.state = "added"
+                    entry.properties = {}
+                    entry.addr = None 
+
 
         self.set_working_copy(copy)
         return copy
@@ -614,26 +658,44 @@ class ProjectChange:
         working = self.refresh_working_copy()
         out = {}
 
-        for file, entry in working.files.items():
-            filename = os.path.relpath(entry.path, self.project.working_dir)
+        for repo_name, entry in working.files.items():
+            filename = entry.path
             if os.path.isfile(filename):
+
                 if entry.state == "added":
-                    out[file]=objects.Add(self.scratch.addr_for_file(filename), properties={})
+                    out[repo_name]=objects.AddFile(self.scratch.addr_for_file(filename), properties=entry.properties)
                 elif entry.state == "modified":
-                    out[file]=objects.Change(addr=self.scratch.addr_for_file(filename), properties={})
+                    out[repo_name]=objects.ChangeFile(addr=self.scratch.addr_for_file(filename), properties=entry.properties)
+                elif entry.state == "deleted":
+                    out[repo_name]=objects.DeleteFile()
+            elif os.path.isdir(filename):
+                if entry.state == "added":
+                    out[repo_name]=objects.AddDir(properties=entry.properties)
+                elif entry.state == "modified":
+                    out[repo_name]=objects.ChangeDir(properties=entry.properties)
+                elif entry.state == "deleted":
+                    out[repo_name]=objects.DeleteDir()
+
+            # if dir, if link?
         return out
 
     def update_working_copy(self, commit, changes):
         working = self.working_copy()
         working.commit = commit
         for file, change in changes.items():
-            filename = os.path.join(self.project.working_dir, os.path.relpath(file, working.prefix))
-            if isinstance(change, objects.Add):
-                working.files[file] = objects.WorkingFile("tracked",  filename, addr=change.addr)
-            elif isinstance(change, objects.Delete):
+            filename = self.project.to_file_path(working, file)
+            if isinstance(change, objects.AddFile):
+                working.files[file] = objects.WorkingFile("file",  filename, addr=change.addr, properties=change.properties)
+            elif isinstance(change, objects.DeleteFile):
                 working.files.pop(file)
-            elif isinstance(change, objects.Change):
-                working.files[file] = objects.WorkingFile("tracked",  filename, addr=change.addr)
+            elif isinstance(change, objects.ChangeFile):
+                working.files[file] = objects.WorkingFile("file",  filename, addr=change.addr, properties=change.properties)
+            elif isinstance(change, objects.AddDir):
+                working.files[file] = objects.WorkingFile("dir",  filename, properties=change.properties)
+            elif isinstance(change, objects.DeleteFile):
+                working.files.pop(file)
+            elif isinstance(change, objects.ChangeDir):
+                working.files[file] = objects.WorkingFile("dir",  filename, properties=change.properties)
         self.set_working_copy(working)
         return working
         
@@ -750,6 +812,15 @@ class Project:
 
     def exists(self):
         return os.path.exists(self.dir)
+
+    def to_file_path(self, working_copy, file):
+        # normalize name to NFC?
+        return os.path.join(self.working_dir, os.path.relpath(file, working_copy.prefix))
+
+    def to_repo_path(self, working_copy, file):
+        # normalize name to NFC?
+        filename = os.path.relpath(file, self.working_dir)
+        return os.path.join(working_copy.prefix, filename)
 
     __locked = object()
 
@@ -884,13 +955,7 @@ class Project:
 
     def status(self):
         with self.do_nohistory('status') as txn:
-            out = {}
-            working_copy = txn.refresh_working_copy()
-        for filename, entry in working_copy.files.items():
-            filename = os.path.relpath(filename, working_copy.prefix)
-            out[filename] = entry
-        return out
-        
+            return txn.refresh_working_copy().files
 
     def init(self, prefix, options):
         self.makedirs()
@@ -916,10 +981,9 @@ class Project:
         
 
     def prepare(self, files):
-        prefix = self.working_copy().prefix
-        files = [os.path.relpath(filename, prefix) for filename in files] if files else None
         with self.do('prepare') as txn:
             working = txn.refresh_working_copy()
+            files = [self.to_repo_path(working, filename) for filename in files] if files else None
             session = txn.get_session(working.session)
             commit = session.prepare
             if commit != working.commit:
@@ -930,8 +994,8 @@ class Project:
 
             changes = txn.working_copy_changes(files)
             for file, change in changes.items():
-                filename = os.path.join(self.working_dir, os.path.relpath(file, working.prefix))
-                if os.path.isfile(filename) and isinstance(change, (objects.Add, objects.Change)):
+                filename = self.to_file_path(working, file)
+                if os.path.isfile(filename) and isinstance(change, (objects.AddFile, objects.ChangeFile, objects.AddDir, objects.ChangeDir)):
                     addr = txn.put_file(filename)
                     if addr != change.addr:
                         raise VexCorrupt('Sync')
@@ -945,10 +1009,9 @@ class Project:
             txn.update_working_copy(prepare_uuid, changes)
 
     def commit(self, files):
-        prefix = self.working_copy().prefix
-        files = [os.path.relpath(filename, prefix) for filename in files] if files else None
         with self.do('commit') as txn:
             working = txn.refresh_working_copy()
+            files = [self.to_repo_path(working, filename) for filename in files] if files else None
             session = txn.get_session(working.session)
             if session.prepare != working.commit:
                 raise VexCorruption('Conflict???')
@@ -979,20 +1042,18 @@ class Project:
         with self.do('add') as txn:
             working_copy = txn.refresh_working_copy()
             names = {}
-            if working_copy.prefix not in working_copy.files:
-                names[working_copy.prefix] = self.working_dir
             for filename in files:
                 if not filename.startswith(self.working_dir):
                     raise VexError("{} is outside project".format(filename))
-                filename = os.path.relpath(filename, self.working_dir)
-                name = os.path.join(working_copy.prefix, filename)
-                # normalize name to NFC?
+                name = self.to_repo_path(working_copy, filename)
                 # add any parents missing
                 # recurse into directories
                 names[name] = filename
+            # for names, add prefixes
+            if working_copy.prefix not in working_copy.files:
+                names[working_copy.prefix] = self.working_dir
             for name, filename in names.items():
                 if name in working_copy.files:
-
                     working_copy.files[name] = objects.WorkingFile("modified", filename)
                 else:
                     working_copy.files[name] = objects.WorkingFile("added", filename)
@@ -1078,10 +1139,13 @@ vex_add = vex_cmd.subcommand('add','add files to the project')
 @vex_add.run('file...')
 def Add(file):
     if file:
+        cwd = os.getcwd()
+        files = [os.path.join(cwd, f) for f in file]
+        missing = [f for f in file if not os.path.exists(f)]
+        if missing:
+            raise VexArgument('cannot find {}'.format(",".join(missing)))
         p = get_project()
         with p.lock('add') as p:
-            cwd = os.getcwd()
-            files = [os.path.join(cwd, f) for f in file]
             p.add(files)
 
 
@@ -1134,11 +1198,13 @@ vex_status = vex_cmd.subcommand('status')
 @vex_status.run()
 def Status():
     p = get_project()
+    cwd = os.getcwd()
     with p.lock('status') as p:
-        for filename, entry in p.status().items():
-            path = os.path.relpath(entry.path)
-
-            yield "{}\t{}".format(entry.state, filename)
+        files = p.status()
+        for reponame in sorted(files):
+            entry = files[reponame]
+            path = os.path.relpath(entry.path, cwd)
+            yield "{:8}\t{}".format(entry.state, path)
 
 vex_undo = vex_cmd.subcommand('undo')
 @vex_undo.run()
