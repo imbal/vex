@@ -18,16 +18,17 @@ DOTVEX = '.vex'
 
 class VexError(Exception): pass
 
+# Should not happen
 class VexBug(VexError): pass
-
-class VexArgument(VexError): pass
-
 class VexCorrupt(VexError): pass
 
-class VexMissing(VexError): pass
+# Can happen
+class VexLock(Exception): pass
+class VexArgument(VexError): pass
 
-class VexEmpty(VexError): pass
-
+# State Errors
+class VexNoProject(VexError): pass
+class VexNoHistory(VexError): pass
 class VexUnclean(VexError): pass
 
 class Codec:
@@ -108,9 +109,10 @@ class objects:
     
     @codec.register
     class Prepare:
-        def __init__(self, n, timestamp, *, prev, changes):
+        def __init__(self, n, timestamp, *, prev, prepared, changes):
             self.n =n
             self.prev = prev
+            self.prepared = prepared
             self.timestamp = timestamp
             self.changes = changes
 
@@ -121,9 +123,10 @@ class objects:
     
     @codec.register
     class Commit:
-        def __init__(self, n, timestamp, *, prev, root, changelog):
+        def __init__(self, n, timestamp, *, prev, prepared, root, changelog):
             self.n =n
             self.prev = prev
+            self.prepared = prepared
             self.timestamp = timestamp
             self.root = root
             self.changelog = changelog
@@ -230,34 +233,32 @@ class objects:
 
     # Manfest Objects: Directories and entries
     @codec.register
-    class Directory:
+    class Tree:
         def __init__(self, entries):
             self.entries = entries
 
+    # Entries in a Tree Object
+
     @codec.register
-    class Prefix:
-        def __init__(self, prefix, entries):
-            self.prefix = prefix
-            self.entries = entries
+    class SubTree:
+        def __init__(self, addr):
+            self.addr = addr
             
     @codec.register
-    class Subdirectory:
-        def __init__(self, filename, addr, properties):
-            self.filename = filename
+    class Dir:
+        def __init__(self, addr,  properties):
             self.addr = addr
             self.properites = properties
 
     @codec.register
     class File:
-        def __init__(self, filename, addr, properties):
-            self.filename = filename
+        def __init__(self, addr, properties):
             self.addr = addr
             self.properites = properties
 
     @codec.register
     class Blob:
-        def __init__(self, filename, addrs, properties):
-            self.filename = filename
+        def __init__(self, addrs, properties):
             self.addrs = addrs
             self.properites = properties
 
@@ -386,13 +387,15 @@ class BlobStore:
 
     def put_file(self, file):
         addr = self.addr_for_file(file)
-        shutil.copyfile(file, self.filename(addr))
+        if not self.exists(addr):
+            shutil.copyfile(file, self.filename(addr))
         return addr
 
     def put_buf(self, buf, addr=None):
         addr = addr or self.addr_for_buf(buf)
-        with open(self.filename(addr), 'xb') as fh:
-            fh.write(buf)
+        if not self.exists(addr):
+            with open(self.filename(addr), 'xb') as fh:
+                fh.write(buf)
         return addr
 
     def put_obj(self, obj):
@@ -661,7 +664,12 @@ class ProjectChange:
             files_to_check = working.files.keys()
         else:
             # add prefixes to list
-            files_to_check = files
+            files_to_check = set()
+            for file in files:
+                old = file
+                while old != '/':
+                    files_to_check.add(old)
+                    old = os.path.split(old)[0]
 
         for repo_name in files_to_check:
             entry = working.files[repo_name]
@@ -685,7 +693,7 @@ class ProjectChange:
             # if dir, if link?
         return out
 
-    def update_working_copy(self, commit, changes):
+    def commit_working_copy(self, commit, changes):
         working = self.working_copy()
         working.commit = commit
         for file, change in changes.items():
@@ -720,8 +728,8 @@ class ProjectChange:
             return self.scratch.get_file(addr)
         return self.project.manifests.get_file(addr)
 
-    def put_manifest(self, file):
-        addr = self.scratch.put_file(file)
+    def put_manifest(self, obj):
+        addr = self.scratch.put_obj(obj)
         self.new_manifests.add(addr)
         return addr
         
@@ -837,7 +845,7 @@ class Project:
             fh = open(self.lockfile, 'wb')
             fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except (IOError, FileNotFoundError):
-            raise VexError('Cannot open project lockfile: {}'.format(self.lockfile))
+            raise VexLock('Cannot open project lockfile: {}'.format(self.lockfile))
         try:
                 fh.truncate(0)
                 fh.write(b'# locked by %d at %a\n'%(os.getpid(), str(NOW())))
@@ -971,12 +979,24 @@ class Project:
             return None
         with self.do('init') as txn:
             branch_uuid = UUID()
-            branch_name = 'latest'
-            # root = objects.Tree
-            root = None
-            commit = objects.Start(txn.now, uuid=branch_uuid, changelog=None, root=None)
+
+            project = objects.Tree({})
+            project_uuid = txn.put_manifest(project)
+            root_path = '/'
+            root = objects.Tree({os.path.relpath(prefix, root_path): objects.Dir(project_uuid, {})})
+            root_uuid = txn.put_manifest(root)
+
+            changes = {
+                    '/' : objects.AddDir({}),
+                    prefix : objects.AddDir({}),
+            }
+            changelog = objects.Changelog(prev=None, summary="init", message="", changes=changes)
+            changelog_uuid = txn.put_manifest(changelog)
+
+            commit = objects.Start(txn.now, uuid=branch_uuid, changelog=changelog_uuid, root=root_uuid)
             commit_uuid = txn.put_change(commit)
 
+            branch_name = 'latest'
             branch = objects.Branch(branch_uuid, commit_uuid, None, branch_uuid)
             txn.put_branch(branch)
             txn.set_name(branch_name, branch) 
@@ -997,8 +1017,12 @@ class Project:
             if commit != working.commit:
                 raise VexCorruption('Conflict???')
 
+            old_uuid = commit
             old = txn.get_change(commit)
             n = old.next_n('prepare')
+            while old.n == n:
+                old_uuid = old.prev
+                old = txn.get_change(old.prev)
 
             changes = txn.working_copy_changelog(files)
             for file, change in changes.items():
@@ -1007,14 +1031,16 @@ class Project:
                     addr = txn.put_file(filename)
                     if addr != change.addr:
                         raise VexCorrupt('Sync')
-            # add files to the store?
 
-            prepare = objects.Prepare(n, txn.now, prev=commit, changes=changes)
+            if commit == old_uuid:
+                commit = None
+
+            prepare = objects.Prepare(n, txn.now, prev=old_uuid, prepared=commit, changes=changes)
             prepare_uuid = txn.put_change(prepare)
 
             session.prepare = prepare_uuid
             txn.put_session(session)
-            txn.update_working_copy(prepare_uuid, changes)
+            txn.commit_working_copy(prepare_uuid, changes)
 
     def commit(self, files):
         with self.do('commit') as txn:
@@ -1024,17 +1050,26 @@ class Project:
             if session.prepare != working.commit:
                 raise VexCorruption('Conflict???')
 
+            changes = {}
+            old_uuid = session.prepare
             old = txn.get_change(session.prepare)
             n = old.next_n('commit')
             while old.n == n:
+                changes.update(old.changes)
+                old_uuid = old.prev
                 old = txn.get_change(old.prev)
 
-            changes = txn.working_copy_changelog(files)
-            changelog = objects.Changelog(prev=None, summary="Summary", message="Message", changes=changes)
-            root = None
-            # build root
+            old_root = old.root
 
-            commit = objects.Commit(n, txn.now, prev=session.prepare, root=root, changelog=changelog)
+            changes.update(txn.working_copy_changelog(files))
+            root = objects.Tree({})
+            # build root
+            changelog = objects.Changelog(prev=None, summary="Summary", message="Message", changes=changes)
+            changelog_uuid = txn.put_manifest(changelog)
+
+            root_uuid = txn.put_manifest(root)
+
+            commit = objects.Commit(n, txn.now, prev=old_uuid, prepared=session.prepare, root=root, changelog=changelog_uuid)
             commit_uuid = txn.put_change(commit)
 
             branch = txn.get_branch(session.branch)
@@ -1044,7 +1079,7 @@ class Project:
             session.prepare = commit_uuid
             session.commit = commit_uuid
             txn.put_session(session)
-            txn.update_working_copy(commit_uuid, changes)
+            txn.commit_working_copy(commit_uuid, changes)
 
     def add(self, files):
         with self.do('add') as txn:
@@ -1083,12 +1118,12 @@ def get_project(check=True):
             break
         new_working_dir = os.path.split(working_dir)[0]
         if new_working_dir == working_dir:
-            raise VexMissing('No vex project found in {}'.format(os.getcwd()))
+            raise VexNoProject('No vex project found in {}'.format(os.getcwd()))
         working_dir = new_working_dir
     p = Project(config_dir, working_dir)
     if check:
         if p.history_isempty():
-            raise VexEmpty('Vex project exists, but `vex init` has not been run (or has been undone)')
+            raise VexNoHistory('Vex project exists, but `vex init` has not been run (or has been undone)')
         elif not p.clean_state(): 
             raise VexUnclean('Another change is already in progress. Try `vex debug:status`')
     return p
@@ -1125,7 +1160,8 @@ vex_init = vex_cmd.subcommand('init')
 def Init(directory, working, config, prefix):
     working_dir = working or directory or os.getcwd()
     config_dir = config or os.path.join(working_dir, DOTVEX)
-    prefix = prefix or os.path.split(working_dir)[1] or '/root'
+    prefix = prefix or os.path.split(working_dir)[1] or 'root'
+    prefix = os.path.join('/', prefix)
 
     p = Project(config_dir, working_dir)
 
