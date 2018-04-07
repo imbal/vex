@@ -1085,6 +1085,7 @@ class Project:
         with self.do('add') as txn:
             working_copy = txn.refresh_working_copy()
             names = {}
+            dirs = {}
             for filename in files:
                 if not filename.startswith(self.working_dir):
                     raise VexError("{} is outside project".format(filename))
@@ -1092,14 +1093,22 @@ class Project:
                 # add any parents missing
                 # recurse into directories
                 names[name] = filename
-            # for names, add prefixes
-            if working_copy.prefix not in working_copy.files:
-                names[working_copy.prefix] = self.working_dir
+                name = os.path.split(name)[0]
+                filename = os.path.split(filename)[0]
+                while name != '/':
+                    dirs[name] = filename
+                    name = os.path.split(name)[0]
+                    filename = os.path.split(filename)[0]
+
             for name, filename in names.items():
                 if name in working_copy.files:
                     working_copy.files[name] = objects.WorkingFile("modified", filename)
                 else:
                     working_copy.files[name] = objects.WorkingFile("added", filename)
+            for name, filename in dirs.items():
+                if name not in working_copy.files:
+                    working_copy.files[name] = objects.WorkingFile("added", filename)
+
             txn.set_working_copy(working_copy)
 
     def ignore(self, files):
