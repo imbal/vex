@@ -142,6 +142,7 @@ class Codec:
     def dump(self, obj, transform=None):
         buf = io.StringIO('')
         self.dump_rson(obj, buf, transform)
+        buf.write('\n')
         return buf.getvalue()
 
     def parse_rson(self, buf, pos, transform=None):
