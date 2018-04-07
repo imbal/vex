@@ -654,11 +654,17 @@ class ProjectChange:
         self.new_manifests = set()
         self.new_files = set()
 
-    def working_copy_changes(self, files=None):
+    def working_copy_changelog(self, files=None):
         working = self.refresh_working_copy()
         out = {}
+        if not files:
+            files_to_check = working.files.keys()
+        else:
+            # add prefixes to list
+            files_to_check = files
 
-        for repo_name, entry in working.files.items():
+        for repo_name in files_to_check:
+            entry = working.files[repo_name]
             filename = entry.path
             if os.path.isfile(filename):
 
@@ -782,17 +788,16 @@ class Project:
     def __init__(self, config_dir, working_dir):    
         self.working_dir = working_dir
         self.dir = config_dir
-        blobs = os.path.join(config_dir, 'blobs')
-        self.changes = BlobStore(os.path.join(blobs, 'changes'))
-        self.manifests = BlobStore(os.path.join(blobs, 'manifests'))
-        self.files = BlobStore(os.path.join(blobs, 'files'))
-        self.branches = DirStore(os.path.join(config_dir, 'branches'))
-        self.names = DirStore(os.path.join(config_dir, 'branches', 'names'))
-        self.sessions = DirStore(os.path.join(config_dir, 'sessions'))
-        self.state = DirStore(os.path.join(config_dir, 'state'))
-        self.lockfile = os.path.join(config_dir, 'lock')
-        self.actions = ActionLog(os.path.join(config_dir, 'history'))
-        self.scratch = BlobStore(os.path.join(config_dir, 'scratch'))
+        self.changes =   BlobStore(os.path.join(config_dir, 'project', 'changes'))
+        self.manifests = BlobStore(os.path.join(config_dir, 'project', 'manifests'))
+        self.files =     BlobStore(os.path.join(config_dir, 'project', 'files'))
+        self.branches =   DirStore(os.path.join(config_dir, 'project', 'branches'))
+        self.names =      DirStore(os.path.join(config_dir, 'project', 'branches', 'names'))
+        self.state =      DirStore(os.path.join(config_dir, 'state'))
+        self.sessions =   DirStore(os.path.join(config_dir, 'state', 'sessions'))
+        self.actions =   ActionLog(os.path.join(config_dir, 'state', 'history'))
+        self.scratch =   BlobStore(os.path.join(config_dir, 'scratch'))
+        self.lockfile =            os.path.join(config_dir, 'lock')
 
     def makedirs(self):
         os.makedirs(self.dir, exist_ok=True)
@@ -820,6 +825,8 @@ class Project:
     def to_repo_path(self, working_copy, file):
         # normalize name to NFC?
         filename = os.path.relpath(file, self.working_dir)
+        if filename == '.':
+            return working_copy.prefix
         return os.path.join(working_copy.prefix, filename)
 
     __locked = object()
@@ -992,7 +999,7 @@ class Project:
             old = txn.get_change(commit)
             n = old.next_n('prepare')
 
-            changes = txn.working_copy_changes(files)
+            changes = txn.working_copy_changelog(files)
             for file, change in changes.items():
                 filename = self.to_file_path(working, file)
                 if os.path.isfile(filename) and isinstance(change, (objects.AddFile, objects.ChangeFile, objects.AddDir, objects.ChangeDir)):
@@ -1021,7 +1028,7 @@ class Project:
             while old.n == n:
                 old = txn.get_change(old.prev)
 
-            changes = txn.working_copy_changes(files)
+            changes = txn.working_copy_changelog(files)
             changelog = objects.Changelog(prev=None, summary="Summary", message="Message", changes=changes)
             root = None
             # build root
