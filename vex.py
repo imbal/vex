@@ -778,7 +778,7 @@ class ProjectChange:
             sessions = dict(old=self.old_sessions, new=self.new_sessions)
             state = dict(old=self.old_state, new=self.new_state)
 
-            blobs = dict(changes=self.new_changes, manifests=self.new_manifests, files=self.new_files, prepared={})
+            blobs = dict(changes=self.new_changes, manifests=self.new_manifests, files=self.new_files)
             changes = dict(branches=branches,names=names, sessions=sessions, state=state)
             return objects.Action(self.now, self.command, changes, blobs)
         else:
@@ -834,8 +834,11 @@ class Project:
     @contextmanager
     def lock(self, command):
         try:
-            with open(self.lockfile, 'wb') as fh:
-                fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fh = open(self.lockfile, 'wb')
+            fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except (IOError, FileNotFoundError):
+            raise VexError('Cannot open project lockfile: {}'.format(self.lockfile))
+        try:
                 fh.truncate(0)
                 fh.write(b'# locked by %d at %a\n'%(os.getpid(), str(NOW())))
                 fh.write(codec.dump(command))
@@ -843,8 +846,8 @@ class Project:
                 fh.flush()
                 yield self
                 fh.write(b'# released by %d %a\n'%(os.getpid(), str(NOW())))
-        except (IOError, FileNotFoundError):
-            raise VexError('Cannot open project lockfile: {}'.format(self.lockfile))
+        finally:
+                fh.close()
 
     def clean_state(self):
         return self.actions.clean_state()
@@ -913,8 +916,6 @@ class Project:
             elif key =='files':
                 for addr in blobs['files']:
                     self.files.move_from(self.scratch, addr)
-            elif key == 'prepared':
-                pass
             else:
                 raise VexBug('Project change has unknown values')
 
