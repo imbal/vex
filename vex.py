@@ -202,7 +202,7 @@ class objects:
     class AddFile:
         def __init__(self, addr, properties): 
             self.addr = addr
-            self.properties = ()
+            self.properties = properties
 
     @codec.register
     class DeleteFile:
@@ -218,7 +218,7 @@ class objects:
     @codec.register
     class AddDir:
         def __init__(self, properties): 
-            self.properties = ()
+            self.properties = properties
 
     @codec.register
     class DeleteDir:
@@ -232,6 +232,12 @@ class objects:
             self.addr = addr
 
     # Manfest Objects: Directories and entries
+    @codec.register
+    class Root:
+        def __init__(self, entries, properties):
+            self.entries = entries
+            self.properties = properties
+
     @codec.register
     class Tree:
         def __init__(self, entries):
@@ -373,6 +379,9 @@ class BlobStore:
         with open(file,'rb') as fh:
             hash.update(fh.read())
         return "shake-256-20-{}".format(hash.hexdigest(20))
+
+    def inside(self, file):
+        return os.path.commonpath(file, self.dir) == self.dir
 
     def addr_for_buf(self, buf):
         hash = hashlib.shake_256()
@@ -657,6 +666,13 @@ class ProjectChange:
         self.new_manifests = set()
         self.new_files = set()
 
+
+    def to_file_path(self, working, file):
+        return self.project.to_file_path(working, file)
+
+    def to_repo_path(self, working, file):
+        return self.project.to_repo_path(working, file)
+    
     def working_copy_changelog(self, files=None):
         working = self.refresh_working_copy()
         out = {}
@@ -713,6 +729,110 @@ class ProjectChange:
         self.set_working_copy(working)
         return working
         
+    def prepare_changes(self, working, changes):
+        for file, change in changes.items():
+            filename = self.to_file_path(working, file)
+            if os.path.isfile(filename) and isinstance(change, (objects.AddFile, objects.ChangeFile, objects.AddDir, objects.ChangeDir)):
+                addr = self.put_file(filename)
+                if addr != change.addr:
+                    raise VexCorrupt('Sync')
+    def rebuild_root(self, working, old, changes):
+        dir_changes = {}
+        for path, entry in sorted((p.split('/'),e) for p,e in changes.items()):
+            prefix, name = "/".join(path[:-1]), path[-1]
+            prefix = prefix or "/"
+            name = name or "."
+            if prefix not in dir_changes:
+                dir_changes[prefix]  = {}
+            dir_changes[prefix][name] = entry
+
+            
+        def apply_changes(prefix, addr, root=False):
+            entries = {}
+            changes = dir_changes.get(prefix, None)
+            changed = bool(changes)
+            properties = {}
+            if addr:
+                old = self.get_manifest(addr)
+                if root:
+                    properties = old.properties
+                for name, entry in old.entries.items():
+                    path = os.path.join(prefix, name)
+                    if changes and name in changes:
+                        change = changes.pop(name)
+                        if isinstance(change, objects.DeleteFile):
+                            if not isinstance(entry, objects.File):
+                                raise VexBug('nope')
+                        elif isinstance(change, objects.DeleteDir):
+                            if not isinstance(entry, objects.Dir):
+                                raise VexBug('nope')
+                                tree_addr = apply_changes(os.path.join(prefix, name), entry.addr)
+                                if not tree_addr is None:
+                                    raise VexBug('non empty dir')
+                        elif isinstance(change, objects.ChangeFile):
+                            if not isinstance(entry, objects.File):
+                                raise VexBug(entry)
+                            if entry.addr != change.addr:
+                                new_addr = self.put_file(self.to_file_path(working, path))
+                                entries[name] = objects.File(new_addr, change.properties)
+                            else:
+                                entries[name] = objects.File(entry.addr, change.properties)
+                        elif isinstance(change, objects.ChangeDir):
+                            if not isinstance(entry, objects.Dir):
+                                raise VexBug('nope')
+                            new_addr = apply_changes(path, entry.addr)
+                            entries[name] = objects.Dir(new_addr, change.properties)
+                        elif isinstance(change, objects.AddDir):
+                            tree_addr = apply_changes(os.path.join(prefix, name), None)
+                            entries[name] = objects.Dir(tree_addr, change.properties)
+                        elif isinstance(change, objects.AddFile):
+                            file_addr = self.put_file(self.to_file_path(working, path))
+                            entries[name] = objects.File(file_addr, change.properties)
+                        else:
+                            raise VexBug('nope')
+
+                    elif isinstance(entry, objects.Dir):
+                        path = os.path.join(prefix, name)
+                        new_addr = apply_changes(path, entry.addr)
+                        if new_addr != entry.addr:
+                            changed = True
+                            entries[name] = objects.Dir(new_addr, entry.properties)
+                        else:
+                            entries[name] = entry
+                    elif isinstance(entry, objects.File):
+                        entries[name] = entry
+                    else:
+                        raise VexBug('nope')
+
+            if changes:
+                for name, change in changes.items():
+                    if name == ".":
+                        if isinstance(change, objects.ChangeDir):
+                            properties = change.properties
+                        else:
+                            raise VexBug('bad commit')
+
+                    elif isinstance(change, objects.AddDir):
+                        tree_addr = apply_changes(os.path.join(prefix, name), None)
+                        entries[name] = objects.Dir(tree_addr, change.properties)
+                    elif isinstance(change, objects.AddFile):
+                        file_addr = self.put_file(self.to_file_path(working, os.path.join(prefix,name)))
+                        entries[name] = objects.File(file_addr, change.properties)
+                    else:
+                        raise VexBug('nope')
+
+            if not entries:
+                return None
+            elif changed:
+                if root:
+                    return self.put_manifest(objects.Root(entries, properties))
+                else: 
+                    return self.put_manifest(objects.Tree(entries))
+            else:
+                return addr
+
+        return apply_changes('/', old, root=True)
+
     def get_file(self, addr):
         if addr in self.new_files:
             return self.scratch.get_file(addr)
@@ -806,6 +926,7 @@ class Project:
         self.actions =   ActionLog(os.path.join(config_dir, 'state', 'history'))
         self.scratch =   BlobStore(os.path.join(config_dir, 'scratch'))
         self.lockfile =            os.path.join(config_dir, 'lock')
+        self.settings =  BlobStore(os.path.join(config_dir, 'settings'))
 
     def makedirs(self):
         os.makedirs(self.dir, exist_ok=True)
@@ -818,6 +939,7 @@ class Project:
         self.state.makedirs()
         self.actions.makedirs()
         self.scratch.makedirs()
+        self.settings.makedirs()
 
     def makelock(self):
         with open(self.lockfile, 'xb') as fh:
@@ -827,10 +949,17 @@ class Project:
         return os.path.exists(self.dir)
 
     def to_file_path(self, working_copy, file):
+        if os.path.commonpath((file, "/.vex")) == '/.vex':
+            return os.path.join(self.settings.dir, os.path.relpath(file, "/.vex"))
         # normalize name to NFC?
         return os.path.join(self.working_dir, os.path.relpath(file, working_copy.prefix))
 
     def to_repo_path(self, working_copy, file):
+        if os.path.commonpath((self.settings.dir, file)) == self.settings.dir:
+            filename = os.path.relpath(file, self.settings.dir)
+            return ("/.vex" if filename == "." else os.path.join("/.vex", filename))
+        if file.startswith(self.dir):
+            raise VexBug('nope. not .vex')
         # normalize name to NFC?
         filename = os.path.relpath(file, self.working_dir)
         if filename == '.':
@@ -976,19 +1105,19 @@ class Project:
     def init(self, prefix, options):
         self.makedirs()
         if not self.history_isempty():
-            return None
+            raise VexNoHistory('cant reinit')
         with self.do('init') as txn:
             branch_uuid = UUID()
 
-            project = objects.Tree({})
-            project_uuid = txn.put_manifest(project)
+            project_uuid = None
             root_path = '/'
-            root = objects.Tree({os.path.relpath(prefix, root_path): objects.Dir(project_uuid, {})})
+            root = objects.Root({os.path.relpath(prefix, root_path): objects.Dir(project_uuid, {})}, {})
             root_uuid = txn.put_manifest(root)
 
             changes = {
                     '/' : objects.AddDir({}),
                     prefix : objects.AddDir({}),
+                    '/.vex' : objects.AddDir({}),
             }
             changelog = objects.Changelog(prev=None, summary="init", message="", changes=changes)
             changelog_uuid = txn.put_manifest(changelog)
@@ -1025,12 +1154,8 @@ class Project:
                 old = txn.get_change(old.prev)
 
             changes = txn.working_copy_changelog(files)
-            for file, change in changes.items():
-                filename = self.to_file_path(working, file)
-                if os.path.isfile(filename) and isinstance(change, (objects.AddFile, objects.ChangeFile, objects.AddDir, objects.ChangeDir)):
-                    addr = txn.put_file(filename)
-                    if addr != change.addr:
-                        raise VexCorrupt('Sync')
+
+            txn.prepare_changes(working, changes)
 
             if commit == old_uuid:
                 commit = None
@@ -1061,84 +1186,12 @@ class Project:
 
             changes.update(txn.working_copy_changelog(files))
 
-            dir_changes = {}
-            for path, entry in sorted((p.split('/'),e) for p,e in changes.items()):
-                prefix, name = "/".join(path[:-1]), path[-1]
-                if prefix not in dir_changes:
-                    dir_changes[prefix]  = {}
-                dir_changes[prefix][name] = entry
+            if not changes:
+                return False
 
-                
-            def apply_changes(prefix, addr):
-                entries = {}
-                changes = dir_changes.get(prefix, None)
-                changed = bool(changes)
-                if addr:
-                    old = txn.get_manifest(addr)
-                    for name, entry in old.entries.items():
-                        path = os.path.join(prefix, name)
-                        if changes and name in changes:
-                            change = changes.pop(name)
-                            if isinstance(change, DeleteFile):
-                                if not isinstance(entry, objects.File):
-                                    raise VexBug('nope')
-                            elif isinstance(change, DeleteDir):
-                                if not isinstance(entry, objects.Dir):
-                                    raise VexBug('nope')
-                            elif isinstance(entry, ChangeFile):
-                                if not isinstance(entry, objects.File):
-                                    raise VexBug('nope')
-                                if entry.addr != change.addr:
-                                    new_addr = txn.put_file(self.to_file_path(path))
-                                    entries[name] = objects.File(new_addr, change.properties)
-                                else:
-                                    entries[name] = objects.File(entry.change, change.properties)
-                            elif isinstance(entry, ChangeDir):
-                                if not isinstance(entry, objects.Dir):
-                                    raise VexBug('nope')
-                                new_addr = apply_changes(path, entry.addr)
-                                entries[name] = objects.Dir(new_addr, change.properties)
-                            elif isinstance(change, objects.AddDir):
-                                tree_addr = apply_changes(os.path.join(prefix, name), None)
-                                entries[name] = objects.Dir(tree_addr, change.properties)
-                            elif isinstance(change, objects.AddFile):
-                                file_addr = txn.put_file(self.to_file_path(path))
-                                entries[name] = objects.File(file_addr, change.properties)
-                            else:
-                                raise VexBug('nope')
+            root_uuid = txn.rebuild_root(working, old.root, changes)
 
-                        elif isinstance(entry, objects.Dir):
-                            path = os.path.join(prefix, name)
-                            new_addr = apply_changes(path, entry.addr)
-                            if new_addr != entry.addr:
-                                changed = True
-                                entries[name] = objects.Dir(new_addr, entry.properties)
-                            else:
-                                entries[name] = entry
-                        elif isinstance(entry, objects.File):
-                            entries[name] = entry
-                        else:
-                            raise VexBug('nope')
-
-                if changes:
-                    for name, change in changes.items():
-                        if isinstance(change, objects.AddDir):
-                            tree_addr = apply_changes(os.path.join(prefix, name), None)
-                            entries[name] = objects.Dir(tree_addr, change.properties)
-                        elif isinstance(change, objects.AddFile):
-                            file_addr = txn.put_file(self.to_file_path(working, os.path.join(prefix,name)))
-                            entries[name] = objects.File(file_addr, change.properties)
-                        else:
-                            raise VexBug('nope')
-
-                if changed:
-                    return txn.put_manifest(objects.Tree(entries))
-                else:
-                    return addr
-
-            root_uuid = apply_changes('/', old.root)
-
-            changelog = objects.Changelog(prev=None, summary="Summary", message="Message", changes=changes)
+            changelog = objects.Changelog(prev=old.changelog, summary="Summary", message="Message", changes=changes)
             changelog_uuid = txn.put_manifest(changelog)
 
 
@@ -1153,6 +1206,7 @@ class Project:
             session.commit = commit_uuid
             txn.put_session(session)
             txn.commit_working_copy(commit_uuid, changes)
+            return True
 
     def add(self, files):
         with self.do('add') as txn:
@@ -1175,22 +1229,21 @@ class Project:
 
             for name, filename in names.items():
                 if name in working_copy.files:
-                    working_copy.files[name] = objects.WorkingFile("modified", filename)
+                    working_copy.files[name] = objects.WorkingFile("modified", filename, properties={})
                 else:
-                    working_copy.files[name] = objects.WorkingFile("added", filename)
+                    working_copy.files[name] = objects.WorkingFile("added", filename, properties={})
             for name, filename in dirs.items():
                 if name not in working_copy.files:
-                    working_copy.files[name] = objects.WorkingFile("added", filename)
+                    working_copy.files[name] = objects.WorkingFile("added", filename, properties={})
 
             txn.set_working_copy(working_copy)
 
-    def ignore(self, files):
-        # set prepare
+    def forget(self, files):
         pass
 
-    def remove(self, files):
-        # set prepare
+    def ignore(self, files):
         pass
+
 
 def get_project(check=True, empty=True):
     working_dir = os.getcwd()
@@ -1293,7 +1346,10 @@ def Commit(file):
     with p.lock('commit') as p:
         cwd = os.getcwd()
         files = [os.path.join(cwd, f) for f in file] if file else None
-        p.commit(files)
+        if p.commit(files):
+            yield 'Committed'
+        else:
+            yield 'Nothing to commit'
 
         # check that session() and branch()
 
@@ -1327,10 +1383,14 @@ def Status():
     cwd = os.getcwd()
     with p.lock('status') as p:
         files = p.status()
-        for reponame in sorted(files):
+        for reponame in sorted(files, key=lambda p:p.split(':')):
             entry = files[reponame]
-            path = os.path.relpath(entry.path, cwd)
-            yield "{:8}\t{}".format(entry.state, path)
+            if reponame.startswith('/.vex/') or reponame == '/.vex':
+                path = os.path.relpath(reponame, '/.vex')
+                yield "{}:{:8}\t{}".format('setting', entry.state, path)
+            else:
+                path = os.path.relpath(entry.path, cwd)
+                yield "{:16}\t{} as {}".format(entry.state, path, reponame)
 
 vex_undo = vex_cmd.subcommand('undo')
 @vex_undo.run()
