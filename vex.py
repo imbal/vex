@@ -309,7 +309,7 @@ class objects:
             self.state = state
 
     @codec.register
-    class WorkingFile:
+    class Tracked:
         States = set(('dir', 'added', 'modified', 'deleted', 'stashed', 'ignored', 'file','invisible'))
         Unchanged = set(('ignored', 'dir', 'file', 'invisible'))
         Changed = set(('added', 'modified', 'deleted', 'stashed'))
@@ -679,17 +679,17 @@ class ProjectChange:
         for file, change in changes.items():
             filename = self.project.to_file_path(working, file)
             if isinstance(change, objects.AddFile):
-                working.files[file] = objects.WorkingFile("file",  filename, addr=change.addr, properties=change.properties)
+                working.files[file] = objects.Tracked("file",  filename, addr=change.addr, properties=change.properties)
             elif isinstance(change, objects.DeleteFile):
                 working.files.pop(file)
             elif isinstance(change, objects.ChangeFile):
-                working.files[file] = objects.WorkingFile("file",  filename, addr=change.addr, properties=change.properties)
+                working.files[file] = objects.Tracked("file",  filename, addr=change.addr, properties=change.properties)
             elif isinstance(change, objects.AddDir):
-                working.files[file] = objects.WorkingFile("dir",  filename, properties=change.properties)
+                working.files[file] = objects.Tracked("dir",  filename, properties=change.properties)
             elif isinstance(change, objects.DeleteFile):
                 working.files.pop(file)
             elif isinstance(change, objects.ChangeDir):
-                working.files[file] = objects.WorkingFile("dir",  filename, properties=change.properties)
+                working.files[file] = objects.Tracked("dir",  filename, properties=change.properties)
         self.put_session(working)
 
     def active_changes(self, files=None):
@@ -1157,7 +1157,7 @@ class Project:
             txn.set_name(branch_name, branch) 
 
             session_uuid = UUID()
-            files = {prefix : objects.WorkingFile('dir', self.working_dir)}
+            files = {prefix : objects.Tracked('dir', self.working_dir)}
             session = objects.Session(session_uuid, prefix, branch_uuid, commit_uuid, commit_uuid, files)
             txn.put_session(session)
         self.state.set("active", session_uuid)
@@ -1247,12 +1247,12 @@ class Project:
 
             for name, filename in names.items():
                 if name in session.files:
-                    new_files[name] = objects.WorkingFile("modified", filename, properties={})
+                    new_files[name] = objects.Tracked("modified", filename, properties={})
                 else:
-                    new_files[name] = objects.WorkingFile("added", filename, properties={})
+                    new_files[name] = objects.Tracked("added", filename, properties={})
             for name, filename in dirs.items():
                 if name not in session.files:
-                    new_files[name] = objects.WorkingFile("added", filename, properties={})
+                    new_files[name] = objects.Tracked("added", filename, properties={})
 
             txn.update_active_files(new_files)
 
@@ -1271,13 +1271,12 @@ class Project:
 
             for name, filename in names.items():
                 if name in session.files:
-                    new_files[name] = objects.WorkingFile("deleted", filename, properties={})
+                    new_files[name] = objects.Tracked("deleted", filename, properties={})
             for name, filename in dirs.items():
                 if name in session.files:
-                    new_files[name] = objects.WorkingFile("deleted", filename, properties={})
+                    new_files[name] = objects.Tracked("deleted", filename, properties={})
 
             txn.update_active_files(new_files)
-        pass
 
     def ignore(self, files):
         pass
