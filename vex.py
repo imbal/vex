@@ -362,7 +362,11 @@ class BlobStore:
     def addr_for_file(self, file):
         hash = hashlib.shake_256()
         with open(file,'rb') as fh:
-            hash.update(fh.read())
+            buf = fh.read(4096)
+            while buf:
+                hash.update(buf)
+                buf = fh.read(4096)
+
         return "shake-256-20-{}".format(hash.hexdigest(20))
 
     def inside(self, file):
@@ -670,6 +674,24 @@ class ProjectChange:
         session.commit = commit_uuid
         self.put_session(session)
 
+    def update_active_changes(self, changes):
+        working = self.active()
+        for file, change in changes.items():
+            filename = self.project.to_file_path(working, file)
+            if isinstance(change, objects.AddFile):
+                working.files[file] = objects.WorkingFile("file",  filename, addr=change.addr, properties=change.properties)
+            elif isinstance(change, objects.DeleteFile):
+                working.files.pop(file)
+            elif isinstance(change, objects.ChangeFile):
+                working.files[file] = objects.WorkingFile("file",  filename, addr=change.addr, properties=change.properties)
+            elif isinstance(change, objects.AddDir):
+                working.files[file] = objects.WorkingFile("dir",  filename, properties=change.properties)
+            elif isinstance(change, objects.DeleteFile):
+                working.files.pop(file)
+            elif isinstance(change, objects.ChangeDir):
+                working.files[file] = objects.WorkingFile("dir",  filename, properties=change.properties)
+        self.put_session(working)
+
     def active_changes(self, files=None):
         active = self.active()
         out = {}
@@ -706,27 +728,13 @@ class ProjectChange:
             # if dir, if link?
         return out
 
-    def commit_working_copy(self, commit, changes):
-        working = self.working_copy()
+    def ac(self, changes):
+        working = self.active()
         working.commit = commit
-        for file, change in changes.items():
-            filename = self.project.to_file_path(working, file)
-            if isinstance(change, objects.AddFile):
-                working.files[file] = objects.WorkingFile("file",  filename, addr=change.addr, properties=change.properties)
-            elif isinstance(change, objects.DeleteFile):
-                working.files.pop(file)
-            elif isinstance(change, objects.ChangeFile):
-                working.files[file] = objects.WorkingFile("file",  filename, addr=change.addr, properties=change.properties)
-            elif isinstance(change, objects.AddDir):
-                working.files[file] = objects.WorkingFile("dir",  filename, properties=change.properties)
-            elif isinstance(change, objects.DeleteFile):
-                working.files.pop(file)
-            elif isinstance(change, objects.ChangeDir):
-                working.files[file] = objects.WorkingFile("dir",  filename, properties=change.properties)
-        self.set_working_copy(working)
+        self.set_session(working)
         return working
         
-    def store_changes(self, changes):
+    def store_changed_files(self, changes):
         active = self.active()
         for file, change in changes.items():
             filename = self.to_file_path(active, file)
@@ -1152,7 +1160,7 @@ class Project:
             files = {prefix : objects.WorkingFile('dir', self.working_dir)}
             session = objects.Session(session_uuid, prefix, branch_uuid, commit_uuid, commit_uuid, files)
             txn.put_session(session)
-            txn.set_state("active", session_uuid)
+        self.state.set("active", session_uuid)
         
 
     def prepare(self, files):
@@ -1173,7 +1181,8 @@ class Project:
             if commit == old_uuid:
                 commit = None
 
-            txn.store_changes(changes)
+            txn.store_changed_files(changes)
+            txn.update_active_changes(changes)
 
             prepare = objects.Prepare(n, txn.now, prev=old_uuid, prepared=commit, changes=changes)
             prepare_uuid = txn.put_change(prepare)
@@ -1200,6 +1209,10 @@ class Project:
                 return False
 
             root_uuid = txn.active_root(old.root, changes)
+            txn.update_active_changes(changes)
+            
+            if root_uuid == old.root:
+                return False
 
             changelog = objects.Changelog(prev=old.changelog, summary="Summary", message="Message", changes=changes)
             changelog_uuid = txn.put_manifest(changelog)
@@ -1222,8 +1235,6 @@ class Project:
                 if not filename.startswith(self.working_dir):
                     raise VexError("{} is outside project".format(filename))
                 name = self.to_repo_path(session, filename)
-                # add any parents missing
-                # recurse into directories
                 names[name] = filename
                 name = os.path.split(name)[0]
                 filename = os.path.split(filename)[0]
@@ -1246,6 +1257,26 @@ class Project:
             txn.update_active_files(new_files)
 
     def forget(self, files):
+        with self.do('forget') as txn:
+            session = txn.refresh_active()
+            names = {}
+            dirs = {}
+            for filename in files:
+                if not filename.startswith(self.working_dir):
+                    raise VexError("{} is outside project".format(filename))
+                name = self.to_repo_path(session, filename)
+                names[name] = filename
+
+            new_files = {}
+
+            for name, filename in names.items():
+                if name in session.files:
+                    new_files[name] = objects.WorkingFile("deleted", filename, properties={})
+            for name, filename in dirs.items():
+                if name in session.files:
+                    new_files[name] = objects.WorkingFile("deleted", filename, properties={})
+
+            txn.update_active_files(new_files)
         pass
 
     def ignore(self, files):
@@ -1333,6 +1364,19 @@ def Add(file):
         p = get_project()
         with p.lock('add') as p:
             p.add(files)
+
+vex_forget = vex_cmd.subcommand('forget','remove files from the project, without deleting file')
+@vex_forget.run('file...')
+def Forget(file):
+    if file:
+        cwd = os.getcwd()
+        files = [os.path.join(cwd, f) for f in file]
+        missing = [f for f in file if not os.path.exists(f)]
+        if missing:
+            raise VexArgument('cannot find {}'.format(",".join(missing)))
+        p = get_project()
+        with p.lock('forget') as p:
+            p.forget(files)
 
 
 vex_prepare = vex_cmd.subcommand('prepare')
