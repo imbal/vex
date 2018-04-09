@@ -31,6 +31,8 @@ class VexNoProject(VexError): pass
 class VexNoHistory(VexError): pass
 class VexUnclean(VexError): pass
 
+class VexUnfinished(VexError): pass
+
 class Codec:
     classes = {}
     def __init__(self):
@@ -54,6 +56,14 @@ class Codec:
 codec = Codec()
 
 class objects:
+    @codec.register
+    class Branch:
+        def __init__(self, uuid, head, base, upstream):
+            self.uuid = uuid
+            self.head = head
+            self.base = base
+            self.upstream = upstream
+
     # Entries in commits
     @codec.register
     class Start:
@@ -244,12 +254,10 @@ class objects:
             self.entries = entries
 
     # Entries in a Tree Object
+    # properties used to indicate 'large file' , 'large dir' options, ...
+    # large dir is 'take this tree but treat it as a tree of prefixes...'
+    # large file is 'addr points to bloblist' ...
 
-    @codec.register
-    class SubTree:
-        def __init__(self, addr):
-            self.addr = addr
-            
     @codec.register
     class Dir:
         def __init__(self, addr,  properties):
@@ -261,34 +269,8 @@ class objects:
         def __init__(self, addr, properties):
             self.addr = addr
             self.properties = properties
-
-    @codec.register
-    class Blob:
-        def __init__(self, addrs, properties):
-            self.addrs = addrs
-            self.properties = properties
-
     
-    # Repository State
-
-    @codec.register
-    class Session:
-        def __init__(self,uuid, prefix, branch, prepare, commit, mode=None, state=None):
-            self.uuid = uuid
-            self.prefix = prefix
-            self.branch = branch
-            self.prepare = prepare
-            self.commit = commit
-            self.mode = mode
-            self.state = state
-
-    @codec.register
-    class Branch:
-        def __init__(self, uuid, head, base, upstream):
-            self.uuid = uuid
-            self.head = head
-            self.base = base
-            self.upstream = upstream
+    # End of Repository State
 
     # History state
 
@@ -315,19 +297,22 @@ class objects:
     # Working copy state
 
     @codec.register
-    class WorkingDir:
-        def __init__(self, commit, session, branch, prefix, files):
-            self.commit = commit
-            self.session = session
-            self.branch = branch
+    class Session:
+        def __init__(self,uuid, prefix, branch, prepare, commit, files,  mode=None, state=None):
+            self.uuid = uuid
             self.prefix = prefix
+            self.branch = branch
+            self.prepare = prepare
+            self.commit = commit
             self.files = files
+            self.mode = mode
+            self.state = state
 
     @codec.register
     class WorkingFile:
-        States = set(('dir', 'added', 'modified', 'deleted', 'ignored', 'file','invisible'))
+        States = set(('dir', 'added', 'modified', 'deleted', 'stashed', 'ignored', 'file','invisible'))
         Unchanged = set(('ignored', 'dir', 'file', 'invisible'))
-        Changed = set(('added', 'modified', 'deleted'))
+        Changed = set(('added', 'modified', 'deleted', 'stashed'))
 
         def __init__(self, state, path, addr=None, stat=None, properties=None):
             if state not in self.States: raise VexBug('bad')
@@ -570,13 +555,14 @@ class ActionLog:
         return out
 
         
-class StateChange:
-    def __init__(self, project, command):
+class SessionChange:
+    def __init__(self, project, command, active):
         self.project = project
         self.command = command
         self.now = NOW()
-        self.old_state = {}
-        self.new_state = {}
+        self.old_sessions = {}
+        self.new_sessions = {}
+        self.active_uuid = active
 
     def get_change(self, uuid):
         return self.project.changes.get_obj(uuid)
@@ -585,40 +571,30 @@ class StateChange:
         return self.project.changes.get_obj(uuid)
 
     def get_session(self, uuid):
-        return self.project.changes.get_obj(uuid)
+        if uuid in self.new_sessions:
+            return self.new_sessions[uuid]
+        return self.project.sessions.get(uuid)
 
-    def set_working_copy(self, value):
-        name = "working"
-        if name not in self.old_state:
-            if self.project.state.exists(name):
-                old = self.project.state.get(name)
+    def put_session(self, session):
+        if session.uuid not in self.old_sessions:
+            if self.project.sessions.exists(session.uuid):
+                self.old_sessions[session.uuid] = self.project.sessions.get(session.uuid)
             else:
-                old = None
-        else:
-            old = self.old_state[name]
+                self.old_sessions[session.uuid] = None
+        self.new_sessions[session.uuid] = session
 
-        if value!= old:
-
-            self.new_state[name] = value
-            self.old_state[name] = old
-
-    def working_copy(self):
-        if "working" in self.new_state:
-            return self.new_state["working"]
-        return self.project.working_copy()
-
-    def current_session(self):
-        return self.project.sessions.get(self.working_copy().session)
+    def active(self):
+        return self.get_session(self.active_uuid)
 
     def action(self):
-        if self.new_state:
-            changes = dict(state=dict(old=self.old_state, new=self.new_state))
+        if self.new_sessions:
+            changes = dict(sessions=dict(old=self.old_sessions, new=self.new_sessions))
             return objects.Action(self.now, self.command, changes, ())
         else:
             return objects.Action(self.now, self.command, {}, ())
 
-    def refresh_working_copy(self):
-        copy = self.working_copy()
+    def refresh_active(self):
+        copy = self.active()
         for name, entry in copy.files.items():
             if entry.state == "file":
                 if not os.path.exists(entry.path):
@@ -640,14 +616,11 @@ class StateChange:
                     entry.addr = None 
 
 
-        self.set_working_copy(copy)
+        self.put_session(copy)
         return copy
 
 class ProjectChange:
-    working_copy = StateChange.working_copy
-    set_working_copy = StateChange.set_working_copy
-    current_session = StateChange.current_session
-    refresh_working_copy = StateChange.refresh_working_copy
+    refresh_active = SessionChange.refresh_active
 
     def __init__(self, project, scratch, command):
         self.project = project
@@ -672,12 +645,36 @@ class ProjectChange:
 
     def to_repo_path(self, working, file):
         return self.project.to_repo_path(working, file)
+
+    def active(self):
+        session_uuid = self.get_state("active")
+        return self.get_session(session_uuid)
+
+    def update_active_files(self, files):
+        active = self.active()
+        active.files.update(files)
+        self.put_session(active)
+
+    def set_active_prepare(self, prepare_uuid):
+        active = self.active()
+        active.prepare = prepare_uuid
+        self.put_session(active)
     
-    def working_copy_changelog(self, files=None):
-        working = self.refresh_working_copy()
+    def set_active_commit(self, commit_uuid):
+        session = self.active()
+        branch = self.get_branch(session.branch)
+        if branch.head == session.commit: # descendent check
+            branch.head = commit_uuid
+            self.put_branch(branch)
+        session.prepare = commit_uuid
+        session.commit = commit_uuid
+        self.put_session(session)
+
+    def active_changes(self, files=None):
+        active = self.active()
         out = {}
         if not files:
-            files_to_check = working.files.keys()
+            files_to_check = active.files.keys()
         else:
             # add prefixes to list
             files_to_check = set()
@@ -688,7 +685,7 @@ class ProjectChange:
                     old = os.path.split(old)[0]
 
         for repo_name in files_to_check:
-            entry = working.files[repo_name]
+            entry = active.files[repo_name]
             filename = entry.path
             if os.path.isfile(filename):
 
@@ -729,14 +726,17 @@ class ProjectChange:
         self.set_working_copy(working)
         return working
         
-    def prepare_changes(self, working, changes):
+    def store_changes(self, changes):
+        active = self.active()
         for file, change in changes.items():
-            filename = self.to_file_path(working, file)
+            filename = self.to_file_path(active, file)
             if os.path.isfile(filename) and isinstance(change, (objects.AddFile, objects.ChangeFile, objects.AddDir, objects.ChangeDir)):
                 addr = self.put_file(filename)
                 if addr != change.addr:
                     raise VexCorrupt('Sync')
-    def rebuild_root(self, working, old, changes):
+
+    def active_root(self, old, changes):
+        active = self.active()
         dir_changes = {}
         for path, entry in sorted((p.split('/'),e) for p,e in changes.items()):
             prefix, name = "/".join(path[:-1]), path[-1]
@@ -766,27 +766,27 @@ class ProjectChange:
                         elif isinstance(change, objects.DeleteDir):
                             if not isinstance(entry, objects.Dir):
                                 raise VexBug('nope')
-                                tree_addr = apply_changes(os.path.join(prefix, name), entry.addr)
-                                if not tree_addr is None:
-                                    raise VexBug('non empty dir')
+                            tree_addr = apply_changes(os.path.join(prefix, name), entry.addr)
+                            if not tree_addr is None:
+                                raise VexBug('non empty dir')
                         elif isinstance(change, objects.ChangeFile):
                             if not isinstance(entry, objects.File):
-                                raise VexBug(entry)
+                                raise VexUnfinished(entry)
                             if entry.addr != change.addr:
-                                new_addr = self.put_file(self.to_file_path(working, path))
+                                new_addr = self.put_file(self.to_file_path(active, path))
                                 entries[name] = objects.File(new_addr, change.properties)
                             else:
                                 entries[name] = objects.File(entry.addr, change.properties)
                         elif isinstance(change, objects.ChangeDir):
                             if not isinstance(entry, objects.Dir):
-                                raise VexBug('nope')
+                                raise VexUnfinished('nope')
                             new_addr = apply_changes(path, entry.addr)
                             entries[name] = objects.Dir(new_addr, change.properties)
                         elif isinstance(change, objects.AddDir):
                             tree_addr = apply_changes(os.path.join(prefix, name), None)
                             entries[name] = objects.Dir(tree_addr, change.properties)
                         elif isinstance(change, objects.AddFile):
-                            file_addr = self.put_file(self.to_file_path(working, path))
+                            file_addr = self.put_file(self.to_file_path(active, path))
                             entries[name] = objects.File(file_addr, change.properties)
                         else:
                             raise VexBug('nope')
@@ -816,7 +816,7 @@ class ProjectChange:
                         tree_addr = apply_changes(os.path.join(prefix, name), None)
                         entries[name] = objects.Dir(tree_addr, change.properties)
                     elif isinstance(change, objects.AddFile):
-                        file_addr = self.put_file(self.to_file_path(working, os.path.join(prefix,name)))
+                        file_addr = self.put_file(self.to_file_path(active, os.path.join(prefix,name)))
                         entries[name] = objects.File(file_addr, change.properties)
                     else:
                         raise VexBug('nope')
@@ -899,6 +899,20 @@ class ProjectChange:
                 self.old_names[name] = None
         self.new_names[name] = branch.uuid
 
+    def get_state(self, name):
+        if name in self.new_state:
+            return self.new_state[name]
+        return self.project.state.get(name)
+
+    def set_state(self, name, state):
+        if name not in self.old_state:
+            if self.project.state.exists(name):
+                self.old_state[name] = self.project.state.get(name)
+            else:
+                self.old_state[name] = None
+        self.new_state[name] = state
+
+
     def action(self):
         if self.new_branches or self.new_names or self.new_sessions or self.new_state or self.new_changes or self.new_manfiests or self.new_files:
             branches = dict(old=self.old_branches, new=self.new_branches)
@@ -916,7 +930,7 @@ class Project:
     def __init__(self, config_dir, working_dir):    
         self.working_dir = working_dir
         self.dir = config_dir
-        self.changes =   BlobStore(os.path.join(config_dir, 'project', 'changes'))
+        self.changes =   BlobStore(os.path.join(config_dir, 'project', 'commits'))
         self.manifests = BlobStore(os.path.join(config_dir, 'project', 'manifests'))
         self.files =     BlobStore(os.path.join(config_dir, 'project', 'files'))
         self.branches =   DirStore(os.path.join(config_dir, 'project', 'branches'))
@@ -948,13 +962,13 @@ class Project:
     def exists(self):
         return os.path.exists(self.dir)
 
-    def to_file_path(self, working_copy, file):
+    def to_file_path(self, session, file):
         if os.path.commonpath((file, "/.vex")) == '/.vex':
             return os.path.join(self.settings.dir, os.path.relpath(file, "/.vex"))
         # normalize name to NFC?
-        return os.path.join(self.working_dir, os.path.relpath(file, working_copy.prefix))
+        return os.path.join(self.working_dir, os.path.relpath(file, session.prefix))
 
-    def to_repo_path(self, working_copy, file):
+    def to_repo_path(self, session, file):
         if os.path.commonpath((self.settings.dir, file)) == self.settings.dir:
             filename = os.path.relpath(file, self.settings.dir)
             return ("/.vex" if filename == "." else os.path.join("/.vex", filename))
@@ -963,8 +977,8 @@ class Project:
         # normalize name to NFC?
         filename = os.path.relpath(file, self.working_dir)
         if filename == '.':
-            return working_copy.prefix
-        return os.path.join(working_copy.prefix, filename)
+            return session.prefix
+        return os.path.join(session.prefix, filename)
 
     __locked = object()
 
@@ -1004,11 +1018,12 @@ class Project:
 
     @contextmanager
     def do_nohistory(self, command):
-        txn = StateChange(self, command)
+        active = self.state.get("active")
+        txn = SessionChange(self, command, active)
         yield txn
         action = txn.action()
         if action.changes:
-            self.apply_changes('new', {'state': action.changes['state']})
+            self.apply_changes('new', {'sessions': action.changes['sessions']})
 
     @contextmanager
     def do(self, command):
@@ -1077,12 +1092,13 @@ class Project:
     def history(self):
         return self.actions.entries()
 
-    def working_copy(self):
-        return self.state.get("working")
+    def active(self):
+        if self.state.exists("active"):
+            return self.sessions.get(self.state.get("active"))
 
     def log(self):
         with self.do_nohistory('log') as txn:
-            session = txn.current_session()
+            session = txn.active()
 
         commit = session.prepare
         out = []
@@ -1100,12 +1116,14 @@ class Project:
 
     def status(self):
         with self.do_nohistory('status') as txn:
-            return txn.refresh_working_copy().files
+            return txn.refresh_active().files
 
     def init(self, prefix, options):
         self.makedirs()
         if not self.history_isempty():
             raise VexNoHistory('cant reinit')
+        if not prefix.startswith('/'):
+            raise VexArgument('crap prefix')
         with self.do('init') as txn:
             branch_uuid = UUID()
 
@@ -1131,20 +1149,17 @@ class Project:
             txn.set_name(branch_name, branch) 
 
             session_uuid = UUID()
-            session = objects.Session(session_uuid, prefix, branch_uuid, commit_uuid, commit_uuid)
-            txn.put_session(session)
             files = {prefix : objects.WorkingFile('dir', self.working_dir)}
-            txn.set_working_copy(objects.WorkingDir(commit_uuid, session_uuid, branch_uuid, os.path.join('/',prefix), files))
+            session = objects.Session(session_uuid, prefix, branch_uuid, commit_uuid, commit_uuid, files)
+            txn.put_session(session)
+            txn.set_state("active", session_uuid)
         
 
     def prepare(self, files):
         with self.do('prepare') as txn:
-            working = txn.refresh_working_copy()
-            files = [self.to_repo_path(working, filename) for filename in files] if files else None
-            session = txn.get_session(working.session)
+            session = txn.refresh_active()
+            files = [self.to_repo_path(session, filename) for filename in files] if files else None
             commit = session.prepare
-            if commit != working.commit:
-                raise VexCorruption('Conflict???')
 
             old_uuid = commit
             old = txn.get_change(commit)
@@ -1153,27 +1168,22 @@ class Project:
                 old_uuid = old.prev
                 old = txn.get_change(old.prev)
 
-            changes = txn.working_copy_changelog(files)
-
-            txn.prepare_changes(working, changes)
+            changes = txn.active_changes(files)
 
             if commit == old_uuid:
                 commit = None
 
+            txn.store_changes(changes)
+
             prepare = objects.Prepare(n, txn.now, prev=old_uuid, prepared=commit, changes=changes)
             prepare_uuid = txn.put_change(prepare)
 
-            session.prepare = prepare_uuid
-            txn.put_session(session)
-            txn.commit_working_copy(prepare_uuid, changes)
+            txn.set_active_prepare(prepare_uuid)
 
     def commit(self, files):
         with self.do('commit') as txn:
-            working = txn.refresh_working_copy()
-            files = [self.to_repo_path(working, filename) for filename in files] if files else None
-            session = txn.get_session(working.session)
-            if session.prepare != working.commit:
-                raise VexCorruption('Conflict???')
+            session = txn.refresh_active()
+            files = [self.to_repo_path(session, filename) for filename in files] if files else None
 
             changes = {}
             old_uuid = session.prepare
@@ -1184,12 +1194,12 @@ class Project:
                 old_uuid = old.prev
                 old = txn.get_change(old.prev)
 
-            changes.update(txn.working_copy_changelog(files))
+            changes.update(txn.active_changes(files))
 
             if not changes:
                 return False
 
-            root_uuid = txn.rebuild_root(working, old.root, changes)
+            root_uuid = txn.active_root(old.root, changes)
 
             changelog = objects.Changelog(prev=old.changelog, summary="Summary", message="Message", changes=changes)
             changelog_uuid = txn.put_manifest(changelog)
@@ -1198,25 +1208,20 @@ class Project:
             commit = objects.Commit(n, txn.now, prev=old_uuid, prepared=session.prepare, root=root_uuid, changelog=changelog_uuid)
             commit_uuid = txn.put_change(commit)
 
-            branch = txn.get_branch(session.branch)
-            if branch.head == session.commit: # descendent check
-                branch.head = commit_uuid
-                txn.put_branch(branch)
-            session.prepare = commit_uuid
-            session.commit = commit_uuid
-            txn.put_session(session)
-            txn.commit_working_copy(commit_uuid, changes)
+            txn.set_active_commit(commit_uuid)
+
+
             return True
 
     def add(self, files):
         with self.do('add') as txn:
-            working_copy = txn.refresh_working_copy()
+            session = txn.refresh_active()
             names = {}
             dirs = {}
             for filename in files:
                 if not filename.startswith(self.working_dir):
                     raise VexError("{} is outside project".format(filename))
-                name = self.to_repo_path(working_copy, filename)
+                name = self.to_repo_path(session, filename)
                 # add any parents missing
                 # recurse into directories
                 names[name] = filename
@@ -1227,16 +1232,18 @@ class Project:
                     name = os.path.split(name)[0]
                     filename = os.path.split(filename)[0]
 
-            for name, filename in names.items():
-                if name in working_copy.files:
-                    working_copy.files[name] = objects.WorkingFile("modified", filename, properties={})
-                else:
-                    working_copy.files[name] = objects.WorkingFile("added", filename, properties={})
-            for name, filename in dirs.items():
-                if name not in working_copy.files:
-                    working_copy.files[name] = objects.WorkingFile("added", filename, properties={})
+            new_files = {}
 
-            txn.set_working_copy(working_copy)
+            for name, filename in names.items():
+                if name in session.files:
+                    new_files[name] = objects.WorkingFile("modified", filename, properties={})
+                else:
+                    new_files[name] = objects.WorkingFile("added", filename, properties={})
+            for name, filename in dirs.items():
+                if name not in session.files:
+                    new_files[name] = objects.WorkingFile("added", filename, properties={})
+
+            txn.update_active_files(new_files)
 
     def forget(self, files):
         pass
@@ -1435,13 +1442,11 @@ def DebugStatus():
     p = get_project(check=False)
     with p.lock('debug:status') as p:
         yield ("Clean history", p.clean_state())
-        working_copy = p.working_copy()
-        session_uuid = working_copy.session
+        session = p.active()
         out = []
+        if session:
 
-        if session_uuid and p.sessions.exists(session_uuid):
-            session = p.sessions.get(session_uuid)
-            out.append("session: {}".format(session_uuid))
+            out.append("session: {}".format(session.uuid))
             out.append("at {}, started at {}".format(session.prepare, session.commit))
 
             branch = p.branches.get(session.branch)
