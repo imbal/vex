@@ -727,12 +727,6 @@ class ProjectChange:
 
             # if dir, if link?
         return out
-
-    def ac(self, changes):
-        working = self.active()
-        working.commit = commit
-        self.set_session(working)
-        return working
         
     def store_changed_files(self, changes):
         active = self.active()
