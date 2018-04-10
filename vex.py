@@ -283,6 +283,14 @@ class objects:
             self.blobs = blobs
 
     @codec.register
+    class Switch:
+        def __init__(self, time, command, prefix, session):
+            self.time = time
+            self.command = command
+            self.prefix = prefix
+            self.session = session
+
+    @codec.register
     class Do:
         def __init__(self, prev, action):
             self.prev = prev
@@ -298,9 +306,8 @@ class objects:
 
     @codec.register
     class Session:
-        def __init__(self,uuid, prefix, branch, prepare, commit, files,  mode=None, state=None):
+        def __init__(self,uuid, branch, prepare, commit, files,  mode=None, state=None):
             self.uuid = uuid
-            self.prefix = prefix
             self.branch = branch
             self.prepare = prepare
             self.commit = commit
@@ -559,7 +566,7 @@ class ActionLog:
         return out
 
         
-class SessionChange:
+class StatusChange:
     def __init__(self, project, command, active):
         self.project = project
         self.command = command
@@ -624,7 +631,7 @@ class SessionChange:
         return copy
 
 class ProjectChange:
-    refresh_active = SessionChange.refresh_active
+    refresh_active = StatusChange.refresh_active
 
     def __init__(self, project, scratch, command):
         self.project = project
@@ -643,12 +650,17 @@ class ProjectChange:
         self.new_manifests = set()
         self.new_files = set()
 
+    def active(self):
+        return self.get_session(self.active_uuid)
 
-    def to_file_path(self, working, file):
-        return self.project.to_file_path(working, file)
+    def to_file_path(self, file):
+        return self.project.to_file_path(self.prefix(),file)
 
-    def to_repo_path(self, working, file):
-        return self.project.to_repo_path(working, file)
+    def to_repo_path(self, file):
+        return self.project.to_repo_path(self.prefix(),file)
+
+    def prefix(self):
+        return self.get_state("prefix")
 
     def active(self):
         session_uuid = self.get_state("active")
@@ -677,7 +689,7 @@ class ProjectChange:
     def update_active_changes(self, changes):
         working = self.active()
         for file, change in changes.items():
-            filename = self.project.to_file_path(working, file)
+            filename = self.to_file_path(file)
             if isinstance(change, objects.AddFile):
                 working.files[file] = objects.Tracked("file",  filename, addr=change.addr, properties=change.properties)
             elif isinstance(change, objects.DeleteFile):
@@ -731,7 +743,7 @@ class ProjectChange:
     def store_changed_files(self, changes):
         active = self.active()
         for file, change in changes.items():
-            filename = self.to_file_path(active, file)
+            filename = self.to_file_path(file)
             if os.path.isfile(filename) and isinstance(change, (objects.AddFile, objects.ChangeFile, objects.AddDir, objects.ChangeDir)):
                 addr = self.put_file(filename)
                 if addr != change.addr:
@@ -775,7 +787,7 @@ class ProjectChange:
                             if not isinstance(entry, objects.File):
                                 raise VexUnfinished(entry)
                             if entry.addr != change.addr:
-                                new_addr = self.put_file(self.to_file_path(active, path))
+                                new_addr = self.put_file(self.to_file_path(path))
                                 entries[name] = objects.File(new_addr, change.properties)
                             else:
                                 entries[name] = objects.File(entry.addr, change.properties)
@@ -788,7 +800,7 @@ class ProjectChange:
                             tree_addr = apply_changes(os.path.join(prefix, name), None)
                             entries[name] = objects.Dir(tree_addr, change.properties)
                         elif isinstance(change, objects.AddFile):
-                            file_addr = self.put_file(self.to_file_path(active, path))
+                            file_addr = self.put_file(self.to_file_path(path))
                             entries[name] = objects.File(file_addr, change.properties)
                         else:
                             raise VexBug('nope')
@@ -818,7 +830,7 @@ class ProjectChange:
                         tree_addr = apply_changes(os.path.join(prefix, name), None)
                         entries[name] = objects.Dir(tree_addr, change.properties)
                     elif isinstance(change, objects.AddFile):
-                        file_addr = self.put_file(self.to_file_path(active, os.path.join(prefix,name)))
+                        file_addr = self.put_file(self.to_file_path(os.path.join(prefix,name)))
                         entries[name] = objects.File(file_addr, change.properties)
                     else:
                         raise VexBug('nope')
@@ -902,17 +914,8 @@ class ProjectChange:
         self.new_names[name] = branch.uuid
 
     def get_state(self, name):
-        if name in self.new_state:
-            return self.new_state[name]
         return self.project.state.get(name)
 
-    def set_state(self, name, state):
-        if name not in self.old_state:
-            if self.project.state.exists(name):
-                self.old_state[name] = self.project.state.get(name)
-            else:
-                self.old_state[name] = None
-        self.new_state[name] = state
 
 
     def action(self):
@@ -920,13 +923,26 @@ class ProjectChange:
             branches = dict(old=self.old_branches, new=self.new_branches)
             names = dict(old=self.old_names, new=self.new_names)
             sessions = dict(old=self.old_sessions, new=self.new_sessions)
-            state = dict(old=self.old_state, new=self.new_state)
 
             blobs = dict(changes=self.new_changes, manifests=self.new_manifests, files=self.new_files)
-            changes = dict(branches=branches,names=names, sessions=sessions, state=state)
+            changes = dict(branches=branches,names=names, sessions=sessions)
             return objects.Action(self.now, self.command, changes, blobs)
         else:
             return objects.Action(self.now, self.command, {}, ())
+
+class ProjectSwitch:
+    def __init__(self, project, scratch, command):
+        self.project = project
+        self.scratch = scratch
+        self.command = command
+        self.prefix = {}
+        self.session = {}
+
+    def action(self):
+        if self.prefix or self.session:
+            return objects.Switch(self.now, self.command, self.prefix, self.session)
+        else:
+            return objects.Switch(self.now, self.command, {}, ())
 
 class Project:
     def __init__(self, config_dir, working_dir):    
@@ -964,13 +980,14 @@ class Project:
     def exists(self):
         return os.path.exists(self.dir)
 
-    def to_file_path(self, session, file):
+
+    def to_file_path(self, prefix, file):
         if os.path.commonpath((file, "/.vex")) == '/.vex':
             return os.path.join(self.settings.dir, os.path.relpath(file, "/.vex"))
         # normalize name to NFC?
-        return os.path.join(self.working_dir, os.path.relpath(file, session.prefix))
+        return os.path.join(self.working_dir, os.path.relpath(file, prefix))
 
-    def to_repo_path(self, session, file):
+    def to_repo_path(self, prefix, file):
         if os.path.commonpath((self.settings.dir, file)) == self.settings.dir:
             filename = os.path.relpath(file, self.settings.dir)
             return ("/.vex" if filename == "." else os.path.join("/.vex", filename))
@@ -979,8 +996,8 @@ class Project:
         # normalize name to NFC?
         filename = os.path.relpath(file, self.working_dir)
         if filename == '.':
-            return session.prefix
-        return os.path.join(session.prefix, filename)
+            return prefix
+        return os.path.join(prefix, filename)
 
     __locked = object()
 
@@ -1008,20 +1025,30 @@ class Project:
     def rollback_new_action(self):
         with self.actions.rollback_new() as action:
             if action:
-                self.apply_changes('old', action.changes)
+                if isinstance(action, object.Action):
+                    self.apply_changes('old', action.changes)
+                elif isinstance(action, object.Switch):
+                    raise VexUnimplemented('this should probably pass but ...')
+                else:
+                    raise VexBug('welp')
             return action
 
     def restart_new_action(self):
         with self.actions.restart_new() as action:
             if action:
-                self.copy_blobs(action.blobs)
-                self.apply_changes('new', action.changes)
+                if isinstance(action, object.Action):
+                    self.copy_blobs(action.blobs)
+                    self.apply_changes('new', action.changes)
+                elif isinstance(action, object.Switch):
+                    pass
+                else:
+                    raise VexBug('welp')
             return action
 
     @contextmanager
     def do_nohistory(self, command):
         active = self.state.get("active")
-        txn = SessionChange(self, command, active)
+        txn = StatusChange(self, command, active)
         yield txn
         action = txn.action()
         if action.changes:
@@ -1037,8 +1064,27 @@ class Project:
         with self.actions.do(txn.action()) as action:
             if not action:
                 return
-            self.copy_blobs(action.blobs)
-            self.apply_changes('new', action.changes)
+            if isinstance(action, objects.Action):
+                self.copy_blobs(action.blobs)
+                self.apply_changes('new', action.changes)
+            else:
+                raise VexBug('action')
+
+    @contextmanager
+    def do_switch(self):
+        if not self.actions.clean_state():
+            raise VexCorrupt('Project history not in a clean state.')
+
+        txn = ProjectSwitch(self, self.scratch, command)
+        yield txn
+        with self.actions.do(txn.action()) as action:
+            if not action:
+                return
+            if isinstance(action, objects.Switch):
+                self.apply_switch('new', action.prefix, action.session)
+            else:
+                raise VexBug('action')
+
 
     # Take Action.changes and applies them to project
     def apply_changes(self, kind, changes):
@@ -1072,18 +1118,35 @@ class Project:
                     self.files.move_from(self.scratch, addr)
             else:
                 raise VexBug('Project change has unknown values')
+    
+    def apply_switch(self, kind, prefix, session):
+        active = self.prefix()
+        new = prefix[kind]
+        if (kind =='new' and old != prefix['old']) or (kind =='old' and active != prefix['new']):
+            raise VexCorruption('switch out of sync')
+
 
     def undo(self):
         with self.actions.undo() as action:
             if not action:
                 return
-            self.apply_changes('old', action.changes)
+            if isinstance(action, objects.Action):
+                self.apply_changes('old', action.changes)
+            elif isinstance(action, objects.Switch):
+                self.apply_switch('new', action.prefix, action.session)
+            else:
+                raise VexBug('action')
 
     def redo(self, choice):
         with self.actions.redo(choice) as action:
             if not action:
                 return
-            self.apply_changes('new', action.changes)
+            if isinstance(action, objects.Action):
+                self.apply_changes('new', action.changes)
+            elif isinstance(action, objects.Switch):
+                self.apply_switch('new', action.prefix, action.session)
+            else:
+                raise VexBug('action')
 
     def redo_choices(self):
         return self.actions.redo_choices()
@@ -1094,9 +1157,19 @@ class Project:
     def history(self):
         return self.actions.entries()
 
+    def prefix(self):
+        if state.exists("prefix"):
+            return self.state.get("prefix")
+
     def active(self):
         if self.state.exists("active"):
             return self.sessions.get(self.state.get("active"))
+
+    def switch(self, new_prefix):
+        # check new prefix exists in repo
+        with self.do_switch('switch') as txn:
+            txn.switch_prefix(new_prefix)
+
 
     def log(self):
         with self.do_nohistory('log') as txn:
@@ -1152,15 +1225,16 @@ class Project:
 
             session_uuid = UUID()
             files = {prefix : objects.Tracked('dir', self.working_dir)}
-            session = objects.Session(session_uuid, prefix, branch_uuid, commit_uuid, commit_uuid, files)
+            session = objects.Session(session_uuid, branch_uuid, commit_uuid, commit_uuid, files)
             txn.put_session(session)
         self.state.set("active", session_uuid)
+        self.state.set("prefix", prefix)
         
 
     def prepare(self, files):
         with self.do('prepare') as txn:
             session = txn.refresh_active()
-            files = [self.to_repo_path(session, filename) for filename in files] if files else None
+            files = [txn.to_repo_path(filename) for filename in files] if files else None
             commit = session.prepare
 
             old_uuid = commit
@@ -1186,7 +1260,7 @@ class Project:
     def commit(self, files):
         with self.do('commit') as txn:
             session = txn.refresh_active()
-            files = [self.to_repo_path(session, filename) for filename in files] if files else None
+            files = [txn.to_repo_path(filename) for filename in files] if files else None
 
             changes = {}
             old_uuid = session.prepare
@@ -1228,7 +1302,7 @@ class Project:
             for filename in files:
                 if not filename.startswith(self.working_dir):
                     raise VexError("{} is outside project".format(filename))
-                name = self.to_repo_path(session, filename)
+                name = txn.to_repo_path(filename)
                 names[name] = filename
                 name = os.path.split(name)[0]
                 filename = os.path.split(filename)[0]
@@ -1258,7 +1332,7 @@ class Project:
             for filename in files:
                 if not filename.startswith(self.working_dir):
                     raise VexError("{} is outside project".format(filename))
-                name = self.to_repo_path(session, filename)
+                name = txn.to_repo_path(filename)
                 names[name] = filename
 
             new_files = {}
