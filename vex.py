@@ -290,6 +290,7 @@ class objects:
             self.prefix = prefix
             self.session = session
 
+
     @codec.register
     class Do:
         def __init__(self, prev, action):
@@ -321,12 +322,13 @@ class objects:
         Unchanged = set(('ignored', 'dir', 'file', 'invisible'))
         Changed = set(('added', 'modified', 'deleted', 'stashed'))
 
-        def __init__(self, state, path, addr=None, stat=None, properties=None):
+        def __init__(self, state, path, addr=None, stash=None, stat=None, properties=None):
             if state not in self.States: raise VexBug('bad')
             self.state = state
             self.path = path
             self.addr = addr
             self.stat = stat
+            self.stash = stash
             self.properties = properties
 
 # Stores
@@ -366,6 +368,9 @@ class BlobStore:
         elif not self.exists(addr):
             raise VexCorrupt('Missing file {}'.format(other.filename(addr)))
 
+    def make_copy(self, addr, filename):
+        shutil.copyfile(self.filename(addr), filename)
+
     def addr_for_file(self, file):
         hash = hashlib.shake_256()
         with open(file,'rb') as fh:
@@ -377,7 +382,7 @@ class BlobStore:
         return "shake-256-20-{}".format(hash.hexdigest(20))
 
     def inside(self, file):
-        return os.path.commonpath(file, self.dir) == self.dir
+        return os.path.commonpath((file, self.dir)) == self.dir
 
     def addr_for_buf(self, buf):
         hash = hashlib.shake_256()
@@ -390,8 +395,8 @@ class BlobStore:
     def exists(self, addr):
         return os.path.exists(self.filename(addr))
 
-    def put_file(self, file):
-        addr = self.addr_for_file(file)
+    def put_file(self, file, addr=None):
+        addr = addr or self.addr_for_file(file)
         if not self.exists(addr):
             shutil.copyfile(file, self.filename(addr))
         return addr
@@ -721,6 +726,7 @@ class ProjectChange:
         for repo_name in files_to_check:
             entry = active.files[repo_name]
             filename = entry.path
+            # and stashed items...? eh nm
             if os.path.isfile(filename):
 
                 if entry.state == "added":
@@ -937,6 +943,13 @@ class ProjectSwitch:
         self.command = command
         self.prefix = {}
         self.session = {}
+        self.now = NOW()
+
+    def switch_prefix(self, new_prefix):
+        self.prefix = {'old': self.project.prefix(), 'new': new_prefix}
+
+    def switch_session(self, new_session):
+        self.session = {'old': self.project.session(), 'new': new_session}
 
     def action(self):
         if self.prefix or self.session:
@@ -980,6 +993,22 @@ class Project:
     def exists(self):
         return os.path.exists(self.dir)
 
+    def history_isempty(self):
+        return self.actions.empty()
+
+    def history(self):
+        return self.actions.entries()
+
+    def prefix(self):
+        if self.state.exists("prefix"):
+            return self.state.get("prefix")
+
+    def active(self):
+        if self.state.exists("active"):
+            return self.sessions.get(self.state.get("active"))
+
+    def clean_state(self):
+        return self.actions.clean_state()
 
     def to_file_path(self, prefix, file):
         if os.path.commonpath((file, "/.vex")) == '/.vex':
@@ -1019,16 +1048,15 @@ class Project:
         finally:
                 fh.close()
 
-    def clean_state(self):
-        return self.actions.clean_state()
 
     def rollback_new_action(self):
         with self.actions.rollback_new() as action:
             if action:
-                if isinstance(action, object.Action):
+                if isinstance(action, objects.Action):
                     self.apply_changes('old', action.changes)
-                elif isinstance(action, object.Switch):
-                    raise VexUnimplemented('this should probably pass but ...')
+                elif isinstance(action, objects.Switch):
+                    # raise VexUnimplemented('this should probably pass but ...')
+                    pass
                 else:
                     raise VexBug('welp')
             return action
@@ -1036,10 +1064,10 @@ class Project:
     def restart_new_action(self):
         with self.actions.restart_new() as action:
             if action:
-                if isinstance(action, object.Action):
+                if isinstance(action, objects.Action):
                     self.copy_blobs(action.blobs)
                     self.apply_changes('new', action.changes)
-                elif isinstance(action, object.Switch):
+                elif isinstance(action, objects.Switch):
                     pass
                 else:
                     raise VexBug('welp')
@@ -1071,7 +1099,7 @@ class Project:
                 raise VexBug('action')
 
     @contextmanager
-    def do_switch(self):
+    def do_switch(self, command):
         if not self.actions.clean_state():
             raise VexCorrupt('Project history not in a clean state.')
 
@@ -1084,47 +1112,6 @@ class Project:
                 self.apply_switch('new', action.prefix, action.session)
             else:
                 raise VexBug('action')
-
-
-    # Take Action.changes and applies them to project
-    def apply_changes(self, kind, changes):
-        for key in changes:
-            if key == 'branches':
-                for name,value in changes['branches'][kind].items():
-                    self.branches.set(name, value)
-            elif key == 'names':
-                for name,value in changes['names'][kind].items():
-                    self.names.set(name, value)
-            elif key == 'sessions':
-                for name,value in changes['sessions'][kind].items():
-                    self.sessions.set(name, value)
-            elif key == 'state':
-                for name,value in changes['state'][kind].items():
-                    self.state.set(name, value)
-            else:
-                raise VexBug('Project change has unknown values')
-
-    # Takes Action.blobs and copies them out of the scratch directory
-    def copy_blobs(self, blobs):
-        for key in blobs:
-            if key == 'changes':
-                for addr in blobs['changes']:
-                    self.changes.move_from(self.scratch, addr)
-            elif key == 'manifests':
-                for addr in blobs['manifests']:
-                    self.manifests.move_from(self.scratch, addr)
-            elif key =='files':
-                for addr in blobs['files']:
-                    self.files.move_from(self.scratch, addr)
-            else:
-                raise VexBug('Project change has unknown values')
-    
-    def apply_switch(self, kind, prefix, session):
-        active = self.prefix()
-        new = prefix[kind]
-        if (kind =='new' and old != prefix['old']) or (kind =='old' and active != prefix['new']):
-            raise VexCorruption('switch out of sync')
-
 
     def undo(self):
         with self.actions.undo() as action:
@@ -1151,25 +1138,141 @@ class Project:
     def redo_choices(self):
         return self.actions.redo_choices()
 
-    def history_isempty(self):
-        return self.actions.empty()
 
-    def history(self):
-        return self.actions.entries()
+    # Take Action.changes and applies them to project
+    def apply_changes(self, kind, changes):
+        for key in changes:
+            if key == 'branches':
+                for name,value in changes['branches'][kind].items():
+                    self.branches.set(name, value)
+            elif key == 'names':
+                for name,value in changes['names'][kind].items():
+                    self.names.set(name, value)
+            elif key == 'sessions':
+                for name,value in changes['sessions'][kind].items():
+                    self.sessions.set(name, value)
+            else:
+                raise VexBug('Project change has unknown values')
 
-    def prefix(self):
-        if state.exists("prefix"):
-            return self.state.get("prefix")
+    # Takes Action.blobs and copies them out of the scratch directory
+    def copy_blobs(self, blobs):
+        for key in blobs:
+            if key == 'changes':
+                for addr in blobs['changes']:
+                    self.changes.move_from(self.scratch, addr)
+            elif key == 'manifests':
+                for addr in blobs['manifests']:
+                    self.manifests.move_from(self.scratch, addr)
+            elif key =='files':
+                for addr in blobs['files']:
+                    self.files.move_from(self.scratch, addr)
+            else:
+                raise VexBug('Project change has unknown values')
+    
+    def apply_switch(self, kind, prefix, session):
+        if prefix:
+            active_prefix = self.prefix()
+            new_prefix = prefix[kind]
+            if (kind =='new' and active_prefix != prefix['old']) or (kind =='old' and active_prefix != prefix['new']):
+                raise VexCorruption('switch out of sync')
+        else:
+            active_prefix, new_prefix = self.prefix(), self.prefix()
 
-    def active(self):
-        if self.state.exists("active"):
-            return self.sessions.get(self.state.get("active"))
+        if session:
+            active_session = self.state.get("active")
+            new_session = session[kind]
+            if (kind =='new' and active_session != session['old']) or (kind =='old' and active_session != session['new']):
+                raise VexCorruption('switch out of sync')
+        else:
+            uuid = self.state.get('active')
+            active_session, new_session = uuid, uuid
 
+        print(active_prefix, new_prefix)
+        print(active_session, new_session)
+
+        active = self.sessions.get(active_session)
+
+        active = self.stash_session(active)
+        self.sessions.set(active.uuid, active)
+        new = self.sessions.get(new_session)
+
+        self.clear_session(active_prefix, active)
+        self.restore_session(new_prefix, new)
+
+        self.state.set('prefix', new_prefix)
+        self.state.set('active', new_session)
+
+
+    def stash_session(self, session):
+        for name, entry in session.files.items():
+            new_addr = None
+            if entry.state == "file":
+                if not os.path.exists(entry.path):
+                    entry.state = "deleted"
+                    entry.addr, entry.properties = None, None
+                elif os.path.isdir(entry.path):
+                    entry.state = "added"
+                else:
+                    new_addr = self.scratch.addr_for_file(entry.path)
+                    if new_addr != entry.addr:
+                        entry.state = "modified"
+
+            if entry.state == 'modified' or (entry.state == 'added' and os.path.isfile(entry.path)):
+                entry.state = "stashed"
+                entry.stash = self.scratch.put_file(entry.path, new_addr)
+
+        return session
+
+    def session_contents(self, prefix, session):
+        contents = {}
+        for path, entry in sorted(((p.split('/'),e) for p,e in session.files.items()), reverse=True):
+            if entry.state in ("ignored", "invisible"):
+                continue
+            dir, name = "/".join(path[:-1]), path[-1]
+            dir = dir or "/"
+            name = name or "."
+            if os.path.commonpath((dir, prefix)) != prefix:
+                continue
+            if dir not in contents:
+                contents[dir]  = {}
+            contents[dir][name] = entry
+        return contents
+
+    def clear_session(self, prefix, session):
+        for dir_name, files in self.session_contents(prefix, session).items():
+            print(dir_name, files)
+            for name, entry in files.items():
+                f = entry.path
+                if os.path.commonpath((f, self.working_dir)) != self.working_dir:
+                    raise VexBug()
+                if os.path.isfile(f):
+                    os.remove(f)
+                elif os.path.isdir(f) and not os.listdir(f):
+                    os.rmdir(f)
+
+    def restore_session(self, prefix, session):
+        for name in sorted(session.files, key=lambda x:x.split('/')):
+            entry = session.files[name]
+            path = self.to_file_path(prefix, name) 
+            entry.path = path
+            print(entry.path, entry.addr, entry.state)
+            if entry.state in ("ignored"):
+                continue
+            elif os.path.commonpath((name, prefix)) != prefix:
+                entry.state = "invisible"
+                continue
+
+            if entry.state == "added" or entry.state == "dir":
+                os.makedirs(path, exist_ok=True)
+            elif entry.state =="file":
+                self.files.make_copy(entry.addr, path)
+            elif entry.state == "stashed":
+                self.scratch.make_copy(entry.stash, path)
+                
     def switch(self, new_prefix):
         # check new prefix exists in repo
         with self.do_switch('switch') as txn:
             txn.switch_prefix(new_prefix)
-
 
     def log(self):
         with self.do_nohistory('log') as txn:
@@ -1509,6 +1612,14 @@ def Status():
             else:
                 path = os.path.relpath(entry.path, cwd)
                 yield "{:16}\t{} as {}".format(entry.state, path, reponame)
+
+vex_switch = vex_cmd.subcommand('switch')
+@vex_switch.run('prefix')
+def switch(prefix):
+    p = get_project()
+
+    with p.lock('switch') as p:
+        p.switch(prefix)
 
 vex_undo = vex_cmd.subcommand('undo')
 @vex_undo.run()
