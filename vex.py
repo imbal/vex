@@ -329,9 +329,9 @@ class objects:
     @codec.register
     class Tracked:
         Kinds = set(('dir', 'file', 'ignore'))
-        States = set(('tracked', 'added', 'modified', 'deleted', 'invisible'))
+        States = set(('tracked', 'replaced', 'added', 'modified', 'deleted', 'invisible'))
         Unchanged = set(('tracked', 'invisible'))
-        Changed = set(('added', 'modified', 'deleted'))
+        Changed = set(('added', 'modified', 'deleted', 'replaced'))
 
         # kind = file, dir, ignored 
         # state = added, modifed, seleted, stashed, invisible
@@ -634,9 +634,9 @@ class StatusChange:
                     entry.state = "deleted"
                     entry.addr, entry.properties = None, None
                 elif os.path.isdir(entry.path):
-                    entry.state = "added"
+                    entry.state = "replaced"
                     entry.kind = "dir"
-                elif entry.state == 'added':
+                elif entry.state == 'added' or entry.state == 'replaced':
                     pass
                 elif entry.state == 'deleted':
                     pass
@@ -657,10 +657,10 @@ class StatusChange:
                     entry.state = "deleted"
                     entry.properties = None
                 elif os.path.isfile(entry.path):
-                    entry.state = "added"
+                    entry.state = "replaced"
                     entry.properties = {}
                     entry.addr = None 
-                elif entry.state == 'added':
+                elif entry.state == 'added' or entry.state =='replaced':
                     pass
                 elif entry.state == 'deleted':
                     pass
@@ -775,12 +775,12 @@ class ProjectChange:
             if entry.kind == 'file':
                 if entry.state == "added":
                     out[repo_name]=objects.AddFile(self.scratch.addr_for_file(filename), properties=entry.properties)
+                if entry.state == "replaced":
+                    out[repo_name]=objects.NewFile(self.scratch.addr_for_file(filename), properties=entry.properties)
                 elif entry.state == "modified":
                     out[repo_name]=objects.ChangeFile(addr=self.scratch.addr_for_file(filename), properties=entry.properties)
                 elif entry.state == "deleted":
                     out[repo_name]=objects.DeleteFile()
-                elif entry.state == "stashed":
-                    out[repo_name]=objects.ChangeFile(addr=entry.scratch, properties=entry.properties)
                 elif entry.state == 'tracked':
                     pass
                 elif entry.state == 'invisible':
@@ -790,6 +790,8 @@ class ProjectChange:
             elif entry.kind =='dir': 
                 if entry.state == "added":
                     out[repo_name]=objects.AddDir(properties=entry.properties)
+                if entry.state == "replaced":
+                    out[repo_name]=objects.NewDir(properties=entry.properties)
                 elif entry.state == "modified":
                     out[repo_name]=objects.ChangeDir(properties=entry.properties)
                 elif entry.state == "deleted":
@@ -1274,14 +1276,14 @@ class Project:
                     entry.state = "deleted"
                     entry.addr, entry.properties = None, None
                 elif os.path.isdir(entry.path):
-                    entry.state = "added"
+                    entry.state = "replaced"
                     entry.kind = "file"
                 elif entry.state == 'tracked':
                     new_addr = self.scratch.addr_for_file(entry.path)
                     if new_addr != entry.addr:
                         entry.state = "modified"
 
-            if entry.kind == 'file' and entry.state in ('added', 'modified'):
+            if entry.kind == 'file' and entry.state in ('added', 'replaced', 'modified'):
                 entry.stash = self.scratch.put_file(entry.path, new_addr)
             else:
                 entry.stash = None
@@ -1492,11 +1494,14 @@ class Project:
 
             for name, filename in names.items():
                 if name in session.files:
-                    new_files[name] = objects.Tracked('file',"modified", filename, properties={})
+                    state = 'modified' if session.files[name].kind == 'file' else 'replaced'
+                    new_files[name] = objects.Tracked('file', state, filename, properties={})
                 else:
                     new_files[name] = objects.Tracked('file',"added", filename, properties={})
             for name, filename in dirs.items():
-                if name not in session.files:
+                if name in session.files and session.files[name].kind == 'file':
+                    new_files[name] = objects.Tracked('dir', "replaced", filename, properties={})
+                else:
                     new_files[name] = objects.Tracked('dir', "added", filename, properties={})
 
             txn.update_active_files(new_files)
