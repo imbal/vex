@@ -266,7 +266,7 @@ class objects:
     # Entries in a Tree Object
     # properties used to indicate 'large file' , 'large dir' options, ...
     # large dir is 'take this tree but treat it as a tree of prefixes...'
-    # large file is 'addr points to bloblist' ...
+    # large file is 'addr points to  tree but it's list of @Chunks
 
     @codec.register
     class Dir:
@@ -279,6 +279,11 @@ class objects:
         def __init__(self, addr, properties):
             self.addr = addr
             self.properties = properties
+
+    @codec.register
+    class Chunk:
+        def __init__(self, addr):
+            self.addr = addr
     
     # End of Repository State
 
@@ -337,8 +342,6 @@ class objects:
         Unchanged = set(('tracked'))
         Changed = set(('added', 'modified', 'deleted', 'replaced'))
 
-        # kind = file, dir, ignored 
-        # state = added, modifed, seleted, stashed, invisible
         def __init__(self, kind, state, path, addr=None, stash=None, stat=None, properties=None):
             if kind not in self.Kinds: raise VexBug('bad')
             if state not in self.States: raise VexBug('bad')
@@ -712,9 +715,6 @@ class ProjectChange:
     def repo_to_work_path(self, file):
         return self.project.repo_to_work_path(self.prefix(),file)
 
-    def repo_to_full_path(self, file):
-        return self.project.repo_to_full_path(self.prefix(),file)
-
     def work_to_repo_path(self, file):
         return self.project.work_to_repo_path(self.prefix(),file)
 
@@ -795,7 +795,8 @@ class ProjectChange:
                 elif entry.state == "modified":
                     filename = os.path.join(self.project.working_dir, entry.path.p) 
                     addr = self.scratch.addr_for_file(filename)
-                    out[repo_name]=objects.ChangeFile(addr, properties=entry.properties)
+                    if addr != entry.addr:
+                        out[repo_name]=objects.ChangeFile(addr, properties=entry.properties)
                 elif entry.state == "deleted":
                     out[repo_name]=objects.DeleteFile()
                 elif entry.state == 'tracked':
@@ -824,7 +825,8 @@ class ProjectChange:
                     out[repo_name]=objects.NewFile(addr, properties=entry.properties)
                 elif entry.state == "modified":
                     addr = entry.stash
-                    out[repo_name]=objects.ChangeFile(addr, properties=entry.properties)
+                    if addr != entry.addr:
+                        out[repo_name]=objects.ChangeFile(addr, properties=entry.properties)
                 else:
                     raise VexBug('state {}'.format(entry.state))
             elif entry.kind == 'ignore':
@@ -839,7 +841,7 @@ class ProjectChange:
         for file, change in changes.items():
             entry = active.files[file]
             if entry.kind == 'file' and entry.path:
-                filename = self.repo_to_full_path(file)
+                filename = os.path.join(self.project.working_dir, entry.path.p)
                 if os.path.isfile(filename) and isinstance(change, (objects.AddFile, objects.ChangeFile, objects.NewFile)):
                     addr = self.put_file(filename)
                     if addr != change.addr:
@@ -898,8 +900,7 @@ class ProjectChange:
                             tree_addr = apply_changes(os.path.join(prefix, name), None)
                             entries[name] = objects.Dir(tree_addr, change.properties)
                         elif isinstance(change, (objects.NewFile, objects.AddFile)):
-                            file_addr = self.put_file(self.repo_to_full_path(path))
-                            entries[name] = objects.File(file_addr, change.properties)
+                            entries[name] = objects.File(change.addr, change.properties)
                         else:
                             raise VexBug('nope')
 
@@ -1107,7 +1108,7 @@ class Project:
 
     def repo_to_work_path(self, prefix, file):
         if os.path.commonpath((file, "/.vex")) == '/.vex':
-            return os.path.join(self.settings.dir, os.path.relpath(file, "/.vex"))
+            return objects.Path(os.path.join(".vex/settings", os.path.relpath(file, '/.vex')))
         # normalize name to NFC?
         return objects.Path(os.path.relpath(file, prefix))
 
@@ -1291,11 +1292,15 @@ class Project:
         # check after stash, as it might be same
         new = self.sessions.get(new_session)
         self.clear_session(active_prefix, active)
-        self.restore_session(new_prefix, new)
+        try:
+            self.restore_session(new_prefix, new)
+        except:
+            self.restore_session(active_prefix, active)
 
 
     def stash_session(self, session):
         for name, entry in session.files.items():
+            if name in ("/", "/.vex"): continue
             new_addr = None
             if entry.kind == "file":
                 if entry.path is None:
@@ -1321,17 +1326,17 @@ class Project:
 
     def clear_session(self, prefix, session):
         if prefix != self.prefix() or session.uuid != self.state.get("active"):
-            print(prefix, self.prefix(), session.uuid, self.state.get("active"))
             raise VexBug('no')
         dirs = set()
         for repo_name, entry in session.files.items():
-            if os.path.commonpath((repo_name, prefix)) != prefix and os.path.commonpath((repo_name, "/.vex")) != "/.vex":
-                continue
+            print('repo:', repo_name)
+            if repo_name in ("/", "/.vex", prefix): continue
             if entry.kind == "ignore":
                 continue
-
+            if not entry.path:
+                continue
+            print('delete?', entry.kind)
             path = os.path.join(self.working_dir, entry.path.p) if entry.path else None
-
             if entry.kind == "file" or entry.kind == "stash":
                 if os.path.commonpath((path, self.working_dir)) != self.working_dir:
                     raise VexBug('file outside of working dir inside tracked')
@@ -1341,16 +1346,22 @@ class Project:
             elif entry.kind == "dir":
                 if os.path.commonpath((path, self.working_dir)) != self.working_dir:
                     raise VexBug('file outside of working dir inside tracked')
+                print(repo_name, path)
                 dirs.add(path)
+            elif entry.kind == "stash":
+                pass
             else:
                 raise VexBug('no')
         for dir in sorted(dirs, reverse=True, key=lambda x: x.split("/")):
-            if os.path.relpath(dir, "/") == "." or os.path.relpath(dir, prefix) == prefix:
+            print('dir', dir)
+            if dir in (self.working_dir, self.settings.dir):
                 continue
             if not os.path.isdir(dir):
                 raise VexBug('sync')
             if not os.listdir(dir):
                 os.rmdir(dir)
+            else:
+                print('not empty')
         self.state.set('prefix', None)
         self.state.set('active', None)
 
@@ -1368,7 +1379,9 @@ class Project:
             path = self.repo_to_full_path(prefix, name) 
 
             if entry.kind =='dir':
-                os.makedirs(path, exist_ok=True)
+                if path not in (self.working_dir, self.settings.dir):
+                    print(path)
+                    os.makedirs(path, exist_ok=True)
             elif entry.kind =="file":
                 self.files.make_copy(entry.addr, path)
             elif entry.kind == "stash":
@@ -1426,7 +1439,7 @@ class Project:
 
             project_uuid = None
             root_path = '/'
-            root = objects.Root({os.path.relpath(prefix, root_path): objects.Dir(project_uuid, {})}, {})
+            root = objects.Root({os.path.relpath(prefix, root_path): objects.Dir(None, {}), '.vex': objects.Dir(None, {})}, {})
             root_uuid = txn.put_manifest(root)
 
             changes = {
@@ -1447,7 +1460,8 @@ class Project:
 
             session_uuid = UUID()
             files = {
-                # Nah '/': objects.Tracked('dir', 'tracked', None),
+               #'/': objects.Tracked('dir', 'tracked', None),
+               # '/.vex': objects.Tracked('dir', 'tracked', self.repo_to_work_path(prefix, '/.vex')),
                 prefix: objects.Tracked('dir', 'tracked', self.repo_to_work_path(prefix, prefix)),
             }
             session = objects.Session(session_uuid, branch_uuid, commit_uuid, commit_uuid, files)
@@ -1538,7 +1552,7 @@ class Project:
                     dirs[name] = filename
                 name = os.path.split(name)[0]
                 filename = os.path.split(filename)[0]
-                while name != '/':
+                while name != '/' and name !='/.vex':
                     dirs[name] = filename
                     name = os.path.split(name)[0]
                     filename = os.path.split(filename)[0]
@@ -1758,6 +1772,7 @@ def switch(prefix):
     p = get_project()
 
     with p.lock('switch') as p:
+        prefix = os.path.join(p.prefix(), prefix)
         p.switch(prefix)
 
 vex_undo = vex_cmd.subcommand('undo')
