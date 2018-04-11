@@ -204,6 +204,7 @@ class objects:
     class Changelog:
         def __init__(self, prev, summary, changes, message):
             self.prev = prev
+            # author_uuid ...
             self.summary = summary
             self.message = message
             self.changes = changes
@@ -330,6 +331,7 @@ class objects:
             self.files = files
             self.mode = mode
             self.state = state
+
     @codec.register
     class Path:
         def __init__(self, p):
@@ -1329,13 +1331,10 @@ class Project:
             raise VexBug('no')
         dirs = set()
         for repo_name, entry in session.files.items():
-            print('repo:', repo_name)
-            if repo_name in ("/", "/.vex", prefix): continue
             if entry.kind == "ignore":
                 continue
             if not entry.path:
                 continue
-            print('delete?', entry.kind)
             path = os.path.join(self.working_dir, entry.path.p) if entry.path else None
             if entry.kind == "file" or entry.kind == "stash":
                 if os.path.commonpath((path, self.working_dir)) != self.working_dir:
@@ -1346,22 +1345,19 @@ class Project:
             elif entry.kind == "dir":
                 if os.path.commonpath((path, self.working_dir)) != self.working_dir:
                     raise VexBug('file outside of working dir inside tracked')
-                print(repo_name, path)
-                dirs.add(path)
+                if repo_name not in ("/", "/.vex", prefix):
+                    dirs.add(path)
             elif entry.kind == "stash":
                 pass
             else:
                 raise VexBug('no')
         for dir in sorted(dirs, reverse=True, key=lambda x: x.split("/")):
-            print('dir', dir)
             if dir in (self.working_dir, self.settings.dir):
                 continue
             if not os.path.isdir(dir):
                 raise VexBug('sync')
             if not os.listdir(dir):
                 os.rmdir(dir)
-            else:
-                print('not empty')
         self.state.set('prefix', None)
         self.state.set('active', None)
 
@@ -1379,8 +1375,7 @@ class Project:
             path = self.repo_to_full_path(prefix, name) 
 
             if entry.kind =='dir':
-                if path not in (self.working_dir, self.settings.dir):
-                    print(path)
+                if name not in ('/', '/.vex', prefix):
                     os.makedirs(path, exist_ok=True)
             elif entry.kind =="file":
                 self.files.make_copy(entry.addr, path)
@@ -1460,8 +1455,8 @@ class Project:
 
             session_uuid = UUID()
             files = {
-               #'/': objects.Tracked('dir', 'tracked', None),
-               # '/.vex': objects.Tracked('dir', 'tracked', self.repo_to_work_path(prefix, '/.vex')),
+               '/': objects.Tracked('dir', 'tracked', None),
+                '/.vex': objects.Tracked('dir', 'tracked', self.repo_to_work_path(prefix, '/.vex')),
                 prefix: objects.Tracked('dir', 'tracked', self.repo_to_work_path(prefix, prefix)),
             }
             session = objects.Session(session_uuid, branch_uuid, commit_uuid, commit_uuid, files)
