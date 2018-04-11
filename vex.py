@@ -718,16 +718,16 @@ class ProjectChange:
         return self.get_session(self.active_uuid)
 
     def repo_to_work_path(self, file):
-        return self.project.repo_to_work_path(self.prefix(),file)
+        return self.project.repo_to_work_path(self.mounts(),file)
 
     def work_to_repo_path(self, file):
-        return self.project.work_to_repo_path(self.prefix(),file)
+        return self.project.work_to_repo_path(self.mounts(),file)
 
     def full_to_repo_path(self, file):
-        return self.project.full_to_repo_path(self.prefix(),file)
+        return self.project.full_to_repo_path(self.mounts(),file)
 
-    def prefix(self):
-        return self.get_state("prefix")
+    def mounts(self):
+        return self.get_state("mounts")
 
     def active(self):
         session_uuid = self.get_state("active")
@@ -1054,7 +1054,7 @@ class ProjectSwitch:
         self.now = NOW()
 
     def switch_prefix(self, new_prefix):
-        self.prefix = {'old': self.project.prefix(), 'new': new_prefix}
+        self.prefix = {'old': self.project.mounts(), 'new': new_prefix}
 
     def switch_session(self, new_session):
         self.session = {'old': self.project.session(), 'new': new_session}
@@ -1107,9 +1107,9 @@ class Project:
     def history(self):
         return self.actions.entries()
 
-    def prefix(self):
-        if self.state.exists("prefix"):
-            return self.state.get("prefix")
+    def mounts(self):
+        if self.state.exists("mounts"):
+            return self.state.get("mounts")
 
     def active(self):
         if self.state.exists("active"):
@@ -1118,21 +1118,21 @@ class Project:
     def clean_state(self):
         return self.actions.clean_state()
 
-    def repo_to_full_path(self, prefix, file):
-        path = self.repo_to_work_path(prefix, file).p
+    def repo_to_full_path(self, mounts, file):
+        path = self.repo_to_work_path(mounts, file).p
         return os.path.join(self.working_dir, path)
 
-    def repo_to_work_path(self, prefix, file):
+    def repo_to_work_path(self, mounts, file):
         if os.path.commonpath((file, "/.vex")) == '/.vex':
             return objects.Path(os.path.join(".vex/settings", os.path.relpath(file, '/.vex')))
         # normalize name to NFC?
-        return objects.Path(os.path.relpath(file, prefix))
+        return objects.Path(os.path.relpath(file, mounts))
 
-    def work_to_repo_path(self, prefix, file):
+    def work_to_repo_path(self, mounts, file):
         file = os.path.join(self.working_dir, file.p)
-        return self.full_to_repo_path(prefix, file)
+        return self.full_to_repo_path(mounts, file)
 
-    def full_to_repo_path(self, prefix, file):
+    def full_to_repo_path(self, mounts, file):
         if os.path.commonpath((self.settings.dir, file)) == self.settings.dir:
             filename = os.path.relpath(file, self.settings.dir)
             return ("/.vex" if filename == "." else os.path.join("/.vex", filename))
@@ -1141,8 +1141,8 @@ class Project:
         # normalize name to NFC?
         filename = os.path.relpath(file, self.working_dir)
         if filename == '.':
-            return prefix
-        return os.path.join(prefix, filename)
+            return mounts
+        return os.path.join(mounts, filename)
 
     __locked = object()
 
@@ -1287,12 +1287,12 @@ class Project:
 
     def apply_switch(self, kind, prefix, session):
         if prefix:
-            active_prefix = self.prefix()
+            active_prefix = self.mounts()
             new_prefix = prefix[kind]
             if (kind =='new' and active_prefix != prefix['old']) or (kind =='old' and active_prefix != prefix['new']):
                 raise VexCorruption('switch out of sync')
         else:
-            active_prefix, new_prefix = self.prefix(), self.prefix()
+            active_prefix, new_prefix = self.mounts(), self.mounts()
 
         if session:
             active_session = self.state.get("active")
@@ -1342,7 +1342,7 @@ class Project:
         return session
 
     def clear_session(self, prefix, session):
-        if prefix != self.prefix() or session.uuid != self.state.get("active"):
+        if prefix != self.mounts() or session.uuid != self.state.get("active"):
             raise VexBug('no')
         dirs = set()
         for repo_name, entry in session.files.items():
@@ -1404,7 +1404,7 @@ class Project:
             else:
                 raise VexBug('kind')
         self.sessions.set(session.uuid, session)
-        self.state.set('prefix', prefix)
+        self.state.set('mounts', prefix)
         self.state.set('active', session.uuid)
 
 
@@ -1481,7 +1481,7 @@ class Project:
 
         self.state.set("author", author_uuid)
         self.state.set("active", session_uuid)
-        self.state.set("prefix", prefix)
+        self.state.set("mounts", prefix)
 
 
     def prepare(self, files):
@@ -1806,7 +1806,7 @@ def switch(prefix):
     p = get_project()
 
     with p.lock('switch') as p:
-        prefix = os.path.join(p.prefix(), prefix)
+        prefix = os.path.join(p.mounts(), prefix)
         p.switch(prefix)
 
 vex_undo = vex_cmd.subcommand('undo')
