@@ -342,6 +342,7 @@ class objects:
         def __init__(self, kind, state, path, addr=None, stash=None, stat=None, properties=None):
             if kind not in self.Kinds: raise VexBug('bad')
             if state not in self.States: raise VexBug('bad')
+            if path != None and not isinstance(path, objects.Path): raise Exception('bad')
             self.kind = kind
             self.state = state
             self.path = path
@@ -633,11 +634,12 @@ class StatusChange:
         for name, entry in copy.files.items():
             if entry.state == 'invisible':
                 continue
+            path = os.path.join(self.project.working_dir, entry.path.p)
             if entry.kind == "file":
-                if not os.path.exists(entry.path):
+                if not os.path.exists(path):
                     entry.state = "deleted"
                     entry.addr, entry.properties = None, None
-                elif os.path.isdir(entry.path):
+                elif os.path.isdir(path):
                     entry.state = "replaced"
                     entry.kind = "dir"
                 elif entry.state == 'added' or entry.state == 'replaced':
@@ -645,11 +647,11 @@ class StatusChange:
                 elif entry.state == 'deleted':
                     pass
                 elif entry.state == 'stashed':
-                    new_addr = self.project.files.addr_for_file(entry.path)
+                    new_addr = self.project.files.addr_for_file(path)
                     if new_addr != entry.stash:
                         entry.state = "modified"
                 elif entry.state == 'tracked':
-                    new_addr = self.project.files.addr_for_file(entry.path)
+                    new_addr = self.project.files.addr_for_file(path)
                     if new_addr != entry.addr:
                         entry.state = "modified"
                 elif entry.state == 'modified':
@@ -657,10 +659,10 @@ class StatusChange:
                 else:
                     raise VexBug('welp')
             elif entry.kind == "dir":
-                if not os.path.exists(entry.path):
+                if not os.path.exists(path):
                     entry.state = "deleted"
                     entry.properties = None
-                elif os.path.isfile(entry.path):
+                elif os.path.isfile(path):
                     entry.state = "replaced"
                     entry.properties = {}
                     entry.addr = None 
@@ -707,7 +709,7 @@ class ProjectChange:
     def active(self):
         return self.get_session(self.active_uuid)
 
-    def repo_to_work_path(se`lf, file):
+    def repo_to_work_path(self, file):
         return self.project.repo_to_work_path(self.prefix(),file)
 
     def repo_to_full_path(self, file):
@@ -780,7 +782,7 @@ class ProjectChange:
 
         for repo_name in files_to_check:
             entry = active.files[repo_name]
-            filename = entry.path
+            filename = os.path.join(self.project.working_dir, entry.path.p)
             # and stashed items...? eh nm
             if entry.kind == 'file':
                 if entry.state == "added":
@@ -911,7 +913,7 @@ class ProjectChange:
                         tree_addr = apply_changes(os.path.join(prefix, name), None)
                         entries[name] = objects.Dir(tree_addr, change.properties)
                     elif isinstance(change, (objects.AddFile, objects.NewFile)):
-                        file_addr = self.put_file(self.repo_to_work_path(os.path.join(prefix,name)))
+                        file_addr = self.put_file(self.repo_to_full_path(os.path.join(prefix,name)))
                         entries[name] = objects.File(file_addr, change.properties)
                     else:
                         raise VexBug('nope {}'.format(change))
@@ -1282,19 +1284,20 @@ class Project:
         for name, entry in session.files.items():
             new_addr = None
             if entry.kind == "file":
-                if not os.path.exists(entry.path):
+                path = os.path.join(self.working_dir, entry.path.p)
+                if not os.path.exists(path):
                     entry.state = "deleted"
                     entry.addr, entry.properties = None, None
-                elif os.path.isdir(entry.path):
+                elif os.path.isdir(path):
                     entry.state = "replaced"
                     entry.kind = "file"
                 elif entry.state == 'tracked':
-                    new_addr = self.scratch.addr_for_file(entry.path)
+                    new_addr = self.scratch.addr_for_file(path)
                     if new_addr != entry.addr:
                         entry.state = "modified"
 
             if entry.kind == 'file' and entry.state in ('added', 'replaced', 'modified'):
-                entry.stash = self.scratch.put_file(entry.path, new_addr)
+                entry.stash = self.scratch.put_file(path, new_addr)
             else:
                 entry.stash = None
 
@@ -1312,16 +1315,18 @@ class Project:
             if entry.kind == "ignore" or entry.state == "invisible":
                 continue
 
+            path = os.path.join(self.working_dir, entry.path.p)
+
             if entry.kind == "file":
-                if os.path.commonpath((entry.path, self.working_dir)) != self.working_dir:
+                if os.path.commonpath((path, self.working_dir)) != self.working_dir:
                     raise VexBug('file outside of working dir inside tracked')
-                if not os.path.isfile(entry.path):
+                if not os.path.isfile(path):
                     raise VexBug('sync')
-                os.remove(entry.path)
+                os.remove(path)
             elif entry.kind == "dir":
-                if os.path.commonpath((entry.path, self.working_dir)) != self.working_dir:
+                if os.path.commonpath((path, self.working_dir)) != self.working_dir:
                     raise VexBug('file outside of working dir inside tracked')
-                dirs.add(entry.path)
+                dirs.add(path)
             else:
                 raise VexBug('no')
         for dir in sorted(dirs, reverse=True, key=lambda x: x.split("/")):
@@ -1337,15 +1342,15 @@ class Project:
     def restore_session(self, prefix, session):
         for name in sorted(session.files, key=lambda x:x.split('/')):
             entry = session.files[name]
-            path = self.repo_to_full__path(prefix, name) 
             entry.path = self.repo_to_work_path(prefix, name)
-            #print(entry.path, entry.addr, entry.state)
             if entry.kind == 'ignore':
                 continue
             elif os.path.commonpath((name, prefix)) != prefix and os.path.commonpath((name, '/.vex'), '/.vex') != '/.vex':
                 entry.state = "invisible"
                 entry.path = None
                 continue
+
+            path = self.repo_to_full_path(prefix, name) 
 
             if entry.kind =='dir':
                 os.makedirs(path, exist_ok=True)
@@ -1421,7 +1426,8 @@ class Project:
             txn.set_name(branch_name, branch) 
 
             session_uuid = UUID()
-            files = {prefix : objects.Tracked('dir', 'tracked', self.working_dir)}
+            path = self.repo_to_work_path(prefix, prefix)
+            files = {prefix : objects.Tracked('dir', 'tracked', path )}
             session = objects.Session(session_uuid, branch_uuid, commit_uuid, commit_uuid, files)
             txn.put_session(session)
         self.state.set("active", session_uuid)
@@ -1500,7 +1506,10 @@ class Project:
                 if not filename.startswith(self.working_dir):
                     raise VexError("{} is outside project".format(filename))
                 name = txn.full_to_repo_path(filename)
-                names[name] = filename
+                if os.path.isfile(filename):
+                    names[name] = filename
+                elif os.path.isdir(filename):
+                    dirs[name] = filename
                 name = os.path.split(name)[0]
                 filename = os.path.split(filename)[0]
                 while name != '/':
@@ -1511,23 +1520,19 @@ class Project:
             new_files = {}
 
             for name, filename in dirs.items():
+                filename = txn.repo_to_work_path(name)
                 if name in session.files and session.files[name].kind == 'file':
                     new_files[name] = objects.Tracked('dir', "replaced", filename, properties={})
                 else:
                     new_files[name] = objects.Tracked('dir', "added", filename, properties={})
 
             for name, filename in names.items():
-                if os.path.isdir(filename):
-                    if name in session.files and session.files[name].kind == 'file':
-                        new_files[name] = objects.Tracked('dir', "replaced", filename, properties={})
-                    else:
-                        new_files[name] = objects.Tracked('dir', "added", filename, properties={})
-                elif os.path.isfile(filename):
-                    if name in session.files:
-                        state = 'modified' if session.files[name].kind == 'file' else 'replaced'
-                        new_files[name] = objects.Tracked('file', state, filename, properties={})
-                    else:
-                        new_files[name] = objects.Tracked('file',"added", filename, properties={})
+                filename = txn.repo_to_work_path(name)
+                if name in session.files:
+                    state = 'modified' if session.files[name].kind == 'file' else 'replaced'
+                    new_files[name] = objects.Tracked('file', state, filename, properties={})
+                else:
+                    new_files[name] = objects.Tracked('file',"added", filename, properties={})
 
             txn.update_active_files(new_files)
 
@@ -1545,9 +1550,11 @@ class Project:
             new_files = {}
 
             for name, filename in names.items():
+                filename = txn.repo_to_work_path(name)
                 if name in session.files:
                     new_files[name] = objects.Tracked('file', "deleted", filename, properties={})
             for name, filename in dirs.items():
+                filename = txn.repo_to_work_path(name)
                 if name in session.files:
                     new_files[name] = objects.Tracked('dir', "deleted", filename, properties={})
 
@@ -1714,7 +1721,7 @@ def Status():
                 path = os.path.relpath(reponame, '/.vex')
                 yield "{}:{:8}\t{}".format('setting', entry.state, path)
             else:
-                path = os.path.relpath(entry.path, cwd)
+                path = os.path.relpath(os.path.join(p.working_dir, entry.path.p), cwd)
                 yield "{:16}\t{} as {}".format(entry.state, path, reponame)
 
 vex_switch = vex_cmd.subcommand('switch')
