@@ -733,9 +733,11 @@ class ProjectChange:
         session_uuid = self.get_state("active")
         return self.get_session(session_uuid)
 
-    def update_active_files(self, files):
+    def update_active_files(self, files, remove):
         active = self.active()
         active.files.update(files)
+        for r in remove:
+            active.files.pop(r)
         self.put_session(active)
 
     def set_active_prepare(self, prepare_uuid):
@@ -1592,7 +1594,7 @@ class Project:
                 else:
                     new_files[name] = objects.Tracked('file',"added", filename, properties={})
 
-            txn.update_active_files(new_files)
+            txn.update_active_files(new_files, ())
 
     def forget(self, files):
         with self.do('forget') as txn:
@@ -1606,19 +1608,27 @@ class Project:
                 names[name] = filename
 
             new_files = {}
+            # forget directory contents
+            gone_files = []
 
             for name, filename in names.items():
                 filename = txn.repo_to_work_path(name)
                 if name in session.files:
-                    kind = session.files[name].replace or 'file'
-                    new_files[name] = objects.Tracked(kind, "deleted", filename, properties={})
+                    if session.files[name].state == 'added':
+                        gone_files.add(name)
+                    else:
+                        kind = session.files[name].replace or 'file'
+                        new_files[name] = objects.Tracked(kind, "deleted", filename, properties={})
             for name, filename in dirs.items():
                 filename = txn.repo_to_work_path(name)
                 if name in session.files:
-                    kind = session.files[name].replace or 'dir'
-                    new_files[name] = objects.Tracked(kind, "deleted", filename, properties={})
+                    if session.files[name].state == 'added':
+                        gone_files.add(name)
+                    else:
+                        kind = session.files[name].replace or 'dir'
+                        new_files[name] = objects.Tracked(kind, "deleted", filename, properties={})
 
-            txn.update_active_files(new_files)
+            txn.update_active_files(new_files, gone_files)
 
     def ignore(self, files):
         pass
