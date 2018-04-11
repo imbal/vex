@@ -325,6 +325,10 @@ class objects:
             self.files = files
             self.mode = mode
             self.state = state
+    @codec.register
+    class Path:
+        def __init__(self, p):
+            self.p = p
 
     @codec.register
     class Tracked:
@@ -703,11 +707,17 @@ class ProjectChange:
     def active(self):
         return self.get_session(self.active_uuid)
 
-    def to_file_path(self, file):
-        return self.project.to_file_path(self.prefix(),file)
+    def repo_to_work_path(se`lf, file):
+        return self.project.repo_to_work_path(self.prefix(),file)
 
-    def to_repo_path(self, file):
-        return self.project.to_repo_path(self.prefix(),file)
+    def repo_to_full_path(self, file):
+        return self.project.repo_to_full_path(self.prefix(),file)
+
+    def work_to_repo_path(self, file):
+        return self.project.work_to_repo_path(self.prefix(),file)
+
+    def full_to_repo_path(self, file):
+        return self.project.full_to_repo_path(self.prefix(),file)
 
     def prefix(self):
         return self.get_state("prefix")
@@ -739,7 +749,7 @@ class ProjectChange:
     def update_active_changes(self, changes):
         working = self.active()
         for file, change in changes.items():
-            filename = self.to_file_path(file)
+            filename = self.repo_to_work_path(file)
             if isinstance(change, objects.AddFile):
                 working.files[file] = objects.Tracked("file", "tracked", filename, addr=change.addr, properties=change.properties)
             elif isinstance(change, objects.DeleteFile):
@@ -814,7 +824,7 @@ class ProjectChange:
     def store_changed_files(self, changes):
         active = self.active()
         for file, change in changes.items():
-            filename = self.to_file_path(file)
+            filename = self.repo_to_full_path(file)
             if os.path.isfile(filename) and isinstance(change, (objects.AddFile, objects.ChangeFile, objects.AddDir, objects.ChangeDir)):
                 addr = self.put_file(filename)
                 if addr != change.addr:
@@ -858,7 +868,7 @@ class ProjectChange:
                             if not isinstance(entry, objects.File):
                                 raise VexUnfinished(entry)
                             if entry.addr != change.addr:
-                                new_addr = self.put_file(self.to_file_path(path))
+                                new_addr = self.put_file(self.repo_to_full_path(path))
                                 entries[name] = objects.File(new_addr, change.properties)
                             else:
                                 entries[name] = objects.File(entry.addr, change.properties)
@@ -871,7 +881,7 @@ class ProjectChange:
                             tree_addr = apply_changes(os.path.join(prefix, name), None)
                             entries[name] = objects.Dir(tree_addr, change.properties)
                         elif isinstance(change, objects.AddFile):
-                            file_addr = self.put_file(self.to_file_path(path))
+                            file_addr = self.put_file(self.repo_to_full_path(path))
                             entries[name] = objects.File(file_addr, change.properties)
                         else:
                             raise VexBug('nope')
@@ -901,7 +911,7 @@ class ProjectChange:
                         tree_addr = apply_changes(os.path.join(prefix, name), None)
                         entries[name] = objects.Dir(tree_addr, change.properties)
                     elif isinstance(change, (objects.AddFile, objects.NewFile)):
-                        file_addr = self.put_file(self.to_file_path(os.path.join(prefix,name)))
+                        file_addr = self.put_file(self.repo_to_work_path(os.path.join(prefix,name)))
                         entries[name] = objects.File(file_addr, change.properties)
                     else:
                         raise VexBug('nope {}'.format(change))
@@ -1075,13 +1085,21 @@ class Project:
     def clean_state(self):
         return self.actions.clean_state()
 
-    def to_file_path(self, prefix, file):
+    def repo_to_full_path(self, prefix, file):
+        path = self.repo_to_work_path(prefix, file).p
+        return os.path.join(self.working_dir, path)
+
+    def repo_to_work_path(self, prefix, file):
         if os.path.commonpath((file, "/.vex")) == '/.vex':
             return os.path.join(self.settings.dir, os.path.relpath(file, "/.vex"))
         # normalize name to NFC?
-        return os.path.join(self.working_dir, os.path.relpath(file, prefix))
+        return objects.Path(os.path.relpath(file, prefix))
 
-    def to_repo_path(self, prefix, file):
+    def work_to_repo_path(self, prefix, file):
+        file = os.path.join(self.working_dir, file.p)
+        return self.full_to_repo_path(prefix, file)
+
+    def full_to_repo_path(self, prefix, file):
         if os.path.commonpath((self.settings.dir, file)) == self.settings.dir:
             filename = os.path.relpath(file, self.settings.dir)
             return ("/.vex" if filename == "." else os.path.join("/.vex", filename))
@@ -1319,8 +1337,8 @@ class Project:
     def restore_session(self, prefix, session):
         for name in sorted(session.files, key=lambda x:x.split('/')):
             entry = session.files[name]
-            path = self.to_file_path(prefix, name) 
-            entry.path = path
+            path = self.repo_to_full__path(prefix, name) 
+            entry.path = self.repo_to_work_path(prefix, name)
             #print(entry.path, entry.addr, entry.state)
             if entry.kind == 'ignore':
                 continue
@@ -1413,7 +1431,7 @@ class Project:
     def prepare(self, files):
         with self.do('prepare') as txn:
             session = txn.refresh_active()
-            files = [txn.to_repo_path(filename) for filename in files] if files else None
+            files = [txn.full_to_repo_path(filename) for filename in files] if files else None
             commit = session.prepare
 
             old_uuid = commit
@@ -1439,7 +1457,7 @@ class Project:
     def commit(self, files):
         with self.do('commit') as txn:
             session = txn.refresh_active()
-            files = [txn.to_repo_path(filename) for filename in files] if files else None
+            files = [txn.full_to_repo_path(filename) for filename in files] if files else None
 
             changes = {}
             old_uuid = session.prepare
@@ -1481,7 +1499,7 @@ class Project:
             for filename in files:
                 if not filename.startswith(self.working_dir):
                     raise VexError("{} is outside project".format(filename))
-                name = txn.to_repo_path(filename)
+                name = txn.full_to_repo_path(filename)
                 names[name] = filename
                 name = os.path.split(name)[0]
                 filename = os.path.split(filename)[0]
@@ -1521,7 +1539,7 @@ class Project:
             for filename in files:
                 if not filename.startswith(self.working_dir):
                     raise VexError("{} is outside project".format(filename))
-                name = txn.to_repo_path(filename)
+                name = txn.full_to_repo_path(filename)
                 names[name] = filename
 
             new_files = {}
