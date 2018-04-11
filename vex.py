@@ -202,10 +202,10 @@ class objects:
     # Changelog and entries
     @codec.register
     class Changelog:
-        def __init__(self, prev, summary, changes, message):
+        def __init__(self, prev, summary, author, changes, message):
             self.prev = prev
-            # author_uuid ...
             self.summary = summary
+            self.author = author
             self.message = message
             self.changes = changes
 
@@ -825,8 +825,6 @@ class ProjectChange:
                         out[repo_name]=objects.DeleteFile()
                     else:
                         out[repo_name]=objects.DeleteDir()
-                elif entry.state == 'tracked':
-                    out[repo_name]=objects.DeleteDir()
                 elif entry.state == 'tracked':
                     pass
                 else:
@@ -1448,6 +1446,7 @@ class Project:
         if not prefix.startswith('/'):
             raise VexArgument('crap prefix')
         with self.do('init') as txn:
+            author_uuid = UUID() 
             branch_uuid = UUID()
 
             project_uuid = None
@@ -1460,7 +1459,7 @@ class Project:
                     prefix : objects.AddDir({}),
                     '/.vex' : objects.AddDir({}),
             }
-            changelog = objects.Changelog(prev=None, summary="init", message="", changes=changes)
+            changelog = objects.Changelog(prev=None, summary="init", message="", changes=changes, author=author_uuid)
             changelog_uuid = txn.put_manifest(changelog)
 
             commit = objects.Start(txn.now, uuid=branch_uuid, changelog=changelog_uuid, root=root_uuid)
@@ -1479,6 +1478,8 @@ class Project:
             }
             session = objects.Session(session_uuid, branch_uuid, commit_uuid, commit_uuid, files)
             txn.put_session(session)
+
+        self.state.set("author", author_uuid)
         self.state.set("active", session_uuid)
         self.state.set("prefix", prefix)
 
@@ -1522,6 +1523,7 @@ class Project:
                 changes.update(old.changes)
                 old_uuid = old.prev
                 old = txn.get_change(old.prev)
+                print()
 
             my_changes = txn.active_changes(files)
 
@@ -1538,7 +1540,9 @@ class Project:
             txn.store_changed_files(my_changes)
             txn.update_active_changes(my_changes)
 
-            changelog = objects.Changelog(prev=old.changelog, summary="Summary", message="Message", changes=changes)
+            author = txn.get_state('author')
+
+            changelog = objects.Changelog(prev=old.changelog, summary="Summary", message="Message", changes=changes, author=author)
             changelog_uuid = txn.put_manifest(changelog)
 
 
