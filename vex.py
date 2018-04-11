@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-import sqlite3
 import os.path
 import os
 import shutil
 import hashlib
 import fcntl
+import time
 from datetime import datetime, timezone
 from uuid import uuid4
 from contextlib import contextmanager
@@ -15,6 +15,8 @@ import rson
 def UUID(): return str(uuid4())
 def NOW(): return datetime.now(timezone.utc)
 DOTVEX = '.vex'
+
+MTIME_GRACE_SECONDS = 1
 
 class VexError(Exception): pass
 
@@ -75,7 +77,7 @@ class objects:
             self.changelog = changelog
 
         def next_n(self, kind):
-            if kind == "amend":
+            if kind == objects.Amend:
                 return self.n
             return self.n+1
 
@@ -89,7 +91,7 @@ class objects:
             self.changelog = changelog
 
         def next_n(self, kind):
-            if kind == "amend":
+            if kind == objects.Amend:
                 return self.n
             return self.n+1
 
@@ -112,7 +114,7 @@ class objects:
             self.changelog = changelog
 
         def next_n(self, kind):
-            if kind == "amend":
+            if kind == objects.Amend:
                 return self.n
             return self.n+1
 
@@ -127,7 +129,9 @@ class objects:
             self.changes = changes
 
         def next_n(self, kind):
-            if kind in ("commit", "prepare"):
+            if kind == objects.Amend:
+                raise VexBug('what')
+            if kind in (objects.Commit, objects.Prepare):
                 return self.n
             return self.n+1
 
@@ -142,13 +146,13 @@ class objects:
             self.changelog = changelog
 
         def next_n(self, kind):
-            if kind == "amend":
+            if kind == objects.Amend:
                 return self.n
             return self.n+1
 
     @codec.register
     class Amend:
-        def __init__(self, n, timestamp, *, prev, root, changelog):
+        def __init__(self, n, timestamp, *, prev, root, changelog, prepared=None):
             self.n =n
             self.prev = prev
             self.timestamp = timestamp
@@ -156,7 +160,7 @@ class objects:
             self.changelog = changelog
 
         def next_n(self, kind):
-            if kind == "amend":
+            if kind == objects.Amend:
                 return self.n
             return self.n+1
 
@@ -344,7 +348,7 @@ class objects:
         Unchanged = set(('tracked'))
         Changed = set(('added', 'modified', 'deleted', 'replaced'))
 
-        def __init__(self, kind, state, path, addr=None, stash=None, stat=None, properties=None, replace=None):
+        def __init__(self, kind, state, path, addr=None, stash=None, mtime=None, properties=None, replace=None):
             if kind not in self.Kinds: raise VexBug('bad')
             if state not in self.States: raise VexBug('bad')
             if path != None and not isinstance(path, objects.Path): raise Exception('bad')
@@ -352,9 +356,10 @@ class objects:
             self.state = state
             self.path = path
             self.addr = addr
-            self.stat = stat
+            self.mtime = mtime
             self.stash = stash
             self.properties = properties
+
 
 # Stores
 
@@ -649,6 +654,7 @@ class StatusChange:
             if entry.kind == "file":
                 if not os.path.exists(path):
                     entry.state = "deleted"
+                    entry.kind = entry.replace or entry.kind
                     entry.addr, entry.properties = None, None
                 elif os.path.isdir(path):
                     if not entry.replace: entry.replace = entry.kind
@@ -659,15 +665,26 @@ class StatusChange:
                 elif entry.state == 'deleted':
                     pass
                 elif entry.state == 'tracked':
-                    new_addr = self.project.files.addr_for_file(path)
-                    if new_addr != entry.addr:
+                    old_mtime = entry.mtime
+                    if old_mtime is None:
+                        new_addr = self.project.files.addr_for_file(path)
+                        if new_addr != entry.addr:
+                            entry.state = "modified"
+                            entry.mtime = None
+                        else:
+                            new_mtime = os.path.getmtime(path)
+                            if time.time() - new_mtime >= MTIME_GRACE_SECONDS:
+                                entry.mtime = new_mtime
+                    elif (old_mtime < os.path.getmtime(path)):
                         entry.state = "modified"
+                        entry.mtime = None
                 elif entry.state == 'modified':
                     pass
                 else:
                     raise VexBug('welp')
             elif entry.kind == "dir":
                 if not os.path.exists(path):
+                    entry.kind = entry.replace or entry.kind
                     entry.state = "deleted"
                     entry.properties = None
                 elif os.path.isfile(path):
@@ -759,18 +776,33 @@ class ProjectChange:
         working = self.active()
         for file, change in changes.items():
             filename = working.files[file].path
-            if isinstance(change, objects.AddFile):
-                working.files[file] = objects.Tracked("file", "tracked", filename, addr=change.addr, properties=change.properties)
-            elif isinstance(change, objects.DeleteFile):
+
+            if isinstance(change, objects.DeleteDir):
                 working.files.pop(file)
-            elif isinstance(change, objects.ChangeFile):
-                working.files[file] = objects.Tracked("file", "tracked",  filename, addr=change.addr, properties=change.properties)
-            elif isinstance(change, objects.AddDir):
-                working.files[file] = objects.Tracked("dir", "tracked",  filename, properties=change.properties)
-            elif isinstance(change, objects.DeleteFile):
+            if isinstance(change, objects.DeleteFile):
                 working.files.pop(file)
-            elif isinstance(change, objects.ChangeDir):
-                working.files[file] = objects.Tracked("dir", "tracked", filename, properties=change.properties)
+            else:
+                if filename:
+                    entry = working.files[file]
+                    path = self.project.repo_to_full_path(self.mounts(), file)
+                    mtime = os.path.getmtime(path)
+                    if (time.time() - mtime) < MTIME_GRACE_SECONDS:
+                        mtime = None
+                else:
+                    mtime = None
+
+                if isinstance(change, objects.AddFile):
+                    working.files[file] = objects.Tracked("file", "tracked", filename, addr=change.addr, properties=change.properties, mtime=mtime)
+                elif isinstance(change, objects.ChangeFile):
+                    working.files[file] = objects.Tracked("file", "tracked",  filename, addr=change.addr, properties=change.properties, mtime=mtime)
+                elif isinstance(change, objects.AddDir):
+                    working.files[file] = objects.Tracked("dir", "tracked",  filename, properties=change.properties, mtime=mtime)
+                elif isinstance(change, objects.ChangeDir):
+                    working.files[file] = objects.Tracked("dir", "tracked", filename, properties=change.properties, mtime=mtime)
+                else:
+                    raise VexBug(change)
+
+
         self.put_session(working)
 
     def active_changes(self, files=None):
@@ -1367,6 +1399,8 @@ class Project:
             else:
                 raise VexBug('no')
             entry.path = None
+            entry.mtime = None
+
         for dir in sorted(dirs, reverse=True, key=lambda x: x.split("/")):
             if dir in (self.working_dir, self.settings.dir):
                 continue
@@ -1382,9 +1416,11 @@ class Project:
             entry = session.files[name]
             if os.path.commonpath((name, prefix)) != prefix and os.path.commonpath((name, '/.vex')) != '/.vex':
                 entry.path = None
+                entry.mtime = None
                 continue
             else:
                 entry.path = self.repo_to_work_path(prefix, name)
+                entry.mtime = None
             if entry.kind == 'ignore':
                 continue
 
@@ -1499,6 +1535,9 @@ class Project:
 
             changes = txn.active_changes(files)
 
+            if not changes:
+                return False
+
             if commit == old_uuid:
                 commit = None
 
@@ -1510,7 +1549,7 @@ class Project:
 
             txn.set_active_prepare(prepare_uuid)
 
-    def commit(self, files):
+    def commit(self, files, kind=objects.Commit):
         with self.do('commit') as txn:
             session = txn.refresh_active()
             files = [txn.full_to_repo_path(filename) for filename in files] if files else None
@@ -1518,7 +1557,7 @@ class Project:
             changes = {}
             old_uuid = session.prepare
             old = txn.get_change(session.prepare)
-            n = old.next_n('commit')
+            n = old.next_n(kind)
             while old.n == n:
                 changes.update(old.changes)
                 old_uuid = old.prev
@@ -1545,8 +1584,7 @@ class Project:
             changelog = objects.Changelog(prev=old.changelog, summary="Summary", message="Message", changes=changes, author=author)
             changelog_uuid = txn.put_manifest(changelog)
 
-
-            commit = objects.Commit(n, txn.now, prev=old_uuid, prepared=session.prepare, root=root_uuid, changelog=changelog_uuid)
+            commit = kind(n=n, timestamp=txn.now, prev=old_uuid, prepared=session.prepare, root=root_uuid, changelog=changelog_uuid)
             commit_uuid = txn.put_change(commit)
 
             txn.set_active_commit(commit_uuid)

@@ -21,17 +21,17 @@ This README assumes some familiarily with `git`, `hg`, or `svn`
 
 ## `vex` vs ....
 
+For `hg` users:
+
+- `vex branch` works like `hg bookmark` or `git branch` 
+- Almost everything else works the same on the outside (except `hg merge`)
+
 For `git` users:
 
 - branches that automatically stash and unstash
 - a linear history without having to rebase or untangle merge commits
 - using a modern hash algorithm
-
-For `hg` users:
-
-- `vex branch` works like `hg bookmark` or `git branch` 
-- Almost everything else works the same on the outside (except `hg merge`)
-- git-like content
+- tracks empty directories
 
 For `svn` users:
 
