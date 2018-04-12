@@ -5,6 +5,8 @@ import shutil
 import hashlib
 import fcntl
 import time
+import subprocess
+
 from datetime import datetime, timezone
 from uuid import uuid4
 from contextlib import contextmanager
@@ -706,13 +708,88 @@ class StatusChange:
             elif entry.kind == "ignore":
                 pass
 
-
-
         self.put_session(copy)
         return copy
 
+    def active_changes(self, files=None):
+        active = self.active()
+        out = {}
+        if not files:
+            files_to_check = active.files.keys()
+        else:
+            # add prefixes to list
+            files_to_check = set()
+            for file in files:
+                old = file
+                while old != '/':
+                    files_to_check.add(old)
+                    old = os.path.split(old)[0]
+
+        for repo_name in files_to_check:
+            entry = active.files[repo_name]
+            # and stashed items...? eh nm
+            if entry.kind == 'file':
+                if entry.state == "added":
+                    filename = os.path.join(self.project.working_dir, entry.path.p)
+                    addr = self.project.scratch.addr_for_file(filename)
+                    out[repo_name]=objects.AddFile(addr, properties=entry.properties)
+                elif entry.state == "replaced":
+                    filename = os.path.join(self.project.working_dir, entry.path.p)
+                    addr = self.project.scratch.addr_for_file(filename)
+                    out[repo_name]=objects.NewFile(addr, properties=entry.properties)
+                elif entry.state == "modified":
+                    filename = os.path.join(self.project.working_dir, entry.path.p)
+                    addr = self.project.scratch.addr_for_file(filename)
+                    if addr != entry.addr:
+                        out[repo_name]=objects.ChangeFile(addr, properties=entry.properties)
+                elif entry.state == "deleted":
+                    if entry.replace == "dir":
+                        out[repo_name]=objects.DeleteDir()
+                    else:
+                        out[repo_name]=objects.DeleteFile()
+                elif entry.state == 'tracked':
+                    pass
+                else:
+                    raise VexBug('state {}'.format(entry.state))
+            elif entry.kind =='dir':
+                if entry.state == "added":
+                    out[repo_name]=objects.AddDir(properties=entry.properties)
+                elif entry.state == "replaced":
+                    out[repo_name]=objects.NewDir(properties=entry.properties)
+                elif entry.state == "modified":
+                    out[repo_name]=objects.ChangeDir(properties=entry.properties)
+                elif entry.state == "deleted":
+                    if entry.replace == "file":
+                        out[repo_name]=objects.DeleteFile()
+                    else:
+                        out[repo_name]=objects.DeleteDir()
+                elif entry.state == 'tracked':
+                    pass
+                else:
+                    raise VexBug('state {}'.format(entry.state))
+            elif entry.kind == 'stash':
+                if entry.state == "added":
+                    addr = entry.stash
+                    out[repo_name]=objects.AddFile(addr, properties=entry.properties)
+                elif entry.state == "replaced":
+                    addr = entry.stash
+                    out[repo_name]=objects.NewFile(addr, properties=entry.properties)
+                elif entry.state == "modified":
+                    addr = entry.stash
+                    if addr != entry.addr:
+                        out[repo_name]=objects.ChangeFile(addr, properties=entry.properties)
+                else:
+                    raise VexBug('state {}'.format(entry.state))
+            elif entry.kind == 'ignore':
+                pass
+            else:
+                raise VexBug('kind')
+
+        return out
+
 class ProjectChange:
     refresh_active = StatusChange.refresh_active
+    active_changes = StatusChange.active_changes
 
     def __init__(self, project, scratch, command):
         self.project = project
@@ -805,82 +882,6 @@ class ProjectChange:
 
         self.put_session(working)
 
-    def active_changes(self, files=None):
-        active = self.active()
-        out = {}
-        if not files:
-            files_to_check = active.files.keys()
-        else:
-            # add prefixes to list
-            files_to_check = set()
-            for file in files:
-                old = file
-                while old != '/':
-                    files_to_check.add(old)
-                    old = os.path.split(old)[0]
-
-        for repo_name in files_to_check:
-            entry = active.files[repo_name]
-            # and stashed items...? eh nm
-            if entry.kind == 'file':
-                if entry.state == "added":
-                    filename = os.path.join(self.project.working_dir, entry.path.p)
-                    addr = self.scratch.addr_for_file(filename)
-                    out[repo_name]=objects.AddFile(addr, properties=entry.properties)
-                elif entry.state == "replaced":
-                    filename = os.path.join(self.project.working_dir, entry.path.p)
-                    addr = self.scratch.addr_for_file(filename)
-                    out[repo_name]=objects.NewFile(addr, properties=entry.properties)
-                elif entry.state == "modified":
-                    filename = os.path.join(self.project.working_dir, entry.path.p)
-                    addr = self.scratch.addr_for_file(filename)
-                    if addr != entry.addr:
-                        out[repo_name]=objects.ChangeFile(addr, properties=entry.properties)
-                elif entry.state == "deleted":
-                    if entry.replace == "dir":
-                        out[repo_name]=objects.DeleteDir()
-                    else:
-                        out[repo_name]=objects.DeleteFile()
-                elif entry.state == 'tracked':
-                    pass
-                else:
-                    raise VexBug('state {}'.format(entry.state))
-            elif entry.kind =='dir':
-                if entry.state == "added":
-                    out[repo_name]=objects.AddDir(properties=entry.properties)
-                elif entry.state == "replaced":
-                    out[repo_name]=objects.NewDir(properties=entry.properties)
-                elif entry.state == "modified":
-                    out[repo_name]=objects.ChangeDir(properties=entry.properties)
-                elif entry.state == "deleted":
-                    if entry.replace == "file":
-                        out[repo_name]=objects.DeleteFile()
-                    else:
-                        out[repo_name]=objects.DeleteDir()
-                elif entry.state == 'tracked':
-                    pass
-                else:
-                    raise VexBug('state {}'.format(entry.state))
-            elif entry.kind == 'stash':
-                if entry.state == "added":
-                    addr = entry.stash
-                    out[repo_name]=objects.AddFile(addr, properties=entry.properties)
-                elif entry.state == "replaced":
-                    addr = entry.stash
-                    out[repo_name]=objects.NewFile(addr, properties=entry.properties)
-                elif entry.state == "modified":
-                    addr = entry.stash
-                    if addr != entry.addr:
-                        out[repo_name]=objects.ChangeFile(addr, properties=entry.properties)
-                else:
-                    raise VexBug('state {}'.format(entry.state))
-            elif entry.kind == 'ignore':
-                pass
-            else:
-                raise VexBug('kind')
-
-        return out
-
     def store_changed_files(self, changes):
         active = self.active()
         for file, change in changes.items():
@@ -921,7 +922,7 @@ class ProjectChange:
                     if changes and name in changes:
                         change = changes.pop(name)
                         if isinstance(change, objects.NewFile):
-                            entries[name] = objects.File(change_addr, change.properties)
+                            entries[name] = objects.File(change.addr, change.properties)
                         elif isinstance(change, objects.NewDir):
                             new_addr = apply_changes(path, entry.addr)
                             entries[name] = objects.Dir(new_addr, change.properties)
@@ -936,7 +937,7 @@ class ProjectChange:
                             if not isinstance(entry, objects.File):
                                 raise VexUnfinished(entry)
                             if entry.addr != change.addr:
-                                entries[name] = objects.File(change_addr, change.properties)
+                                entries[name] = objects.File(change.addr, change.properties)
                             else:
                                 entries[name] = objects.File(entry.addr, change.properties)
                         elif isinstance(change, objects.ChangeDir):
@@ -1475,7 +1476,7 @@ class Project:
         with self.do_nohistory('status') as txn:
             return txn.refresh_active().files
 
-    def init(self, prefix, options):
+    def init(self, prefix, include, ignore):
         self.makedirs()
         if not self.history_isempty():
             raise VexNoHistory('cant reinit')
@@ -1519,6 +1520,22 @@ class Project:
         self.state.set("active", session_uuid)
         self.state.set("mounts", prefix)
 
+    def diff(self, files):
+        with self.do_nohistory('diff') as txn:
+            session = txn.refresh_active()
+            files = [txn.full_to_repo_path(filename) for filename in files] if files else None
+            changes = txn.active_changes(files)
+
+            output = {}
+            for name in changes:
+                e, c = session.files[name], changes[name]
+                if e.kind == 'file':
+                    output[name] = dict(old=self.files.filename(e.addr), new=self.repo_to_full_path(self.mounts(),name))
+            output2 = {}
+            for name, d in output.items():
+                p = subprocess.run(["diff", d['old'], d['new']], stdout=subprocess.PIPE)
+                output2[name] = p.stdout
+            return output2
 
     def prepare(self, files):
         with self.do('prepare') as txn:
@@ -1722,8 +1739,8 @@ def Error(path, args, exception, traceback):
 
 
 vex_init = vex_cmd.subcommand('init')
-@vex_init.run('--working --config --prefix [directory]')
-def Init(directory, working, config, prefix):
+@vex_init.run('--working --config --prefix --include... --ignore... [directory]')
+def Init(directory, working, config, prefix, include, ignore):
     working_dir = working or directory or os.getcwd()
     config_dir = config or os.path.join(working_dir, DOTVEX)
     prefix = prefix or os.path.split(working_dir)[1] or 'root'
@@ -1739,10 +1756,10 @@ def Init(directory, working, config, prefix):
         else:
             yield ('A empty project was round, re-creating project in "{}"...'.format(directory))
             with p.lock('init') as p:
-                p.init(prefix, {})
+                p.init(prefix, include, ignore)
     else:
         yield ('Creating vex project in "{}"...'.format(directory))
-        p.init(prefix, {})
+        p.init(prefix, include, ignore)
         p.makelock()
 
 vex_add = vex_cmd.subcommand('add','add files to the project')
@@ -1770,6 +1787,17 @@ def Forget(file):
         p = get_project()
         with p.lock('forget') as p:
             p.forget(files)
+
+vex_diff = vex_cmd.subcommand('diff')
+@vex_diff.run('[file...]')
+def Diff(file):
+    p = get_project()
+    with p.lock('diff') as p:
+        cwd = os.getcwd()
+        files = [os.path.join(cwd, f) for f in file] if file else None
+        for name, diff in  p.diff(files).items():
+            yield name
+            yield diff
 
 
 vex_prepare = vex_cmd.subcommand('prepare')
