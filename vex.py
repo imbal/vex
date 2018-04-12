@@ -7,6 +7,7 @@ import unicodedata
 import subprocess
 import fcntl
 import time
+import fnmatch
 
 from datetime import datetime, timezone
 from uuid import uuid4
@@ -1166,17 +1167,28 @@ class Project:
     def clean_state(self):
         return self.actions.clean_state()
 
+    def normalize(self, name):
+        return unicodedata.normalize('NFC', name)
+
+    def normalize_files(self, files):
+        output = []
+        for filename in files:
+            filename = os.path.normpath(filename)
+            if not filename.startswith(self.working_dir):
+                raise VexError("{} is outside project".format(filename))
+            output.append(filename)
+        return files
+
     def repo_to_full_path(self, prefix, file):
+        file = os.path.normpath(file)
         if os.path.commonpath((file, "/.vex")) == '/.vex':
             path = os.path.join(".vex/settings", os.path.relpath(file, '/.vex'))
         else:
             path = os.path.relpath(file, prefix)
-        return os.path.join(self.working_dir, path)
-
-    def normalize(self, name):
-        return unicodedata.normalize('NFC', name)
+        return os.path.normpath(os.path.join(self.working_dir, path))
 
     def full_to_repo_path(self, prefix, file):
+        file = os.path.normpath(file)
         if os.path.commonpath((self.settings.dir, file)) == self.settings.dir:
             filename = os.path.relpath(file, self.settings.dir)
             return ("/.vex" if filename == "." else os.path.join("/.vex", filename))
@@ -1491,6 +1503,36 @@ class Project:
         with self.do_nohistory('status') as txn:
             return txn.refresh_active().files
 
+    def list_dir(self, dir):
+        output = []
+        scan = [dir]
+        while scan:
+            dir = scan.pop()
+            for f in os.listdir(dir):
+                if not self.match_filename(f): continue
+                f = os.path.join(dir, f)
+                if os.path.isdir(f):
+                    scan.append(f)
+                    output.append(f)
+                elif os.path.isfile(f):
+                    output.append(f)
+        return output
+
+    def match_filename(self, name):
+        ignore = self.settings.get('ignore')
+        if ignore:
+            if isinstance(ignore, str): ignore = ignore,
+            for rule in ignore:
+                if fnmatch.fnmatch(name, rule):
+                    return False
+
+        include = self.settings.get('include')
+        if include:
+            if isinstance(include, str): include = include,
+            for rule in include:
+                if fnmatch.fnmatch(name, rule):
+                    return True
+
     def init(self, prefix, include, ignore):
         self.makedirs()
         if not self.history_isempty():
@@ -1545,6 +1587,7 @@ class Project:
         self.state.set("prefix", prefix)
 
     def diff(self, files):
+        files = self.normalize_files(files) if files else None
         with self.do_nohistory('diff') as txn:
             session = txn.refresh_active()
             files = [txn.full_to_repo_path(filename) for filename in files] if files else None
@@ -1562,6 +1605,7 @@ class Project:
             return output2
 
     def prepare(self, files):
+        files = self.normalize_files(files) if files else None
         with self.do('prepare') as txn:
             session = txn.refresh_active()
             files = [txn.full_to_repo_path(filename) for filename in files] if files else None
@@ -1591,6 +1635,7 @@ class Project:
             txn.set_active_prepare(prepare_uuid)
 
     def commit(self, files, kind=objects.Commit):
+        files = self.normalize_files(files) if files else None
         with self.do('commit') as txn:
             session = txn.refresh_active()
             files = [txn.full_to_repo_path(filename) for filename in files] if files else None
@@ -1634,16 +1679,13 @@ class Project:
             return True
 
     def add(self, files):
-        for filename in files:
-            if not filename.startswith(self.working_dir):
-                raise VexError("{} is outside project".format(filename))
-            prefix = self.prefix()
-            nfc = self.full_to_repo_path(prefix, filename)
-            path = self.repo_to_full_path(prefix, nfc)
-            if path != filename:
-                raise VexBug('roundtrip')
+        files = self.normalize_files(files)
+
+        added = set()
         with self.do('add') as txn:
             session = txn.refresh_active()
+            to_add = set()
+            new_files = {}
             names = {}
             dirs = {}
             for filename in files:
@@ -1652,14 +1694,22 @@ class Project:
                     names[name] = filename
                 elif os.path.isdir(filename):
                     dirs[name] = filename
-                name = os.path.split(name)[0]
+                    to_add.add(filename)
                 filename = os.path.split(filename)[0]
+                name = os.path.split(name)[0]
                 while name != '/' and name !='/.vex':
                     dirs[name] = filename
                     name = os.path.split(name)[0]
                     filename = os.path.split(filename)[0]
 
-            new_files = {}
+
+            for dir in to_add:
+                for filename in self.list_dir(dir):
+                    name = txn.full_to_repo_path(filename)
+                    if os.path.isfile(filename):
+                        names[name] = filename
+                    elif os.path.isdir(filename):
+                        dirs[name] = filename
 
             for name, filename in dirs.items():
                 if name in session.files:
@@ -1668,8 +1718,10 @@ class Project:
                         replace = entry.replace
                         if replace == None and entry.kind != 'dir': replace = entry.kind
                         new_files[name] = objects.Tracked('dir', "replaced", working=True, properties={}, replace=replace)
+                        added.add(filename)
                 else:
                     new_files[name] = objects.Tracked('dir', "added", working=True, properties={})
+                    added.add(filename)
 
             for name, filename in names.items():
                 if name in session.files:
@@ -1678,42 +1730,47 @@ class Project:
                         replace = entry.replace
                         if replace == None and entry.kind != 'file': replace = entry.kind
                         new_files[name] = objects.Tracked('file', "replaced", working=True, properties={}, replace=replace)
+                        added.add(filename)
                 else:
                     new_files[name] = objects.Tracked('file',"added", working=True, properties={})
+                    added.add(filename)
 
             txn.update_active_files(new_files, ())
+            return added
 
     def forget(self, files):
+        files = self.normalize_files(files)
+
         with self.do('forget') as txn:
             session = txn.refresh_active()
             names = {}
-            dirs = {}
+            dirs = []
+            changed = []
             for filename in files:
-                if not filename.startswith(self.working_dir):
-                    raise VexError("{} is outside project".format(filename))
                 name = txn.full_to_repo_path(filename)
-                names[name] = filename
-
+                if name in session.files:
+                    entry = session.files[name]
+                    changed.append(filename)
+                    if entry.working:
+                        names[name] = entry
+                        if entry.kind == 'dir':
+                            p = "{}/".format(name)
+                            for e in session.files:
+                                if e.startswith(p):
+                                    names[e] = session.files[e]
+                                    changed.append(txn.repo_to_full_path(e))
             new_files = {}
-            # forget directory contents
-            gone_files = []
+            gone_files = set()
 
-            for name, filename in names.items():
-                if name in session.files:
-                    if session.files[name].state == 'added':
-                        gone_files.add(name)
-                    else:
-                        kind = session.files[name].replace or 'file'
-                        new_files[name] = objects.Tracked(kind, "deleted", working=True, properties={})
-            for name, filename in dirs.items():
-                if name in session.files:
-                    if session.files[name].state == 'added':
-                        gone_files.add(name)
-                    else:
-                        kind = session.files[name].replace or 'dir'
-                        new_files[name] = objects.Tracked(kind, "deleted", working=True, properties={})
+            for name, entry in names.items():
+                if entry.state == 'added':
+                    gone_files.add(name)
+                else:
+                    kind = entry.replace or entry.kind
+                    new_files[name] = objects.Tracked(kind, "deleted", working=True, properties={})
 
             txn.update_active_files(new_files, gone_files)
+            return changed
 
     def ignore(self, files):
         pass
@@ -1794,28 +1851,38 @@ def Init(directory, working, config, prefix, include, ignore):
 vex_add = vex_cmd.subcommand('add','add files to the project')
 @vex_add.run('file...')
 def Add(file):
-    if file:
-        cwd = os.getcwd()
+    cwd = os.getcwd()
+    if not file:
+        files = [cwd]
+    else:
         files = [os.path.join(cwd, f) for f in file]
-        missing = [f for f in file if not os.path.exists(f)]
-        if missing:
-            raise VexArgument('cannot find {}'.format(",".join(missing)))
-        p = get_project()
-        with p.lock('add') as p:
-            p.add(files)
+    files = [os.path.normpath(f) for f in files]
+    missing = [f for f in file if not os.path.exists(f)]
+    if missing:
+        raise VexArgument('cannot find {}'.format(",".join(missing)))
+    p = get_project()
+    with p.lock('add') as p:
+        for f in p.add(files):
+            f = os.path.relpath(f)
+            yield "add: {}".format(f)
 
 vex_forget = vex_cmd.subcommand('forget','remove files from the project, without deleting file')
 @vex_forget.run('file...')
 def Forget(file):
-    if file:
-        cwd = os.getcwd()
-        files = [os.path.join(cwd, f) for f in file]
-        missing = [f for f in file if not os.path.exists(f)]
-        if missing:
-            raise VexArgument('cannot find {}'.format(",".join(missing)))
-        p = get_project()
-        with p.lock('forget') as p:
-            p.forget(files)
+    if not file:
+        return
+
+    cwd = os.getcwd()
+    files = [os.path.join(cwd, f) for f in file]
+    files = [os.path.normpath(f) for f in files]
+    missing = [f for f in file if not os.path.exists(f)]
+    if missing:
+        raise VexArgument('cannot find {}'.format(",".join(missing)))
+    p = get_project()
+    with p.lock('forget') as p:
+        for f in p.forget(files):
+            f = os.path.relpath(f)
+            yield "forget: {}".format(f)
 
 vex_diff = vex_cmd.subcommand('diff')
 @vex_diff.run('[file...]')
