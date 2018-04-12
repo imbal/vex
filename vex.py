@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-import os.path
 import os
 import shutil
+import os.path
 import hashlib
+import unicodedata
+import subprocess
 import fcntl
 import time
-import subprocess
 
 from datetime import datetime, timezone
 from uuid import uuid4
@@ -18,7 +19,7 @@ def UUID(): return str(uuid4())
 def NOW(): return datetime.now(timezone.utc)
 DOTVEX = '.vex'
 
-MTIME_GRACE_SECONDS = 1
+MTIME_GRACE_SECONDS = 0.5
 
 class VexError(Exception): pass
 
@@ -806,8 +807,8 @@ class ProjectChange:
         self.new_names = {}
         self.old_sessions = {}
         self.new_sessions = {}
-        self.old_state = {}
-        self.new_state = {}
+        self.old_settings = {}
+        self.new_settings = {}
         self.new_changes = set()
         self.new_manifests = set()
         self.new_files = set()
@@ -1064,14 +1065,29 @@ class ProjectChange:
     def get_state(self, name):
         return self.project.state.get(name)
 
+    def set_setting(self, name, value):
+        if name not in self.old_settings:
+            if self.project.settings.exists(name):
+                self.old_settings[name] = self.project.settings.get(name)
+            else:
+                self.old_settings[name] = None
+        self.new_settings[name] = value
+
+    def get_setting(self, name):
+        if name in self.new_settings:
+            return self.new_settings[name]
+
+        return self.project.setting.get(name)
+
     def action(self):
         if self.new_branches or self.new_names or self.new_sessions or self.new_state or self.new_changes or self.new_manfiests or self.new_files:
             branches = dict(old=self.old_branches, new=self.new_branches)
             names = dict(old=self.old_names, new=self.new_names)
             sessions = dict(old=self.old_sessions, new=self.new_sessions)
+            settings = dict(old=self.old_settings, new=self.new_settings)
 
             blobs = dict(changes=self.new_changes, manifests=self.new_manifests, files=self.new_files)
-            changes = dict(branches=branches,names=names, sessions=sessions)
+            changes = dict(branches=branches,names=names, sessions=sessions, settings=settings)
             return objects.Action(self.now, self.command, changes, blobs)
         else:
             return objects.Action(self.now, self.command, {}, ())
@@ -1111,7 +1127,7 @@ class Project:
         self.actions =   ActionLog(os.path.join(config_dir, 'state', 'history'))
         self.scratch =   BlobStore(os.path.join(config_dir, 'scratch'))
         self.lockfile =            os.path.join(config_dir, 'lock')
-        self.settings =  BlobStore(os.path.join(config_dir, 'settings'))
+        self.settings =  DirStore(os.path.join(config_dir, 'settings'))
 
     def makedirs(self):
         os.makedirs(self.dir, exist_ok=True)
@@ -1157,6 +1173,9 @@ class Project:
             path = os.path.relpath(file, prefix)
         return os.path.join(self.working_dir, path)
 
+    def normalize(self, name):
+        return unicodedata.normalize('NFC', name)
+
     def full_to_repo_path(self, prefix, file):
         if os.path.commonpath((self.settings.dir, file)) == self.settings.dir:
             filename = os.path.relpath(file, self.settings.dir)
@@ -1165,6 +1184,7 @@ class Project:
             raise VexBug('nope. not .vex')
         # normalize name to NFC?
         filename = os.path.relpath(file, self.working_dir)
+        filename = self.normalize(filename)
         if filename == '.':
             return prefix
         return os.path.join(prefix, filename)
@@ -1292,6 +1312,9 @@ class Project:
             elif key == 'sessions':
                 for name,value in changes['sessions'][kind].items():
                     self.sessions.set(name, value)
+            elif key == 'settings':
+                for name,value in changes['settings'][kind].items():
+                    self.settings.set(name, value)
             else:
                 raise VexBug('Project change has unknown values')
 
@@ -1480,14 +1503,18 @@ class Project:
 
             project_uuid = None
             root_path = '/'
-            root = objects.Root({os.path.relpath(prefix, root_path): objects.Dir(None, {}), '.vex': objects.Dir(None, {})}, {})
+            if prefix != '/':
+                root = objects.Root({os.path.relpath(prefix, root_path): objects.Dir(None, {}), '.vex': objects.Dir(None, {})}, {})
+            else:
+                root = objects.Root({'.vex': objects.Dir(None, {})}, {})
             root_uuid = txn.put_manifest(root)
 
             changes = {
                     '/' : objects.AddDir({}),
-                    prefix : objects.AddDir({}),
                     '/.vex' : objects.AddDir({}),
             }
+            if prefix != '/':
+                changes[prefix] = objects.AddDir({})
             changelog = objects.Changelog(prev=None, summary="init", message="", changes=changes, author=author_uuid)
             changelog_uuid = txn.put_manifest(changelog)
 
@@ -1503,10 +1530,15 @@ class Project:
             files = {
                '/': objects.Tracked('dir', 'tracked', working=None),
                 '/.vex': objects.Tracked('dir', 'tracked', working=True),
-                prefix: objects.Tracked('dir', 'tracked', working=True)
+                prefix: objects.Tracked('dir', 'tracked', working=True),
+                '/.vex/ignore': objects.Tracked('file', 'added', working=True),
+                '/.vex/include': objects.Tracked('file', 'added', working=True),
             }
             session = objects.Session(session_uuid, branch_uuid, commit_uuid, commit_uuid, files)
             txn.put_session(session)
+
+            txn.set_setting("ignore", ignore)
+            txn.set_setting("include", include)
 
         self.state.set("author", author_uuid)
         self.state.set("active", session_uuid)
@@ -1602,13 +1634,19 @@ class Project:
             return True
 
     def add(self, files):
+        for filename in files:
+            if not filename.startswith(self.working_dir):
+                raise VexError("{} is outside project".format(filename))
+            prefix = self.prefix()
+            nfc = self.full_to_repo_path(prefix, filename)
+            path = self.repo_to_full_path(prefix, nfc)
+            if path != filename:
+                raise VexBug('roundtrip')
         with self.do('add') as txn:
             session = txn.refresh_active()
             names = {}
             dirs = {}
             for filename in files:
-                if not filename.startswith(self.working_dir):
-                    raise VexError("{} is outside project".format(filename))
                 name = txn.full_to_repo_path(filename)
                 if os.path.isfile(filename):
                     names[name] = filename
@@ -1733,6 +1771,9 @@ def Init(directory, working, config, prefix, include, ignore):
     config_dir = config or os.path.join(working_dir, DOTVEX)
     prefix = prefix or os.path.split(working_dir)[1] or 'root'
     prefix = os.path.join('/', prefix)
+
+    include = include or ["*"] 
+    ignore = ignore or [".*"]
 
     p = Project(config_dir, working_dir)
 
