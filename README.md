@@ -11,8 +11,8 @@ This README assumes some familiarily with `git`, `hg`, or `svn`
 | `vex init`		| `hg init`		| `hg init` 	|
 | `vex add`		| `hg add`		| `hg add` 	|
 | `vex forget`		| `hg forget`		| `git remove --cached (-r)` 	|
-| `vex status`		| `hg status`		| `git init` 	|
-| `vex commit`		| `hg commit`		| `git init` 	|
+| `vex status`		| `hg status`		| `git status` 	|
+| `vex commit`		| `hg commit`		| `git commit -a` 	|
 | `vex log`		| `hg log`		| `git init` 	|
 | ...			| ...			| ...		|
 | `vex undo`		| `hg ???`		| `git ???` 	|
@@ -76,12 +76,13 @@ By default, `vex init name` creates a repository with a `/name` directory inside
 
 - `vex add`
 
-- `vex forget`
+- `vex forget` 
 
 - `vex remove`
 
 - `vex ignore`
 
+- `vex restore`
 
 ### Inspecting changes
 
@@ -90,7 +91,6 @@ By default, `vex init name` creates a repository with a `/name` directory inside
 - `vex status`
 
 - `vex diff`
-
 
 ### Saving changes
 

@@ -363,10 +363,11 @@ def try_parse(name, arg, argtype):
         raise BadArg("Don't know how to parse option {}, of unknown type {}".format(name, argtype))
 
 class CommandDescription:
-    def __init__(self, prefix, name, subcommands, short, long, argspec):
+    def __init__(self, prefix, name, subcommands, subaliases, short, long, argspec):
         self.prefix = prefix
         self.name = name
         self.subcommands = subcommands
+        self.subaliases = subaliases
         self.short, self.long = short, long
         self.argspec = argspec
 
@@ -374,12 +375,23 @@ class CommandDescription:
         return "<None>"
 
     def complete_path(self, route, path):
+        if path and path[0] in self.subaliases:
+            path[0] = self.subaliases[path[0]]
         if path and path[0] in self.subcommands:
             return self.subcommands[path[0]].complete_path(route+[path[0]], path[1:])
         if path:
             output = []
             prefix = ""
             for name,cmd in self.subcommands.items():
+                if not path[0] or name.startswith(path[0]):
+                    if cmd.subcommands and cmd.argspec:
+                        output.append("{}{}".format(prefix, name))
+                    elif cmd.subcommands and not cmd.argspec:
+                        output.append("{}{}:".format(prefix, name))
+                    else:
+                        output.append("{}{} ".format(prefix, name))
+            for name,cmd in self.aliases.items():
+                cmd = self.subcommands[name]
                 if not path[0] or name.startswith(path[0]):
                     if cmd.subcommands and cmd.argspec:
                         output.append("{}{}".format(prefix, name))
@@ -432,6 +444,9 @@ class CommandDescription:
 
     def parse_args(self, path, argv, environ, route):
         if self.subcommands and path:
+            if path[0] in self.subaliases:
+                path[0] = self.subaliases[path[0]]
+
             if path[0] in self.subcommands:
                 return self.subcommands[path[0]].parse_args(path[1:], argv, environ, route+[path[0]])
             else:
@@ -539,13 +554,15 @@ class Error(Exception):
         Exception.__init__(self)
         
 class Command:
-    def __init__(self, name, short=None, long=None):
+    def __init__(self, name, short=None, long=None, aliases=()):
         self.name = name
         self.prefix = [] 
         self.subcommands = {}
+        self.subaliases = {}
         self.run_fn = None
         self.short = short
-        self.long = None
+        self.long = long
+        self.aliases=aliases
         self.argspec = None
         self.nargs = 0
         self.err_fn = None
@@ -558,13 +575,19 @@ class Command:
             return fn
         return _decorator
 
-    def subcommand(self, name, short=None):
+    def subcommand(self, name, short=None, long=None, aliases=()):
         #if self.argspec:
         #    raise Exception('bad')
+        if name in self.aliases or name in self.subcommands:
+            raise Exception('bad')
         cmd = Command(name, short)
         cmd.prefix.extend(self.prefix)
         cmd.prefix.append(self.name)
         self.subcommands[name] = cmd
+        for a in aliases:
+            if a in self.aliases or a in self.subcommands:
+                raise Exception('bad')
+            self.subaliases[a] = name
         return cmd
 
     def run(self, argspec=None):
@@ -621,6 +644,7 @@ class Command:
             name = self.name,
             prefix = self.prefix,
             subcommands = {k: v.render() for k,v in self.subcommands.items()},
+            subaliases = self.subaliases,
             short = self.short,
             long = long,
             argspec = self.argspec, 
