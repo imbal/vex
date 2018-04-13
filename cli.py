@@ -390,8 +390,8 @@ class CommandDescription:
                         output.append("{}{}:".format(prefix, name))
                     else:
                         output.append("{}{} ".format(prefix, name))
-            for name,cmd in self.aliases.items():
-                cmd = self.subcommands[name]
+            for name,cmd in self.subaliases.items():
+                cmd = self.subcommands[cmd]
                 if not path[0] or name.startswith(path[0]):
                     if cmd.subcommands and cmd.argspec:
                         output.append("{}{}".format(prefix, name))

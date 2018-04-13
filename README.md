@@ -9,12 +9,12 @@ This README assumes some familiarily with `git`, `hg`, or `svn`
 | vex | hg | git  |
 | --- | --- | --- |
 | `vex init`		| `hg init`		| `hg init` 	|
-| `vex add`		| `hg add`		| `hg add` 	|
-| `vex forget`		| `hg forget`		| `git remove --cached (-r)` 	|
-| `vex status`		| `hg status`		| `git status` 	|
-| `vex commit`		| `hg commit`		| `git commit -a` 	|
-| `vex log`		| `hg log`		| `git init` 	|
-| ...			| ...			| ...		|
+| `vex add`	    	| `hg add`		| `hg add` 	|
+| `vex forget`		| `hg forget`	| `git remove --cached (-r)` 	|
+| `vex status`		| `hg status`	| `git status` 	|
+| `vex commit`		| `hg commit`	| `git commit -a` 	|
+| `vex log`	    	| `hg log`		| `git init` 	|
+| ...			    | ...			| ...		|
 | `vex undo`		| `hg ???`		| `git ???` 	|
 | `vex redo`		| `hg ???`		| `git ???` 	|
 | `vex switch`		| `hg ???`		| `git ???` 	|
