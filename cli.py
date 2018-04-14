@@ -578,20 +578,22 @@ class Command:
     def subcommand(self, name, short=None, long=None, aliases=()):
         #if self.argspec:
         #    raise Exception('bad')
-        if name in self.aliases or name in self.subcommands:
+        if name in self.subaliases or name in self.subcommands:
             raise Exception('bad')
         cmd = Command(name, short)
         cmd.prefix.extend(self.prefix)
         cmd.prefix.append(self.name)
         self.subcommands[name] = cmd
         for a in aliases:
-            if a in self.aliases or a in self.subcommands:
+            if a in self.subaliases or a in self.subcommands:
                 raise Exception('bad')
             self.subaliases[a] = name
         return cmd
 
     def run(self, argspec=None):
         """A decorator for setting the function to be run"""
+        if self.run_fn:
+            raise Exception('bad')
 
         #if self.subcommands:
         #    raise Exception('bad')
