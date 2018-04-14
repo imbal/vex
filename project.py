@@ -63,12 +63,13 @@ codec = Codec()
 class objects:
     @codec.register
     class Branch:
-        def __init__(self, uuid, head, base, init, upstream):
+        def __init__(self, uuid, head, base, init, upstream, sessions):
             self.uuid = uuid
             self.head = head
             self.base = base
             self.init = init
             self.upstream = upstream
+            self.sessions = sessions
 
     # Entries in commits
     @codec.register
@@ -370,8 +371,11 @@ class DirStore:
         os.makedirs(self.dir, exist_ok=True)
     def filename(self, name):
         return os.path.join(self.dir, name)
-    def all(self):
-        return os.listdir(self.dir())
+    def list(self):
+        for name in os.listdir(self.dir):
+            if os.path.isfile(self.filename(name)):
+                yield name
+
     def exists(self, addr):
         return os.path.exists(self.filename(addr))
     def get(self, name):
@@ -1130,6 +1134,8 @@ class Project:
         self.lockfile =            os.path.join(config_dir, 'lock')
         self.settings =  DirStore(os.path.join(config_dir, 'settings'))
 
+    # methods, look, don't ask, they're just plain methods, ok?
+
     def makedirs(self):
         os.makedirs(self.dir, exist_ok=True)
         self.changes.makedirs()
@@ -1201,6 +1207,8 @@ class Project:
             return prefix
         return os.path.join(prefix, filename)
 
+    # ok, now it's getting awkward. these methods 
+    # are coupled to other objects. the lock is called from outside, ...
     __locked = object()
 
     @contextmanager
@@ -1221,7 +1229,7 @@ class Project:
         finally:
                 fh.close()
 
-
+    # ... and so are these, but, they interact with the action log
     def rollback_new_action(self):
         with self.actions.rollback_new() as action:
             if action:
@@ -1245,6 +1253,8 @@ class Project:
                 else:
                     raise VexBug('welp')
             return action
+
+    # speaking of which
 
     @contextmanager
     def do_nohistory(self, command):
@@ -1374,8 +1384,10 @@ class Project:
             self.restore_session(active_prefix, active)
 
 
-    def stash_session(self, session):
-        for name, entry in session.files.items():
+    def stash_session(self, session, files=None):
+        files = session.files if files is None else files
+        for name in files:
+            entry = session.files[name]
             if name in ("/", "/.vex"): continue
             new_addr = None
             if entry.kind == "file":
@@ -1563,12 +1575,13 @@ class Project:
             commit = objects.Start(txn.now, uuid=branch_uuid, changelog=changelog_uuid, root=root_uuid)
             commit_uuid = txn.put_change(commit)
 
+            session_uuid = UUID()
+
             branch_name = 'latest'
-            branch = objects.Branch(branch_uuid, commit_uuid, None, commit_uuid, None)
+            branch = objects.Branch(branch_uuid, commit_uuid, None, commit_uuid, None, [session_uuid])
             txn.put_branch(branch)
             txn.set_name(branch_name, branch)
 
-            session_uuid = UUID()
             files = {
                '/': objects.Tracked('dir', 'tracked', working=None),
                 '/.vex': objects.Tracked('dir', 'tracked', working=True),
@@ -1778,6 +1791,32 @@ class Project:
     def ignore(self, files):
         pass
 
+    def list_branches(self):
+        branches = []
+        uuids = set()
+        for name in self.names.list():
+            uuid = self.names.get(name)
+            uuids.add(uuid)
+            branch = self.branches.get(uuid)
+            branches.append((name, branch))
+        for uuid in self.branches.list():
+            if uuid in uuids: continue
+            uuids.add(uuid)
+            branch = self.branches.get(uuid)
+            branches.append((None, branch))
+        return branches
+
+    def save(self, files=None):
+        files = self.normalize_files(files) if files is not None else None
+        with self.do_nohistory('save') as txn:
+            files = [txn.full_to_repo_path(filename) for filename in files] if files else None
+            self.stash_session(txn.active(), files)
+
+    def create_branch(self, name, from_commit, from_branch):
+        pass
+
+    def save_as(self, name):
+        pass
 
 def get_project(check=True, empty=True):
     working_dir = os.getcwd()

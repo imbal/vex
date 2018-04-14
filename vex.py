@@ -53,7 +53,7 @@ def Error(path, args, exception, traceback):
             yield ('Good news: The changes that were attempted have been undone')
 
 
-vex_init = vex_cmd.subcommand('init')
+vex_init = vex_cmd.subcommand('init',short="Create a new Vex Project")
 @vex_init.run('--working --config --prefix --include... --ignore... [directory]')
 def Init(directory, working, config, prefix, include, ignore):
     working_dir = working or directory or os.getcwd()
@@ -76,11 +76,97 @@ def Init(directory, working, config, prefix, include, ignore):
             with p.lock('init') as p:
                 p.init(prefix, include, ignore)
     else:
-        yield ('Creating vex project in "{}"...'.format(directory))
+        yield ('Creating vex project in "{}"...'.format(working_dir))
         p.init(prefix, include, ignore)
         p.makelock()
 
-vex_add = vex_cmd.subcommand('add','add files to the project')
+
+vex_undo = vex_cmd.subcommand('undo', short="Undo the last command")
+@vex_undo.run()
+def Undo():
+    p = get_project()
+
+    with p.lock('undo') as p:
+        action = p.undo()
+    if action:
+        yield ('undid', action.command)
+
+vex_redo = vex_cmd.subcommand('redo', "Redo last undone command")
+@vex_redo.run('--list? --choice')
+def Redo(list, choice):
+    p = get_project(empty=False)
+
+    with p.lock('redo') as p:
+        choices = p.redo_choices()
+
+        if list:
+            if choices:
+                for n, choice in enumerate(choices):
+                    yield (n, choice.time, choice.command)
+            else:
+                yield ('Nothing to redo')
+        elif choices:
+            choice = choice or 0
+            action = p.redo(choice)
+            if action:
+                yield ('redid', action.command)
+        else:
+            yield ('Nothing to redo')
+
+vex_log = vex_cmd.subcommand('changelog', aliases=['log'], short="List changes to project")
+@vex_log.run()
+def Log():
+    p = get_project()
+    for entry in p.log():
+        yield (entry)
+        yield ""
+
+vex_history = vex_cmd.subcommand('history', short="Show what commands can be undone")
+@vex_history.run()
+def History():
+    p = get_project()
+
+    for entry,redos in p.history():
+        alternative = ""
+        if len(redos) == 1:
+            alternative = "(can redo {})".format(redos[0])
+        elif len(redos) > 0:
+            alternative = "(can redo {}, or {})".format(",".join(redos[:-1]), redos[-1])
+
+        yield "{}\t{}\t{}".format(entry.time, entry.command,alternative)
+        yield ""
+
+vex_status = vex_cmd.subcommand('status', short="Show status of files in project")
+@vex_status.run()
+def Status():
+    p = get_project()
+    cwd = os.getcwd()
+    with p.lock('status') as p:
+        files = p.status()
+        for reponame in sorted(files, key=lambda p:p.split(':')):
+            entry = files[reponame]
+            if entry.working is None:
+                yield "hidden:{:9}\t{} ".format(entry.state, reponame)
+            elif reponame.startswith('/.vex/') or reponame == '/.vex':
+                path = os.path.relpath(reponame, '/.vex')
+                yield "{}:{:8}\t{}".format('setting', entry.state, path)
+            else:
+                path = os.path.relpath(reponame, p.prefix())
+                yield "{:16}\t{}{}".format(entry.state, path, ('*' if entry.stash else '') )
+
+
+vex_diff = vex_cmd.subcommand('diff')
+@vex_diff.run('[file...]')
+def Diff(file):
+    p = get_project()
+    with p.lock('diff') as p:
+        cwd = os.getcwd()
+        files = [os.path.join(cwd, f) for f in file] if file else None
+        for name, diff in  p.diff(files).items():
+            yield name
+            yield diff
+
+vex_add = vex_cmd.subcommand('add','Add files to the project')
 @vex_add.run('file...')
 def Add(file):
     cwd = os.getcwd()
@@ -98,7 +184,7 @@ def Add(file):
             f = os.path.relpath(f)
             yield "add: {}".format(f)
 
-vex_forget = vex_cmd.subcommand('forget','remove files from the project, without deleting file')
+vex_forget = vex_cmd.subcommand('forget','Remove files from the project, without deleting them')
 @vex_forget.run('file...')
 def Forget(file):
     if not file:
@@ -116,19 +202,7 @@ def Forget(file):
             f = os.path.relpath(f)
             yield "forget: {}".format(f)
 
-vex_diff = vex_cmd.subcommand('diff')
-@vex_diff.run('[file...]')
-def Diff(file):
-    p = get_project()
-    with p.lock('diff') as p:
-        cwd = os.getcwd()
-        files = [os.path.join(cwd, f) for f in file] if file else None
-        for name, diff in  p.diff(files).items():
-            yield name
-            yield diff
-
-
-vex_prepare = vex_cmd.subcommand('prepare', short="Save current working copy to prepare for commit", aliases=["save"])
+vex_prepare = vex_cmd.subcommand('prepare', short="Save current working copy to prepare for commit")
 @vex_prepare.run('[file...]')
 def Prepare(file):
     p = get_project()
@@ -152,7 +226,7 @@ def Commit(file):
             yield 'Nothing to commit'
 
 vex_amend = vex_cmd.subcommand('amend')
-@vex_commit.run('[file...]')
+@vex_amend.run('[file...]')
 def Amend(file):
     p = get_project()
     yield ('Amending')
@@ -165,87 +239,55 @@ def Amend(file):
             yield 'Nothing to commit'
         # check that session() and branch()
 
-vex_log = vex_cmd.subcommand('log')
-@vex_log.run()
-def Log():
+vex_save = vex_cmd.subcommand('save', short="Save progress without making a commit or checkpoint to undo")
+@vex_save.run('--watch')
+def Save(watch):
     p = get_project()
-    for entry in p.log():
-        yield (entry)
-        yield ""
+    with p.lock('amend') as p:
+        if not watch:
+            p.save()
+        else:
+            for file in watch_changes():
+                p.save(files=[file])
 
-vex_history = vex_cmd.subcommand('history')
-@vex_history.run()
-def History():
-    p = get_project()
+vex_saveas = vex_cmd.subcommand('saveas', short="Rename head/branch")
+@vex_saveas.run()
+def SaveAs():
+    pass
 
-    for entry,redos in p.history():
-        alternative = ""
-        if len(redos) == 1:
-            alternative = "(can redo {})".format(redos[0])
-        elif len(redos) > 0:
-            alternative = "(can redo {}, or {})".format(",".join(redos[:-1]), redos[-1])
+vex_open = vex_cmd.subcommand('open')
+@vex_open.run('name')
+def Open(name):
+    pass
 
-        yield "{}\t{}\t{}".format(entry.time, entry.command,alternative)
-        yield ""
+vex_new = vex_cmd.subcommand('new')
+@vex_new.run('name')
+def New(name):
+    pass
 
-vex_status = vex_cmd.subcommand('status')
-@vex_status.run()
-def Status():
-    p = get_project()
-    cwd = os.getcwd()
-    with p.lock('status') as p:
-        files = p.status()
-        for reponame in sorted(files, key=lambda p:p.split(':')):
-            entry = files[reponame]
-            if entry.working is None:
-                yield "hidden:{:9}\t{} ".format(entry.state, reponame)
-            elif reponame.startswith('/.vex/') or reponame == '/.vex':
-                path = os.path.relpath(reponame, '/.vex')
-                yield "{}:{:8}\t{}".format('setting', entry.state, path)
-            else:
-                path = os.path.relpath(reponame, p.prefix())
-                yield "{:16}\t{} as {}".format(entry.state, path, reponame)
-
-vex_switch = vex_cmd.subcommand('switch')
-@vex_switch.run('prefix')
-def switch(prefix):
+vex_switch = vex_cmd.subcommand('switch', short="Change working directory/branch")
+@vex_switch.run('--prefix [branch]')
+def Switch(prefix, branch):
     p = get_project()
 
     with p.lock('switch') as p:
         prefix = os.path.join(p.prefix(), prefix)
         p.switch(prefix)
 
-vex_undo = vex_cmd.subcommand('undo')
-@vex_undo.run()
-def Undo():
+vex_branches = vex_cmd.subcommand('branches')
+@vex_branches.run()
+def Branches():
     p = get_project()
-
-    with p.lock('undo') as p:
-        action = p.undo()
-    if action:
-        yield ('undid', action.command)
-
-vex_redo = vex_cmd.subcommand('redo')
-@vex_redo.run('--list? --choice')
-def Redo(list, choice):
-    p = get_project(empty=False)
-
-    with p.lock('redo') as p:
-        choices = p.redo_choices()
-
-        if list:
-            if choices:
-                for n, choice in enumerate(choices):
-                    yield (n, choice.time, choice.command)
+    with p.lock('branches') as p:
+        branches = p.list_branches()
+        for (name, branch) in branches:
+            if name:
+                yield name
             else:
-                yield ('Nothing to redo')
-        elif choices:
-            choice = choice or 0
-            action = p.redo(choice)
-            if action:
-                yield ('redid', action.command)
-        else:
-            yield ('Nothing to redo')
+                yield branch.uuid
+
+
+
 
 vex_debug = vex_cmd.subcommand('debug', 'run a command without capturing exceptions')
 @vex_debug.run()
@@ -258,23 +300,23 @@ def DebugStatus():
     p = get_project(check=False)
     with p.lock('debug:status') as p:
         yield ("Clean history", p.clean_state())
-        session = p.active()
+        head = p.active()
         out = []
-        if session:
+        if head:
 
-            out.append("session: {}".format(session.uuid))
-            out.append("at {}, started at {}".format(session.prepare, session.commit))
+            out.append("head: {}".format(head.uuid))
+            out.append("at {}, started at {}".format(head.prepare, head.commit))
 
-            branch = p.branches.get(session.branch)
+            branch = p.branches.get(head.branch)
             out.append("commiting to branch {}".format(branch.uuid))
 
-            commit = p.changes.get_obj(session.prepare)
+            commit = p.changes.get_obj(head.prepare)
             out.append("last commit: {}".format(commit.__class__.__name__))
         else:
             if p.history_isempty():
                 out.append("you undid the creation. try vex redo")
             else:
-                out.append("no active session, but history, weird")
+                out.append("no active head, but history, weird")
         out.append("")
         return "\n".join(out)
 
@@ -308,5 +350,8 @@ def DebugRollback():
             yield ('Project has recovered')
         else:
             yield ('Oh dear')
+
+
+
 
 vex_cmd.main(__name__)
