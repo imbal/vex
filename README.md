@@ -8,45 +8,45 @@ This README assumes some familiarily with `git`, `hg`, or `svn`
 
 | vex | hg | git  |
 | --- | --- | --- |
-| `vex init`		| `hg init`		| `hg init` 	|
-| `vex add`	    	| `hg add`		| `hg add` 	|
+| `vex init`		| `hg init`		| `git init` 	|
+| `vex add`	    	| `hg add`		| `git add` 	|
 | `vex forget`		| `hg forget`	| `git remove --cached (-r)` 	|
 | `vex status`		| `hg status`	| `git status` 	|
 | `vex commit`		| `hg commit`	| `git commit -a` 	|
-| `vex log`	    	| `hg log`		| `git init` 	|
+| `vex log`	    	| `hg log`		| `git log` 	|
 | ...			    | ...			| ...		|
-| `vex undo`		| `hg ???`		| `git ???` 	|
+| `vex undo`		| `hg rollback`	| `git ???` 	|
 | `vex redo`		| `hg ???`		| `git ???` 	|
 | `vex switch`		| `hg ???`		| `git ???` 	|
 
 ## `vex` vs ....
 
+Unlike `hg`, `git`, or `svn`, you can undo/redo *everything*
+
+- `vex undo` undoes the last command that changed something
+- `vex undo` can be run more than once,
+- `vex redo` redoes the last undone command
+- `vex redo --list` shows the potential options, `vex redo --choice=<n>` to pick one
+- `vex history` shows the list of commands
+
 For `hg` users:
 
-- `vex branch` works like `hg bookmark` or `git branch` 
-- Almost everything else works the same on the outside (except `hg merge`)
+- Branches work more like hg bookmarks or git branches
+- Merges work more like commits, having a single predecessor
+- Everything else is quite similar
 
 For `git` users:
 
-- branches that automatically stash and unstash
-- a linear history without having to rebase or untangle merge commits
-- using a modern hash algorithm
-- tracks empty directories
+- Branches automatically stash and unstash
+- Rebasing doesn't destroy history, and rebased branches can be shared
+- Vex tracks directories as well as files
 
 For `svn` users:
 
-- Like `git`, `hg`, offline and asynchronous commits.
+- Offline and asynchronous commits
 - Files can have properties attached to them
-- Subtree checkouts `vex switch <path>`
+- Subtree checkouts `vex switch --prefix=/<path>`
 
-For everyone:
-
-- `vex undo` undoes the last command that changed something
-- for `vex commit`, it undoes the history but leaves the working copy alone
-- for `vex switch`, it changes back to the old subtree checkout
-
-- `vex redo` redoes the last undone command
-- `vex redo --list` shows the potential options, `vex redo --choice=<n>` to pick one
 
 ## Workflows
 
@@ -56,21 +56,26 @@ For everyone:
 
 ```
 $ vex init . --include="*.py" --ignore="*.py?"
-...
+$ vex add
 $ vex status
 ... # *.py files added and waiting for commit
 ```
 
 By default, `vex init name` creates a repository with a `/name` directory inside. 
 
-(Note: `vex undo`/`vex redo` will undo `vex init`, but leave the `/.vex` directory intact0
+(Note: `vex undo`/`vex redo` will undo `vex init`, but leave the `/.vex` directory intact)
 
+### Undoing changes
+
+- `vex history` 
+
+- `vex undo`
+
+- `vex redo`
 
 ### Moving around the project
 
 - `vex switch` (change repo subtree checkout)
-
-- `vex mounts` (how repo paths map to working directory)
 
 ### Adding/removing files from the project
 
@@ -78,11 +83,11 @@ By default, `vex init name` creates a repository with a `/name` directory inside
 
 - `vex forget` 
 
-- `vex remove`
+- `vex remove` *
 
-- `vex ignore`
+- `vex ignore` *
 
-- `vex restore`
+- `vex restore` *
 
 ### Inspecting changes
 
@@ -96,21 +101,13 @@ By default, `vex init name` creates a repository with a `/name` directory inside
 
 - `vex prepare` / `vex save`
 
-- `vex prepare --watch`
+- `vex prepare --watch` *
 
 - `vex commit`
 
-- `vex amend`
+- `vex amend` 
 
 - `--pick`
-
-### Undoing changes
-
-- `vex history` 
-
-- `vex undo`
-
-- `vex redo`
 
 - `vex rollback`
 
@@ -118,37 +115,45 @@ By default, `vex init name` creates a repository with a `/name` directory inside
 
 ### Working on a branch
 
-- `vex open`
+- `vex open` * 
 
-- `vex saveas` (see `git checkout -b`)
+- `vex saveas` * (see `git checkout -b`)
 
-- `vex close`
+- `vex close` *
 
-- `vex branches`
+- `vex branches` *
 
+### Working on an anonymous branch
+
+- `vex session` * (see all open branches/anonymous branches)
+
+- `vex rewind`  * (like git checkout)
+
+### Updating a branch
+
+- `vex update` * (--all affecting downstream branches too) 
+
+- `vex sync` *
+
+### Handlng conflicts
+
+- `vex update --manual` *
 
 ### Merging work back
 
 `vex` *always* creates a linear history:
 
-- `vex apply`
+- `vex apply` *
 
    create a new commit with the changes from the other branch
 
-- `vex replay` / `--pick`
+- `vex replay` * / `--pick`
 
    create a new commit for each change in the branch, reapplying the changes
 
-- `vex append`
+- `vex append` *
 
    create a new commit for each change in the other branch, as-is
-
-### Working on an anonymous branch
-
-- `vex session` (see all open branches/anonymous branches)
-
-- `vex rewind` (like git checkout)
-
 
 ### Sharing changes
 
@@ -163,16 +168,6 @@ By default, `vex init name` creates a repository with a `/name` directory inside
 - `vex remotes`
 
 - `vex remotes:add`
-
-### Updating a branch
-
-- `vex update` (--all affecting downstream branches too) 
-
-- `vex sync`
-
-### Handlng conflicts
-
-- `vex update --manual`
 
 ### Handling mistakes, purging old commits
 
