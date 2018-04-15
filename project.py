@@ -1052,6 +1052,7 @@ class ProjectChange:
         self.new_branches[branch.uuid] = branch
 
     def get_name(self, name):
+        # print(self.new_names)
         if name in self.new_names:
             return self.new_names[names]
         if self.project.names.exists(name):
@@ -1063,7 +1064,7 @@ class ProjectChange:
                 self.old_names[name] = self.project.names.get(name)
             else:
                 self.old_names[name] = None
-        self.new_names[name] = branch.uuid
+        self.new_names[name] = branch
 
     def get_state(self, name):
         return self.project.state.get(name)
@@ -1095,7 +1096,7 @@ class ProjectChange:
         b = self.get_branch(branch_uuid)
         files = self.build_files(commit)
         session = objects.Session(session_uuid, branch_uuid, state, commit, commit, files)
-        b.sessions.append(session)
+        b.sessions.append(session.uuid)
         self.put_branch(b)
         self.put_session(session)
         return session
@@ -1340,7 +1341,7 @@ class Project:
             if isinstance(action, objects.Action):
                 self.apply_changes('new', action.changes)
             elif isinstance(action, objects.Switch):
-                self.apply_switch('new', action.prefix, action.session)
+                self.apply_switch('new', action.prefix, action.active)
             else:
                 raise VexBug('action')
 
@@ -1606,7 +1607,7 @@ class Project:
             branch_name = 'latest'
             branch = objects.Branch(branch_uuid, branch_name, 'active', commit_uuid, None, commit_uuid, None, [session_uuid])
             txn.put_branch(branch)
-            txn.set_name(branch_name, branch)
+            txn.set_name(branch_name, branch.uuid)
 
             files = {
                 '/': objects.Tracked('dir', 'tracked', working=None),
@@ -1858,8 +1859,10 @@ class Project:
             if branch_uuid is None:
                 raise Exception('no')
             # check for >1
+            # print(branch_uuid)
             branch = txn.get_branch(branch_uuid)
             sessions = branch.sessions
+            # print(sessions)
             if not sessions:
                 session = txn.create_session(branch_uuid, 'attached', branch.head)
                 session_uuid = session
@@ -1867,7 +1870,7 @@ class Project:
                 session_uuid = sessions[0]
             else:
                 raise VexUnfinished('welp')
-        with self.do_switch('new') as txn:
+        with self.do_switch('open {}'.format(name)) as txn:
             txn.switch_session(session_uuid)
 
     def new_branch(self, name, from_branch=None, from_commit=None, fork=False):
