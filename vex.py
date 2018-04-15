@@ -245,11 +245,11 @@ def Amend(file):
         # check that session() and branch()
 
 vex_saveas = vex_cmd.subcommand('saveas', short="Rename head/branch")
-@vex_saveas.run('name')
-def SaveAs(name):
+@vex_saveas.run('--rename? name')
+def SaveAs(name, rename):
     p = get_project()
     with p.lock('saveas') as p:
-        p.save_as(name)
+        p.save_as(name, rename=rename)
 
 vex_open = vex_cmd.subcommand('open', short="Open existing branch")
 @vex_open.run('name')
@@ -265,13 +265,17 @@ def New(name):
     with p.lock('new') as p:
         p.new_branch(name)
 
-vex_branch = vex_cmd.subcommand('branch', short="Show current branch")
-@vex_branch.run()
-def Branch():
+vex_branch = vex_cmd.subcommand('branch', short="Show branch information (about current branch)")
+@vex_branch.run('[name]')
+def Branch(name):
     p = get_project()
     with p.lock('branch') as p:
-        active = p.active()
-        branch = p.branches.get(active.branch)
+        if not name:
+            active = p.active()
+            branch = p.branches.get(active.branch)
+        else:
+            b = p.names.get(name)
+            branch = p.branches.get(b)
         # session is ahead (in prepared? in commits?)
         # session has detached ...?
         # 

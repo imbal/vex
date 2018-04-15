@@ -928,6 +928,7 @@ class ProjectChange:
                             entries[name] = objects.Dir(new_addr, change.properties)
                         elif isinstance(change, objects.DeleteFile):
                             # if not isinstance(entry, objects.File): raise VexBug('cant delete a file not in repo')
+                            pass
                         elif isinstance(change, objects.DeleteDir):
                             # if not isinstance(entry, objects.Dir): raise VexBug('cant delete a dir not in repo')
                             old_addr = entry.addr if isinstance(entry, objects.Dir) else None
@@ -935,7 +936,7 @@ class ProjectChange:
                             if not tree_addr is None:
                                 raise VexBug('non empty dir')
                         elif isinstance(change, objects.ChangeFile):
-                            if not isinstance(entry, objects.File) ir  entry.addr != change.addr:
+                            if not isinstance(entry, objects.File) or entry.addr != change.addr:
                                 entries[name] = objects.File(change.addr, change.properties)
                             else:
                                 entries[name] = objects.File(entry.addr, change.properties)
@@ -1872,9 +1873,10 @@ class Project:
         uuids = set()
         for name in self.names.list():
             uuid = self.names.get(name)
-            uuids.add(uuid)
-            branch = self.branches.get(uuid)
-            branches.append((name, branch))
+            if uuid:
+                uuids.add(uuid)
+                branch = self.branches.get(uuid)
+                branches.append((name, branch))
         for uuid in self.branches.list():
             if uuid in uuids: continue
             uuids.add(uuid)
@@ -1888,21 +1890,29 @@ class Project:
             files = [txn.full_to_repo_path(filename) for filename in files] if files else None
             self.stash_session(txn.active(), files)
 
-    def save_as(self, name):
+    def save_as(self, name, rename=False):
         # take current session
         # inside a transaction, add new branch, session, remove session from old branch 
         with self.do_nohistory('open') as txn:
-            active = self.active()
-            old = txn.get_branch(active.branch)
-            old.sessions.remove(active.uuid)
-            print(old.sessions)
-            buuid = UUID()
-            branch = objects.Branch(buuid, name, 'active', old.head, old.base, old.init, old.upstream, sessions=[active.uuid])
-            active.branch = buuid
-            txn.set_name(name, branch.uuid)
-            txn.put_session(active)
-            txn.put_branch(branch)
-            txn.put_branch(old)
+            if rename:
+                active = self.active()
+                old = txn.get_branch(active.branch)
+                txn.set_name(old.name, None)
+                old.name = name
+                txn.set_name(name, old.uuid)
+                txn.put_branch(old)
+            else:
+                active = self.active()
+                old = txn.get_branch(active.branch)
+                old.sessions.remove(active.uuid)
+                print(old.sessions)
+                buuid = UUID()
+                branch = objects.Branch(buuid, name, 'active', old.head, old.base, old.init, old.upstream, sessions=[active.uuid])
+                active.branch = buuid
+                txn.set_name(name, branch.uuid)
+                txn.put_session(active)
+                txn.put_branch(branch)
+                txn.put_branch(old)
 
     def open_branch(self, name):
         with self.do_nohistory('open') as txn:
