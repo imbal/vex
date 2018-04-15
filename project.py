@@ -1259,15 +1259,15 @@ class Project:
         except (IOError, FileNotFoundError):
             raise VexLock('Cannot open project lockfile: {}'.format(self.lockfile))
         try:
-                fh.truncate(0)
-                fh.write(b'# locked by %d at %a\n'%(os.getpid(), str(NOW())))
-                fh.write(codec.dump(command))
-                fh.write(b'\n')
-                fh.flush()
-                yield self
-                fh.write(b'# released by %d %a\n'%(os.getpid(), str(NOW())))
+            fh.truncate(0)
+            fh.write(b'# locked by %d at %a\n'%(os.getpid(), str(NOW())))
+            fh.write(codec.dump(command))
+            fh.write(b'\n')
+            fh.flush()
+            yield self
+            fh.write(b'# released by %d %a\n'%(os.getpid(), str(NOW())))
         finally:
-                fh.close()
+            fh.close()
 
     # ... and so are these, but, they interact with the action log
     def rollback_new_action(self):
@@ -1686,7 +1686,7 @@ class Project:
 
             old_uuid = commit
             old = txn.get_change(commit)
-            n = old.next_n('prepare')
+            n = old.next_n(objects.Prepare)
             while old.n == n:
                 old_uuid = old.prev
                 old = txn.get_change(old.prev)
