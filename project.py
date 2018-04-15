@@ -1604,10 +1604,11 @@ class Project:
         if ignore:
             if isinstance(ignore, str): ignore = ignore,
             for rule in ignore:
-                if rule.startswith('/'):
+                if '**' in rule:
                     raise VexUnfinished()
-                elif '**' in rule:
-                    raise VexUnfinished()
+                elif rule.startswith('/'):
+                    if rule == path:
+                        return False
                 elif fnmatch.fnmatch(name, rule):
                     return False
 
@@ -1615,10 +1616,11 @@ class Project:
         if include:
             if isinstance(include, str): include = include,
             for rule in include:
-                if rule.startswith('/'):
+                if '**' in rule:
                     raise VexUnfinished()
-                elif '**' in rule:
-                    raise VexUnfinished()
+                elif rule.startswith('/'):
+                    if rule == path:
+                        return True
                 elif fnmatch.fnmatch(name, rule):
                     return True
 
@@ -1700,12 +1702,6 @@ class Project:
         with self.do_nohistory('prepare') as txn:
             session = txn.refresh_active()
             files = [txn.full_to_repo_path(filename) for filename in files] if files else None
-            prepare = session.prepare
-
-            old = txn.get_change(prepare)
-            n = old.next_n(objects.Prepare)
-            while old and isinstance(old, objects.Prepare):
-                old = txn.get_change(old.prepared)
 
             changes = txn.active_changes(files)
 
@@ -1713,6 +1709,13 @@ class Project:
                 return False
 
         with self.do('prepare') as txn:
+            prepare = session.prepare
+
+            old = txn.get_change(prepare)
+            n = old.next_n(objects.Prepare)
+            while old and isinstance(old, objects.Prepare):
+                old = txn.get_change(old.prev)
+
 
             txn.store_changed_files(changes)
             txn.update_active_changes(changes)
