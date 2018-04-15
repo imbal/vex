@@ -368,7 +368,7 @@ class objects:
         Unchanged = set(('tracked'))
         Changed = set(('added', 'modified', 'deleted', 'replaced'))
 
-        def __init__(self, kind, state, *, working=False, addr=None, stash=None, mtime=None, properties=None, replace=None):
+        def __init__(self, kind, state, *, working=False, addr=None, stash=None, size=None, mode=None, mtime=None, properties=None, replace=None):
             if kind not in self.Kinds: raise VexBug('bad')
             if state not in self.States: raise VexBug('bad')
             self.kind = kind
@@ -376,6 +376,8 @@ class objects:
             self.working = working
             self.addr = addr
             self.mtime = mtime
+            self.size = size
+            self.mode = mode
             self.stash = stash
             self.properties = properties
             self.replace = replace
@@ -707,21 +709,34 @@ class ProjectChange:
                 elif entry.state == 'deleted':
                     pass
                 elif entry.state == 'tracked':
+                    modified = False
+                    now = time.time()
+                    stat = os.stat(path)
                     old_mtime = entry.mtime
-                    if old_mtime is None:
+
+                    if entry.mtime != None and (entry.mtime < stat.st_mtime):
+                        modified=True
+                    elif entry.size != None and (entry.size != stat.st_size):
+                        modified = True
+                    elif entry.mode != None and (entry.mode != stat.st_mode):
+                        modified = True
+                    elif entry.mtime is None:
                         new_addr = self.project.files.addr_for_file(path)
                         if new_addr != entry.addr:
-                            entry.state = "modified"
-                            entry.mtime = None
-                        else:
-                            new_mtime = os.path.getmtime(path)
-                            if time.time() - new_mtime >= MTIME_GRACE_SECONDS:
-                                entry.mtime = new_mtime
-                    elif (old_mtime < os.path.getmtime(path)):
+                            modified = True
+                        if now - stat.st_mtime >= MTIME_GRACE_SECONDS:
+                            entry.mtime = stat.st_mtime
+
+                    if modified:
                         entry.state = "modified"
-                        entry.mtime = None
+                        entry.mode = stat.st_mode
+                        entry.size = stat.st_size
+                        if now - stat.st_mtime >= MTIME_GRACE_SECONDS:
+                            entry.mtime = stat.st_mtime
                 elif entry.state == 'modified':
-                    pass
+                    stat = os.stat(path)
+                    entry.mode = stat.st_mode
+                    entry.size = stat.st_size
                 else:
                     raise VexBug('welp')
             elif entry.kind == "dir":
@@ -840,20 +855,26 @@ class ProjectChange:
             else:
                 if working:
                     path = self.repo_to_full_path(name)
-                    mtime = os.path.getmtime(path)
-                    if (time.time() - mtime) < MTIME_GRACE_SECONDS:
+                    stat = os.stat(path)
+                    if (time.time() - stat.st_mtime) < MTIME_GRACE_SECONDS:
                         mtime = None
+                    else:
+                        mtime = stat.st_mtime
+                    mode = stat.st_mode
+                    size = stat.st_size
                 else:
                     mtime = None
+                    mode = None
+                    size = None
 
                 if isinstance(change, objects.AddFile):
-                    active.files[name] = objects.Tracked("file", "tracked", working=working, addr=change.addr, properties=change.properties, mtime=mtime)
+                    active.files[name] = objects.Tracked("file", "tracked", working=working, addr=change.addr, properties=change.properties, mtime=mtime, mode=mode, size=size)
                 elif isinstance(change, objects.ChangeFile):
-                    active.files[name] = objects.Tracked("file", "tracked", working=working, addr=change.addr, properties=change.properties, mtime=mtime)
+                    active.files[name] = objects.Tracked("file", "tracked", working=working, addr=change.addr, properties=change.properties, mtime=mtime, mode=mode, size=size)
                 elif isinstance(change, objects.AddDir):
-                    active.files[name] = objects.Tracked("dir", "tracked",  working=working, properties=change.properties, mtime=mtime)
+                    active.files[name] = objects.Tracked("dir", "tracked",  working=working, properties=change.properties, mtime=mtime, mode=mode, size=size)
                 elif isinstance(change, objects.ChangeDir):
-                    active.files[name] = objects.Tracked("dir", "tracked", working=working, properties=change.properties, mtime=mtime)
+                    active.files[name] = objects.Tracked("dir", "tracked", working=working, properties=change.properties, mtime=mtime, mode=mode, size=size)
                 else:
                     raise VexBug(change)
 
@@ -899,29 +920,28 @@ class ProjectChange:
                     path = os.path.join(prefix, name)
                     if changes and name in changes:
                         change = changes.pop(name)
+                        # bugL: last and not all changes. 
                         if isinstance(change, objects.NewFile):
                             entries[name] = objects.File(change.addr, change.properties)
                         elif isinstance(change, objects.NewDir):
                             new_addr = apply_changes(path, entry.addr)
                             entries[name] = objects.Dir(new_addr, change.properties)
                         elif isinstance(change, objects.DeleteFile):
-                            if not isinstance(entry, objects.File): raise VexBug('cant delete a file not in repo')
+                            # if not isinstance(entry, objects.File): raise VexBug('cant delete a file not in repo')
                         elif isinstance(change, objects.DeleteDir):
-                            if not isinstance(entry, objects.Dir): raise VexBug('cant delete a dir not in repo')
-                            tree_addr = apply_changes(os.path.join(prefix, name), entry.addr)
+                            # if not isinstance(entry, objects.Dir): raise VexBug('cant delete a dir not in repo')
+                            old_addr = entry.addr if isinstance(entry, objects.Dir) else None
+                            tree_addr = apply_changes(os.path.join(prefix, name), addr)
                             if not tree_addr is None:
                                 raise VexBug('non empty dir')
                         elif isinstance(change, objects.ChangeFile):
-                            if not isinstance(entry, objects.File):
-                                raise VexUnfinished(entry)
-                            if entry.addr != change.addr:
+                            if not isinstance(entry, objects.File) ir  entry.addr != change.addr:
                                 entries[name] = objects.File(change.addr, change.properties)
                             else:
                                 entries[name] = objects.File(entry.addr, change.properties)
                         elif isinstance(change, objects.ChangeDir):
-                            if not isinstance(entry, objects.Dir):
-                                raise VexUnfinished('nope')
-                            new_addr = apply_changes(path, entry.addr)
+                            old_addr = entry.addr if isinstance(entry, objects.Dir) else None
+                            new_addr = apply_changes(path, addr)
                             entries[name] = objects.Dir(new_addr, change.properties)
                         elif isinstance(change, objects.AddDir):
                             tree_addr = apply_changes(os.path.join(prefix, name), None)
@@ -952,11 +972,13 @@ class ProjectChange:
                         else:
                             raise VexBug('bad commit')
 
-                    elif isinstance(change, (objects.AddDir, objects.NewDir)):
+                    elif isinstance(change, (objects.AddDir, objects.NewDir, objects.ChangeDir)):
                         tree_addr = apply_changes(os.path.join(prefix, name), None)
                         entries[name] = objects.Dir(tree_addr, change.properties)
-                    elif isinstance(change, (objects.AddFile, objects.NewFile)):
+                    elif isinstance(change, (objects.AddFile, objects.NewFile, objects.ChangeFile)):
                         entries[name] = objects.File(change.addr, change.properties)
+                    elif isinstance(change, (objects.DeleteDir, objects.DeleteFile)):
+                        pass
                     else:
                         raise VexBug('nope {}'.format(change))
 
@@ -1467,6 +1489,8 @@ class Project:
                 raise VexBug('no')
             entry.working = None
             entry.mtime = None
+            entry.mode = None
+            entry.size = None
 
         for dir in sorted(dirs, reverse=True, key=lambda x: x.split("/")):
             if dir in (self.working_dir, self.settings.dir):
@@ -1484,10 +1508,15 @@ class Project:
             if os.path.commonpath((name, prefix)) != prefix and os.path.commonpath((name, self.VEX)) != self.VEX:
                 entry.working = None
                 entry.mtime = None
+                entry.mode = None
+                entry.size = None
                 continue
             else:
                 entry.working = True
                 entry.mtime = None
+                entry.size = None
+                entry.mode = None
+
             if entry.kind == 'ignore':
                 continue
 
@@ -1498,10 +1527,12 @@ class Project:
                     os.makedirs(path, exist_ok=True)
             elif entry.kind =="file":
                 self.files.make_copy(entry.addr, path)
+                # XXX set up mode from props, set up size
             elif entry.kind == "stash":
                 self.scratch.make_copy(entry.stash, path)
                 entry.kind = "file"
                 entry.stash = None
+                # XXX set up mode from props, set up size
             elif entry.kind == "ignore":
                 pass
             else:
@@ -1562,14 +1593,22 @@ class Project:
         if ignore:
             if isinstance(ignore, str): ignore = ignore,
             for rule in ignore:
-                if fnmatch.fnmatch(name, rule):
+                if rule.startswith('/'):
+                    raise VexUnfinished()
+                elif '**' in rule:
+                    raise VexUnfinished()
+                elif fnmatch.fnmatch(name, rule):
                     return False
 
         include = self.settings.get('include')
         if include:
             if isinstance(include, str): include = include,
             for rule in include:
-                if fnmatch.fnmatch(name, rule):
+                if rule.startswith('/'):
+                    raise VexUnfinished()
+                elif '**' in rule:
+                    raise VexUnfinished()
+                elif fnmatch.fnmatch(name, rule):
                     return True
 
     def init(self, prefix, include, ignore):
