@@ -6,12 +6,12 @@ from cli import Command
 from project import Project, VexBug, VexNoProject, VexNoHistory, VexUnclean, VexError, VexArgument
 import rson
 
-DOTVEX = ".vex"
+VEX = "Vex"
 
 def get_project(check=True, empty=True):
     working_dir = os.getcwd()
     while True:
-        config_dir = os.path.join(working_dir, DOTVEX)
+        config_dir = os.path.join(working_dir, VEX)
         if os.path.exists(config_dir):
             break
         new_working_dir = os.path.split(working_dir)[0]
@@ -57,12 +57,12 @@ vex_init = vex_cmd.subcommand('init',short="Create a new Vex Project")
 @vex_init.run('--working --config --prefix --include... --ignore... [directory]')
 def Init(directory, working, config, prefix, include, ignore):
     working_dir = working or directory or os.getcwd()
-    config_dir = config or os.path.join(working_dir, DOTVEX)
+    config_dir = config or os.path.join(working_dir, VEX)
     prefix = prefix or os.path.split(working_dir)[1] or 'root'
     prefix = os.path.join('/', prefix)
 
     include = include or ["*"] 
-    ignore = ignore or [".*"]
+    ignore = ignore or [".*",VEX]
 
     p = Project(config_dir, working_dir)
 
@@ -202,15 +202,20 @@ def Forget(file):
             f = os.path.relpath(f)
             yield "forget: {}".format(f)
 
-vex_prepare = vex_cmd.subcommand('prepare', short="Save current working copy to prepare for commit")
-@vex_prepare.run('[file...]')
-def Prepare(file):
+vex_prepare = vex_cmd.subcommand('prepare', short="Save current working copy to prepare for commit", aliases=['save'])
+@vex_prepare.run('--watch [file...]')
+def Prepare(file,watch):
     p = get_project()
     yield ('Preparing')
     with p.lock('prepare') as p:
         cwd = os.getcwd()
         files = [os.path.join(cwd, f) for f in file] if file else None
-        p.prepare(files)
+        if watch:
+            for file in watch_files(files):
+                p.prepare([file])
+                yield os.path.relpath(file)
+        else:
+            p.prepare(files)
 
 vex_commit = vex_cmd.subcommand('commit')
 @vex_commit.run('[file...]')
@@ -239,42 +244,49 @@ def Amend(file):
             yield 'Nothing to commit'
         # check that session() and branch()
 
-vex_save = vex_cmd.subcommand('save', short="Save progress without making a commit or checkpoint to undo")
-@vex_save.run('--watch')
-def Save(watch):
-    p = get_project()
-    with p.lock('amend') as p:
-        if not watch:
-            p.save()
-        else:
-            for file in watch_changes():
-                p.save(files=[file])
-
 vex_saveas = vex_cmd.subcommand('saveas', short="Rename head/branch")
-@vex_saveas.run()
-def SaveAs():
-    pass
+@vex_saveas.run('name')
+def SaveAs(name):
+    p = get_project()
+    with p.lock('saveas') as p:
+        p.save_as(name)
 
-vex_open = vex_cmd.subcommand('open')
+vex_open = vex_cmd.subcommand('open', short="Open existing branch")
 @vex_open.run('name')
 def Open(name):
-    pass
+    p = get_project()
+    with p.lock('open') as p:
+        p.open_branch(name)
 
-vex_new = vex_cmd.subcommand('new')
+vex_new = vex_cmd.subcommand('new', short="Create new branch")
 @vex_new.run('name')
 def New(name):
-    pass
-
-vex_switch = vex_cmd.subcommand('switch', short="Change working directory/branch")
-@vex_switch.run('--prefix [branch]')
-def Switch(prefix, branch):
     p = get_project()
+    with p.lock('new') as p:
+        p.new_branch(name)
 
+vex_branch = vex_cmd.subcommand('branch', short="Show current branch")
+@vex_branch.run()
+def Branch():
+    p = get_project()
+    with p.lock('branch') as p:
+        active = p.active()
+        branch = p.branches.get(active.branch)
+        # session is ahead (in prepared? in commits?)
+        # session has detached ...?
+        # 
+        yield branch.name
+
+vex_switch = vex_cmd.subcommand('switch', short="Change working directory")
+@vex_switch.run('prefix')
+def Switch(prefix):
+    p = get_project()
+    
     with p.lock('switch') as p:
         prefix = os.path.join(p.prefix(), prefix)
         p.switch(prefix)
 
-vex_branches = vex_cmd.subcommand('branches')
+vex_branches = vex_cmd.subcommand('branches', short="List all branches")
 @vex_branches.run()
 def Branches():
     p = get_project()
@@ -287,12 +299,22 @@ def Branches():
                 yield branch.uuid
 
 
-
-
 vex_debug = vex_cmd.subcommand('debug', 'run a command without capturing exceptions')
 @vex_debug.run()
 def Debug():
     yield ('Use vex debug <cmd> to run <cmd>, or use `vex debug:status`')
+
+vex_stash = vex_debug.subcommand('stash', short="Save progress without making a commit or checkpoint to undo")
+@vex_stash.run('--watch')
+def Stash(watch):
+    p = get_project()
+    with p.lock('stash') as p:
+        if not watch:
+            p.stash()
+        else:
+            for file in watch_files():
+                p.stash(files=[file])
+                print(file)
 
 debug_status = vex_debug.subcommand('status')
 @debug_status.run()

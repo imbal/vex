@@ -61,15 +61,6 @@ class Codec:
 codec = Codec()
 
 class objects:
-    @codec.register
-    class Branch:
-        def __init__(self, uuid, head, base, init, upstream, sessions):
-            self.uuid = uuid
-            self.head = head
-            self.base = base
-            self.init = init
-            self.upstream = upstream
-            self.sessions = sessions
 
     # Entries in commits
     @codec.register
@@ -332,6 +323,26 @@ class objects:
     # Working copy state
 
     @codec.register
+    class Active:
+        def __init__(self, author, branch, session, prefix):
+            self.author = author
+            self.branch = branch
+            self.session = session
+            self.prefix = prefix
+
+    @codec.register
+    class Branch:
+        def __init__(self, uuid, name, head, base, init, upstream, sessions):
+            self.uuid = uuid
+            self.name = name
+            self.head = head
+            self.base = base
+            self.init = init
+            self.upstream = upstream
+            self.sessions = sessions
+
+
+    @codec.register
     class Session:
         def __init__(self,uuid, branch, prepare, commit, files,  mode=None, state=None):
             self.uuid = uuid
@@ -359,6 +370,7 @@ class objects:
             self.mtime = mtime
             self.stash = stash
             self.properties = properties
+            self.replace = replace
 
 
 # Stores
@@ -1188,7 +1200,7 @@ class Project:
     def repo_to_full_path(self, prefix, file):
         file = os.path.normpath(file)
         if os.path.commonpath((file, "/.vex")) == '/.vex':
-            path = os.path.join(".vex/settings", os.path.relpath(file, '/.vex'))
+            path = os.path.join(self.settings.dir, os.path.relpath(file, '/.vex'))
         else:
             path = os.path.relpath(file, prefix)
         return os.path.normpath(os.path.join(self.working_dir, path))
@@ -1521,16 +1533,17 @@ class Project:
         while scan:
             dir = scan.pop()
             for f in os.listdir(dir):
-                if not self.match_filename(f): continue
-                f = os.path.join(dir, f)
-                if os.path.isdir(f):
-                    scan.append(f)
-                    output.append(f)
-                elif os.path.isfile(f):
-                    output.append(f)
+                p = os.path.join(dir, f)
+                if not self.match_filename(p, f): continue
+                if os.path.isdir(p):
+                    output.append(p)
+                    scan.append(p)
+                elif os.path.isfile(p):
+                    output.append(p)
         return output
 
-    def match_filename(self, name):
+    def match_filename(self, path, name):
+        print(path, name)
         ignore = self.settings.get('ignore')
         if ignore:
             if isinstance(ignore, str): ignore = ignore,
@@ -1578,7 +1591,7 @@ class Project:
             session_uuid = UUID()
 
             branch_name = 'latest'
-            branch = objects.Branch(branch_uuid, commit_uuid, None, commit_uuid, None, [session_uuid])
+            branch = objects.Branch(branch_uuid, branch_name, commit_uuid, None, commit_uuid, None, [session_uuid])
             txn.put_branch(branch)
             txn.set_name(branch_name, branch)
 
@@ -1705,7 +1718,9 @@ class Project:
             names = {}
             dirs = {}
             for filename in files:
+                print('file',filename)
                 name = txn.full_to_repo_path(filename)
+                if filename == self.dir: continue
                 if os.path.isfile(filename):
                     names[name] = filename
                 elif os.path.isdir(filename):
@@ -1806,7 +1821,7 @@ class Project:
             branches.append((None, branch))
         return branches
 
-    def save(self, files=None):
+    def stash(self, files=None):
         files = self.normalize_files(files) if files is not None else None
         with self.do_nohistory('save') as txn:
             files = [txn.full_to_repo_path(filename) for filename in files] if files else None
@@ -1817,6 +1832,11 @@ class Project:
 
     def save_as(self, name):
         pass
+
+    def open_branch(self, name):
+        pass
+
+
 
 def get_project(check=True, empty=True):
     working_dir = os.getcwd()
