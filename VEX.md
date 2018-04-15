@@ -107,21 +107,23 @@ By default, `vex init name` creates a repository with a `/name` directory inside
 
 - `vex amend` 
 
-- `--pick`
+- `--pick` * 
 
-- `vex rollback`
+- `vex rollback` *
 
-- `vex revert`
+- `vex revert` *
 
 ### Working on a branch
 
-- `vex open` * 
+- `vex branch` what branch are you on
 
-- `vex saveas` * (see `git checkout -b`)
+- `vex open` start a new branch
+
+- `vex saveas`  (see `git checkout -b`)
 
 - `vex close` *
 
-- `vex branches` *
+- `vex branches` list all branches
 
 ### Working on an anonymous branch
 
@@ -157,25 +159,25 @@ By default, `vex init name` creates a repository with a `/name` directory inside
 
 ### Sharing changes
 
-- `vex export`
+- `vex export` *
 
-- `vex import`
+- `vex import` *
 
-- `vex pull` 
+- `vex pull` *
 
-- `vex push`
+- `vex push` *
 
-- `vex remotes`
+- `vex remotes` *
 
-- `vex remotes:add`
+- `vex remotes:add` *
 
 ### Handling mistakes, purging old commits
 
-- `vex purge`
+- `vex purge` *
 
 ### Truncating old commits
 
-- `vex truncate`
+- `vex truncate` *
 
 ### Subprojects
 

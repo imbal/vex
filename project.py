@@ -1851,7 +1851,18 @@ class Project:
     def save_as(self, name):
         # take current session
         # inside a transaction, add new branch, session, remove session from old branch 
-        pass
+        with self.do_nohistory('open') as txn:
+            active = self.active()
+            old = txn.get_branch(active.branch)
+            old.sessions.remove(active.uuid)
+            print(old.sessions)
+            buuid = UUID()
+            branch = objects.Branch(buuid, name, 'active', old.head, old.base, old.init, old.upstream, sessions=[active.uuid])
+            active.branch = buuid
+            txn.set_name(name, branch.uuid)
+            txn.put_session(active)
+            txn.put_branch(branch)
+            txn.put_branch(old)
 
     def open_branch(self, name):
         with self.do_nohistory('open') as txn:
@@ -1866,6 +1877,8 @@ class Project:
             if not sessions:
                 session = txn.create_session(branch_uuid, 'attached', branch.head)
                 session_uuid = session
+                branch.sessions.append(session_uuid)
+                txn.put_branch(branch)
             elif len(sessions) == 1:
                 session_uuid = sessions[0]
             else:
