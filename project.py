@@ -906,7 +906,6 @@ class ProjectChange:
                 dir_changes[prefix]  = {}
             dir_changes[prefix][name] = entry
 
-
         def apply_changes(prefix, addr, root=False):
             old_entries = {}
             entries = {}
@@ -1003,8 +1002,27 @@ class ProjectChange:
                 elif isinstance(entry, objects.File):
                     output[path] = objects.Tracked('file', 'tracked', addr=entry.addr, properties=entry.properties)
 
-        commit_obj = self.get_change(commit)
-        walk('/', commit_obj.root, root=True)
+        def extract(changes):
+            for path, change in changes.items():
+                if isinstance(change, (objects.AddFile, objects.NewFile, objects.ChangeFile)):
+                    output[name] = objects.Tracked("file", "tracked", addr=change.addr, properties=change.properties)
+                elif isinstance(change, (objects.AddDir, objects.NewDir, objects.ChangeDir)):
+                    output[name] = objects.Tracked("dir", "tracked", properties=change.properties)
+                elif isinstance(change, (objects.DeleteDir, objects.DeleteFile)):
+                    output.pop(name)
+                else:
+                    raise VexBug(change)
+
+        prepared = []
+
+        old = self.get_change(commit)
+        while old and isinstance(old, objects.Prepare):
+            prepared.append(old.changes)
+            old = self.get_change(commit.prepared)
+
+        walk('/', old.root, root=True)
+        for changes in reversed(prepared):
+            extract(changes)
 
         return output
 
@@ -1679,30 +1697,27 @@ class Project:
 
     def prepare(self, files):
         files = self.normalize_files(files) if files else None
-        with self.do('prepare') as txn:
+        with self.do_nohistory('prepare') as txn:
             session = txn.refresh_active()
             files = [txn.full_to_repo_path(filename) for filename in files] if files else None
-            commit = session.prepare
+            prepare = session.prepare
 
-            old_uuid = commit
-            old = txn.get_change(commit)
+            old = txn.get_change(prepare)
             n = old.next_n(objects.Prepare)
-            while old.n == n:
-                old_uuid = old.prev
-                old = txn.get_change(old.prev)
+            while old and isinstance(old, objects.Prepare):
+                old = txn.get_change(old.prepared)
 
             changes = txn.active_changes(files)
 
             if not changes:
                 return False
 
-            if commit == old_uuid:
-                commit = None
+        with self.do('prepare') as txn:
 
             txn.store_changed_files(changes)
             txn.update_active_changes(changes)
 
-            prepare = objects.Prepare(n, txn.now, prev=old_uuid, prepared=commit, changes=changes)
+            prepare = objects.Prepare(n, txn.now, prev=old.uuid, prepared=prepare, changes=changes)
             prepare_uuid = txn.put_change(prepare)
 
             txn.set_active_prepare(prepare_uuid)
@@ -1712,7 +1727,7 @@ class Project:
 
     def commit(self, files, kind=objects.Commit, command='commit'):
         files = self.normalize_files(files) if files else None
-        with self.do(command) as txn:
+        with self.do_nohistory(command) as txn:
             session = txn.refresh_active()
             files = [txn.full_to_repo_path(filename) for filename in files] if files else None
 
@@ -1724,8 +1739,8 @@ class Project:
                 for name, c in old.changes.items():
                     if name not in changes: changes[name] = []
                     changes[name].append(c)
-                old_uuid = old.prev
-                old = txn.get_change(old.prev)
+                old_uuid = old.prepared
+                old = txn.get_change(old.prepared)
 
             my_changes = txn.active_changes(files)
             for name, c in my_changes.items():
@@ -1737,11 +1752,12 @@ class Project:
                 # print('what')
                 return False
 
+
+        with self.do(command) as txn:
             root_uuid = txn.active_root(old.root, changes)
 
             if root_uuid == old.root:
-                return False
-
+                raise VexBug('changes but no root change')
             txn.store_changed_files(my_changes)
             txn.update_active_changes(my_changes)
 
