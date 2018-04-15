@@ -164,7 +164,6 @@ def Diff(file):
         cwd = os.getcwd()
         files = [os.path.join(cwd, f) for f in file] if file else None
         for name, diff in  p.diff(files).items():
-            yield name
             yield diff
 
 vex_add = vex_cmd.subcommand('add','Add files to the project')

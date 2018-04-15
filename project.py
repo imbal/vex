@@ -1640,7 +1640,8 @@ class Project:
                     output[name] = dict(old=self.files.filename(e.addr), new=self.repo_to_full_path(self.prefix(),name))
             output2 = {}
             for name, d in output.items():
-                p = subprocess.run(["diff", d['old'], d['new']], stdout=subprocess.PIPE)
+                a,b = os.path.join('./a',name[1:]), os.path.join('./b', name[1:])
+                p = subprocess.run(["diff", '-u', '--label', a, '--label', b,  d['old'], d['new']], stdout=subprocess.PIPE)
                 output2[name] = p.stdout
             return output2
 
@@ -1894,7 +1895,6 @@ class Project:
             branch = txn.create_branch(name, from_commit, from_branch, fork)
             session = txn.create_session(branch.uuid, 'attached', branch.head)
             txn.set_name(name, branch.uuid)
-
 
         with self.do_switch('new') as txn:
             txn.set_branch_state(branch.uuid, "active")
