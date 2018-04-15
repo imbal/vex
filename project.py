@@ -867,11 +867,11 @@ class ProjectChange:
                     mode = None
                     size = None
 
-                if isinstance(change, objects.AddFile):
+                if isinstance(change, (objects.AddFile, objects.NewFile)):
                     active.files[name] = objects.Tracked("file", "tracked", working=working, addr=change.addr, properties=change.properties, mtime=mtime, mode=mode, size=size)
                 elif isinstance(change, objects.ChangeFile):
                     active.files[name] = objects.Tracked("file", "tracked", working=working, addr=change.addr, properties=change.properties, mtime=mtime, mode=mode, size=size)
-                elif isinstance(change, objects.AddDir):
+                elif isinstance(change, (objects.AddDir, objects.NewDir)):
                     active.files[name] = objects.Tracked("dir", "tracked",  working=working, properties=change.properties, mtime=mtime, mode=mode, size=size)
                 elif isinstance(change, objects.ChangeDir):
                     active.files[name] = objects.Tracked("dir", "tracked", working=working, properties=change.properties, mtime=mtime, mode=mode, size=size)
@@ -908,80 +908,72 @@ class ProjectChange:
 
 
         def apply_changes(prefix, addr, root=False):
+            old_entries = {}
             entries = {}
             changes = dir_changes.get(prefix, None)
             changed = bool(changes)
             properties = {}
+            names = set()
             if addr:
                 old = self.get_manifest(addr)
                 if root:
                     properties = old.properties
-                for name, entry in old.entries.items():
-                    path = os.path.join(prefix, name)
-                    if changes and name in changes:
-                        change = changes.pop(name)
-                        # bugL: last and not all changes. 
-                        if isinstance(change, objects.NewFile):
-                            entries[name] = objects.File(change.addr, change.properties)
-                        elif isinstance(change, objects.NewDir):
-                            new_addr = apply_changes(path, entry.addr)
-                            entries[name] = objects.Dir(new_addr, change.properties)
-                        elif isinstance(change, objects.DeleteFile):
-                            # if not isinstance(entry, objects.File): raise VexBug('cant delete a file not in repo')
-                            pass
-                        elif isinstance(change, objects.DeleteDir):
-                            # if not isinstance(entry, objects.Dir): raise VexBug('cant delete a dir not in repo')
-                            old_addr = entry.addr if isinstance(entry, objects.Dir) else None
-                            tree_addr = apply_changes(os.path.join(prefix, name), addr)
-                            if not tree_addr is None:
-                                raise VexBug('non empty dir')
-                        elif isinstance(change, objects.ChangeFile):
-                            if not isinstance(entry, objects.File) or entry.addr != change.addr:
-                                entries[name] = objects.File(change.addr, change.properties)
-                            else:
-                                entries[name] = objects.File(entry.addr, change.properties)
-                        elif isinstance(change, objects.ChangeDir):
-                            old_addr = entry.addr if isinstance(entry, objects.Dir) else None
-                            new_addr = apply_changes(path, addr)
-                            entries[name] = objects.Dir(new_addr, change.properties)
-                        elif isinstance(change, objects.AddDir):
-                            tree_addr = apply_changes(os.path.join(prefix, name), None)
-                            entries[name] = objects.Dir(tree_addr, change.properties)
-                        elif isinstance(change, objects.AddFile):
-                            entries[name] = objects.File(change.addr, change.properties)
-                        else:
-                            raise VexBug('nope')
-
-                    elif isinstance(entry, objects.Dir):
-                        path = os.path.join(prefix, name)
-                        new_addr = apply_changes(path, entry.addr)
-                        if new_addr != entry.addr:
-                            changed = True
-                            entries[name] = objects.Dir(new_addr, entry.properties)
-                        else:
-                            entries[name] = entry
-                    elif isinstance(entry, objects.File):
-                        entries[name] = entry
-                    else:
-                        raise VexBug('nope')
-
+                old_entries = old.entries
+                names.update(old_entries.keys())
             if changes:
-                for name, change in changes.items():
-                    if name == ".":
+                names.update(changes.keys())
+
+            for name in sorted(names):
+                if name == ".":
+                    for change in changes.pop(name):
                         if isinstance(change, objects.ChangeDir):
                             properties = change.properties
                         else:
-                            raise VexBug('bad commit')
+                            raise VexBug('welp')
+                    continue
 
-                    elif isinstance(change, (objects.AddDir, objects.NewDir, objects.ChangeDir)):
-                        tree_addr = apply_changes(os.path.join(prefix, name), None)
-                        entries[name] = objects.Dir(tree_addr, change.properties)
-                    elif isinstance(change, (objects.AddFile, objects.NewFile, objects.ChangeFile)):
-                        entries[name] = objects.File(change.addr, change.properties)
-                    elif isinstance(change, (objects.DeleteDir, objects.DeleteFile)):
-                        pass
-                    else:
-                        raise VexBug('nope {}'.format(change))
+                entry = old_entries.get(name)
+                if changes and name in changes:
+                    for change in reversed(changes.pop(name)):
+                        if isinstance(change, objects.NewFile):
+                            if not isinstance(entry, objects.Dir): raise VexBug('overwrite sync')
+                            entry = objects.File(change.addr, change.properties)
+                        elif isinstance(change, objects.NewDir):
+                            if not isinstance(entry, objects.File): raise VexBug('overwrite sync')
+                            entry = objects.Dir(None, change.properties)
+                        elif isinstance(change, objects.DeleteFile):
+                            if not isinstance(entry, objects.File): raise VexBug('cant delete a file not in repo')
+                            entry = None
+                        elif isinstance(change, objects.DeleteDir):
+                            if not isinstance(entry, objects.Dir): raise VexBug('cant delete a dir not in repo')
+                            entry = None
+                        elif isinstance(change, objects.ChangeFile):
+                            if not isinstance(entry, objects.File): raise VexBug('no')
+                            entry = objects.File(change.addr, change.properties)
+                        elif isinstance(change, objects.ChangeDir):
+                            if not isinstance(entry, objects.Dir): raise VexBug('no')
+                            entry = objects.Dir(entry.addr, change.properties)
+                        elif isinstance(change, objects.AddDir):
+                            if entry: raise VexBug('wait, what')
+                            entry = objects.Dir(None, change.properties)
+                        elif isinstance(change, objects.AddFile):
+                            if entry: raise VexBug('wait, what')
+                            entry = objects.File(change.addr, change.properties)
+                        else:
+                            raise VexBug('nope')
+                        
+                if entry and isinstance(entry, objects.Dir):
+                    path = os.path.join(prefix, name)
+                    new_addr = apply_changes(path, entry.addr)
+                    if new_addr != entry.addr:
+                        changed = True
+                        entry = objects.Dir(new_addr, entry.properties)
+
+                if entry and not isinstance(entry, (objects.File, objects.Dir)):
+                    raise VexBug('nope')
+
+                if entry is not None:
+                    entries[name] = entry
 
             if not entries:
                 return None
@@ -1728,16 +1720,21 @@ class Project:
             old_uuid = session.prepare
             old = txn.get_change(session.prepare)
             n = old.next_n(kind)
-            while old.n == n:
-                changes.update(old.changes)
+            while old and isinstance(old, objects.Prepare):
+                for name, c in old.changes.items():
+                    if name not in changes: changes[name] = []
+                    changes[name].append(c)
                 old_uuid = old.prev
                 old = txn.get_change(old.prev)
 
             my_changes = txn.active_changes(files)
+            for name, c in my_changes.items():
+                if name not in changes: changes[name] = []
+                changes[name].append(c)
 
-            changes.update(my_changes)
 
             if not changes:
+                # print('what')
                 return False
 
             root_uuid = txn.active_root(old.root, changes)
@@ -1905,7 +1902,6 @@ class Project:
                 active = self.active()
                 old = txn.get_branch(active.branch)
                 old.sessions.remove(active.uuid)
-                print(old.sessions)
                 buuid = UUID()
                 branch = objects.Branch(buuid, name, 'active', old.head, old.base, old.init, old.upstream, sessions=[active.uuid])
                 active.branch = buuid
