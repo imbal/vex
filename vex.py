@@ -146,10 +146,10 @@ def Status():
         for reponame in sorted(files, key=lambda p:p.split(':')):
             entry = files[reponame]
             if entry.working is None:
-                yield "hidden:{:9}\t{} ".format(entry.state, reponame)
+                pass # yield "hidden:{:9}\t{} ".format(entry.state, reponame)
             elif reponame.startswith('/.vex/') or reponame == '/.vex':
                 path = os.path.relpath(reponame, '/.vex')
-                yield "{}:{:8}\t{}".format('setting', entry.state, path)
+                pass # yield "{}:{:8}\t{}".format('setting', entry.state, path)
             else:
                 path = os.path.relpath(reponame, p.prefix())
                 yield "{:16}\t{}{}".format(entry.state, path, ('*' if entry.stash else '') )
@@ -168,7 +168,7 @@ def Diff(file):
             yield diff
 
 vex_add = vex_cmd.subcommand('add','Add files to the project')
-@vex_add.run('file...')
+@vex_add.run('file:str...')
 def Add(file):
     cwd = os.getcwd()
     if not file:

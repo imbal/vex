@@ -319,7 +319,7 @@ def parse_args(argspec, argv, environ):
     return args
 
 def try_parse(name, arg, argtype):
-    if argtype in ("str", "string"):
+    if argtype in (None, "str", "string"):
         return arg
     elif argtype == "infile":
         return FileHandle(arg, "read")
@@ -347,7 +347,7 @@ def try_parse(name, arg, argtype):
         elif arg == "false":
             return False
         raise BadArg('{} expects either true or false, got {}'.format(name, arg))
-    elif not argtype or argtype == "scalar":
+    elif argtype == "scalar":
         try:
             i = int(arg)
             if str(i) == arg: return i
@@ -728,7 +728,7 @@ def main(root, argv, environ):
             for line in result:
                 if isinstance(line, (bytes, bytearray)):
                     sys.stdout.buffer.write(line)
-                elif line:
+                elif line is not None:
                     print(line)
                 sys.stdout.flush()
             return 0
@@ -749,7 +749,7 @@ def main(root, argv, environ):
         for line in result:
             if isinstance(line, (bytes, bytearray)):
                 sys.stdout.buffer.write(line)
-            elif line:
+            elif line is not None:
                 print(line)
         sys.stdout.flush()
         return -1

@@ -301,11 +301,13 @@ class objects:
 
     @codec.register
     class Switch:
-        def __init__(self, time, command, prefix, session):
+        def __init__(self, time, command, prefix, active, session_states, branch_states):
             self.time = time
             self.command = command
             self.prefix = prefix
-            self.session = session
+            self.active = active
+            self.session_states = session_states
+            self.branch_states = branch_states 
 
 
     @codec.register
@@ -332,8 +334,12 @@ class objects:
 
     @codec.register
     class Branch:
-        def __init__(self, uuid, name, head, base, init, upstream, sessions):
+        States = set(('created', 'active','inactive','merged', 'closed'))
+        def __init__(self, uuid, name, state, head, base, init, upstream, sessions):
+            if not (uuid and state and head and init): raise Exception('no')
+            if state not in self.States: raise Exception('no')
             self.uuid = uuid
+            self.state = state
             self.name = name
             self.head = head
             self.base = base
@@ -344,13 +350,15 @@ class objects:
 
     @codec.register
     class Session:
-        def __init__(self,uuid, branch, prepare, commit, files,  mode=None, state=None):
+        States = set(('attached', 'detached', 'manual', 'update')) 
+        def __init__(self,uuid, branch, state, prepare, commit, files):
+            if not (uuid and branch and prepare and commit): raise Exception('no')
+            if state not in self.States: raise Exception('no')
             self.uuid = uuid
             self.branch = branch
             self.prepare = prepare
             self.commit = commit
             self.files = files
-            self.mode = mode
             self.state = state
 
     @codec.register
@@ -621,53 +629,63 @@ class ActionLog:
             out.append(obj.action)
         return out
 
-
-class StatusChange:
-    def __init__(self, project, command, active):
+class ProjectChange:
+    def __init__(self, project, scratch, command):
         self.project = project
+        self.scratch = scratch
         self.command = command
         self.now = NOW()
+        self.old_branches = {}
+        self.new_branches = {}
+        self.old_names = {}
+        self.new_names = {}
         self.old_sessions = {}
         self.new_sessions = {}
-        self.active_uuid = active
-
-    def get_change(self, uuid):
-        return self.project.changes.get_obj(uuid)
-
-    def get_branch(self, uuid):
-        return self.project.changes.get_obj(uuid)
-
-    def get_session(self, uuid):
-        if uuid in self.new_sessions:
-            return self.new_sessions[uuid]
-        return self.project.sessions.get(uuid)
-
-    def put_session(self, session):
-        if session.uuid not in self.old_sessions:
-            if self.project.sessions.exists(session.uuid):
-                self.old_sessions[session.uuid] = self.project.sessions.get(session.uuid)
-            else:
-                self.old_sessions[session.uuid] = None
-        self.new_sessions[session.uuid] = session
+        self.old_settings = {}
+        self.new_settings = {}
+        self.new_changes = set()
+        self.new_manifests = set()
+        self.new_files = set()
 
     def active(self):
         return self.get_session(self.active_uuid)
 
-    def action(self):
-        if self.new_sessions:
-            changes = dict(sessions=dict(old=self.old_sessions, new=self.new_sessions))
-            return objects.Action(self.now, self.command, changes, ())
-        else:
-            return objects.Action(self.now, self.command, {}, ())
-
     def prefix(self):
-        return self.project.state.get("prefix")
+        return self.get_state("prefix")
 
     def repo_to_full_path(self, file):
         return self.project.repo_to_full_path(self.prefix(),file)
 
     def full_to_repo_path(self, file):
         return self.project.full_to_repo_path(self.prefix(),file)
+
+    def active(self):
+        session_uuid = self.get_state("active")
+        return self.get_session(session_uuid)
+
+    def update_active_files(self, files, remove):
+        active = self.active()
+        active.files.update(files)
+        for r in remove:
+            active.files.pop(r)
+        self.put_session(active)
+
+    def set_active_prepare(self, prepare_uuid):
+        active = self.active()
+        active.prepare = prepare_uuid
+        self.put_session(active)
+
+    def set_active_commit(self, commit_uuid):
+        session = self.active()
+        branch = self.get_branch(session.branch)
+        if session.state == 'attached' and branch.head == session.commit: # descendent check
+            branch.head = commit_uuid
+            self.put_branch(branch)
+        elif session.state == 'attached':
+            session.state = 'detached'
+        session.prepare = commit_uuid
+        session.commit = commit_uuid
+        self.put_session(session)
 
     def refresh_active(self):
         copy = self.active()
@@ -808,65 +826,6 @@ class StatusChange:
                 raise VexBug('kind')
 
         return out
-
-class ProjectChange:
-    refresh_active = StatusChange.refresh_active
-    active_changes = StatusChange.active_changes
-
-    def __init__(self, project, scratch, command):
-        self.project = project
-        self.scratch = scratch
-        self.command = command
-        self.now = NOW()
-        self.old_branches = {}
-        self.new_branches = {}
-        self.old_names = {}
-        self.new_names = {}
-        self.old_sessions = {}
-        self.new_sessions = {}
-        self.old_settings = {}
-        self.new_settings = {}
-        self.new_changes = set()
-        self.new_manifests = set()
-        self.new_files = set()
-
-    def active(self):
-        return self.get_session(self.active_uuid)
-
-    def prefix(self):
-        return self.get_state("prefix")
-
-    def repo_to_full_path(self, file):
-        return self.project.repo_to_full_path(self.prefix(),file)
-
-    def full_to_repo_path(self, file):
-        return self.project.full_to_repo_path(self.prefix(),file)
-
-    def active(self):
-        session_uuid = self.get_state("active")
-        return self.get_session(session_uuid)
-
-    def update_active_files(self, files, remove):
-        active = self.active()
-        active.files.update(files)
-        for r in remove:
-            active.files.pop(r)
-        self.put_session(active)
-
-    def set_active_prepare(self, prepare_uuid):
-        active = self.active()
-        active.prepare = prepare_uuid
-        self.put_session(active)
-
-    def set_active_commit(self, commit_uuid):
-        session = self.active()
-        branch = self.get_branch(session.branch)
-        if branch.head == session.commit: # descendent check
-            branch.head = commit_uuid
-            self.put_branch(branch)
-        session.prepare = commit_uuid
-        session.commit = commit_uuid
-        self.put_session(session)
 
     def update_active_changes(self, changes):
         active = self.active()
@@ -1013,6 +972,27 @@ class ProjectChange:
 
         return apply_changes('/', old, root=True)
 
+    def build_files(self, commit):
+        output = {}
+
+        def walk(prefix, addr, root=False):
+            old = self.get_manifest(addr)
+            if root:
+                output[prefix] = objects.Tracked('dir', 'tracked', properties=old.properties)
+            for name, entry in old.entries.items():
+                path = os.path.join(prefix, name)
+                if isinstance(entry, objects.Dir):
+                    output[path] = objects.Tracked('dir', 'tracked', properties=entry.properties)
+                    if entry.addr:
+                        walk(path, entry.addr)
+                elif isinstance(entry, objects.File):
+                    output[path] = objects.Tracked('file', 'tracked', addr=entry.addr, properties=entry.properties)
+
+        commit_obj = self.get_change(commit)
+        walk('/', commit_obj.root, root=True)
+
+        return output
+
     def get_file(self, addr):
         if addr in self.new_files:
             return self.scratch.get_file(addr)
@@ -1071,6 +1051,12 @@ class ProjectChange:
 
         self.new_branches[branch.uuid] = branch
 
+    def get_name(self, name):
+        if name in self.new_names:
+            return self.new_names[names]
+        if self.project.names.exists(name):
+            return self.project.names.get(name)
+
     def set_name(self, name, branch):
         if name not in self.old_names:
             if self.project.names.exists(name):
@@ -1096,18 +1082,40 @@ class ProjectChange:
 
         return self.project.setting.get(name)
 
+    def create_branch(self, name, from_commit, from_branch, fork):
+        branch_uuid = UUID()
+        origin = self.get_branch(from_branch)
+        upstream = from_branch if not fork else None
+        b = objects.Branch(branch_uuid, name, 'created', from_commit, from_commit, origin.init, upstream, [])
+        self.put_branch(b)
+        return b
+
+    def create_session(self, branch_uuid, state, commit):
+        session_uuid = UUID()
+        b = self.get_branch(branch_uuid)
+        files = self.build_files(commit)
+        session = objects.Session(session_uuid, branch_uuid, state, commit, commit, files)
+        b.sessions.append(session)
+        self.put_branch(b)
+        self.put_session(session)
+        return session
+
     def action(self):
-        if self.new_branches or self.new_names or self.new_sessions or self.new_state or self.new_changes or self.new_manfiests or self.new_files:
+        if self.new_branches or self.new_names or self.new_sessions or self.new_settings:
             branches = dict(old=self.old_branches, new=self.new_branches)
             names = dict(old=self.old_names, new=self.new_names)
             sessions = dict(old=self.old_sessions, new=self.new_sessions)
             settings = dict(old=self.old_settings, new=self.new_settings)
 
-            blobs = dict(changes=self.new_changes, manifests=self.new_manifests, files=self.new_files)
             changes = dict(branches=branches,names=names, sessions=sessions, settings=settings)
-            return objects.Action(self.now, self.command, changes, blobs)
         else:
-            return objects.Action(self.now, self.command, {}, ())
+            changes = {}
+
+        if self.new_changes or self.new_manifests or self.new_files:
+            blobs = dict(changes=self.new_changes, manifests=self.new_manifests, files=self.new_files)
+        else:
+            blobs = {}
+        return objects.Action(self.now, self.command, changes, blobs)
 
 class ProjectSwitch:
     def __init__(self, project, scratch, command):
@@ -1115,20 +1123,23 @@ class ProjectSwitch:
         self.scratch = scratch
         self.command = command
         self.prefix = {}
-        self.session = {}
+        self.active_session = {}
         self.now = NOW()
 
     def switch_prefix(self, new_prefix):
         self.prefix = {'old': self.project.prefix(), 'new': new_prefix}
 
     def switch_session(self, new_session):
-        self.session = {'old': self.project.session(), 'new': new_session}
+        self.active_session = {'old': self.project.state.get('active'), 'new': new_session}
+
+    def set_branch_state(self, branch_uuid, state):
+        pass
+
+    def set_session_state(self, session_uuid, state):
+        pass
 
     def action(self):
-        if self.prefix or self.session:
-            return objects.Switch(self.now, self.command, self.prefix, self.session)
-        else:
-            return objects.Switch(self.now, self.command, {}, ())
+        return objects.Switch(self.now, self.command, self.prefix, self.active_session, {}, {})
 
 class Project:
     VEX = "/.vex"
@@ -1272,11 +1283,13 @@ class Project:
     @contextmanager
     def do_nohistory(self, command):
         active = self.state.get("active")
-        txn = StatusChange(self, command, active)
+        txn = ProjectChange(self, command, active)
         yield txn
         action = txn.action()
+        if any(action.blobs.values()):
+            raise VexBug(action.blobs)
         if action.changes:
-            self.apply_changes('new', {'sessions': action.changes['sessions']})
+            self.apply_changes('new', action.changes)
 
     @contextmanager
     def do(self, command):
@@ -1305,7 +1318,7 @@ class Project:
             if not action:
                 return
             if isinstance(action, objects.Switch):
-                self.apply_switch('new', action.prefix, action.session)
+                self.apply_switch('new', action.prefix, action.active)
             else:
                 raise VexBug('action')
 
@@ -1316,7 +1329,7 @@ class Project:
             if isinstance(action, objects.Action):
                 self.apply_changes('old', action.changes)
             elif isinstance(action, objects.Switch):
-                self.apply_switch('old', action.prefix, action.session)
+                self.apply_switch('old', action.prefix, action.active)
             else:
                 raise VexBug('action')
 
@@ -1544,7 +1557,6 @@ class Project:
         return output
 
     def match_filename(self, path, name):
-        print(path, name)
         ignore = self.settings.get('ignore')
         if ignore:
             if isinstance(ignore, str): ignore = ignore,
@@ -1592,7 +1604,7 @@ class Project:
             session_uuid = UUID()
 
             branch_name = 'latest'
-            branch = objects.Branch(branch_uuid, branch_name, commit_uuid, None, commit_uuid, None, [session_uuid])
+            branch = objects.Branch(branch_uuid, branch_name, 'active', commit_uuid, None, commit_uuid, None, [session_uuid])
             txn.put_branch(branch)
             txn.set_name(branch_name, branch)
 
@@ -1603,7 +1615,7 @@ class Project:
                 os.path.join(self.VEX, 'ignore'): objects.Tracked('file', 'added', working=True),
                 os.path.join(self.VEX, 'include'): objects.Tracked('file', 'added', working=True),
             }
-            session = objects.Session(session_uuid, branch_uuid, commit_uuid, commit_uuid, files)
+            session = objects.Session(session_uuid, branch_uuid, 'attached', commit_uuid, commit_uuid, files)
             txn.put_session(session)
 
             txn.set_setting("ignore", ignore)
@@ -1678,7 +1690,6 @@ class Project:
                 changes.update(old.changes)
                 old_uuid = old.prev
                 old = txn.get_change(old.prev)
-                print()
 
             my_changes = txn.active_changes(files)
 
@@ -1719,7 +1730,6 @@ class Project:
             names = {}
             dirs = {}
             for filename in files:
-                print('file',filename)
                 name = txn.full_to_repo_path(filename)
                 if filename == self.dir: continue
                 if os.path.isfile(filename):
@@ -1806,6 +1816,15 @@ class Project:
 
     def ignore(self, files):
         pass
+        # not done here, but in vex.py? edits settings?
+
+    def remove(self, files):
+        pass
+        # txn ugh
+        # go through the files, stash em, updating status in no history
+        # in history txn, create list of removed files, dirs
+        # inside txn, delete/undelete,  
+
 
     def list_branches(self):
         branches = []
@@ -1828,15 +1847,42 @@ class Project:
             files = [txn.full_to_repo_path(filename) for filename in files] if files else None
             self.stash_session(txn.active(), files)
 
-    def create_branch(self, name, from_commit, from_branch):
-        pass
-
     def save_as(self, name):
+        # take current session
+        # inside a transaction, add new branch, session, remove session from old branch 
         pass
 
     def open_branch(self, name):
-        pass
+        with self.do_nohistory('open') as txn:
+            branch_uuid = txn.get_name(name)
+            if branch_uuid is None:
+                raise Exception('no')
+            # check for >1
+            branch = txn.get_branch(branch_uuid)
+            sessions = branch.sessions
+            if not sessions:
+                session = txn.create_session(branch_uuid, 'attached', branch.head)
+                session_uuid = session
+            elif len(sessions) == 1:
+                session_uuid = sessions[0]
+            else:
+                raise VexUnfinished('welp')
+        with self.do_switch('new') as txn:
+            txn.switch_session(session_uuid)
 
+    def new_branch(self, name, from_branch=None, from_commit=None, fork=False):
+        with self.do_nohistory('new') as txn:
+            active = self.active()
+            if not from_branch: from_branch = active.branch
+            if not from_commit: from_commit = active.commit
+            branch = txn.create_branch(name, from_commit, from_branch, fork)
+            session = txn.create_session(branch.uuid, 'attached', branch.head)
+            txn.set_name(name, branch.uuid)
+
+
+        with self.do_switch('new') as txn:
+            txn.set_branch_state(branch.uuid, "active")
+            txn.switch_session(session.uuid)
 
 
 def get_project(check=True, empty=True):
