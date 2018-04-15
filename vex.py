@@ -153,6 +153,7 @@ def Status():
             else:
                 path = os.path.relpath(reponame, p.prefix())
                 yield "{:16}\t{}{}".format(entry.state, path, ('*' if entry.stash else '') )
+        yield ""
 
 
 vex_diff = vex_cmd.subcommand('diff')

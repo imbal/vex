@@ -1131,6 +1131,7 @@ class ProjectSwitch:
             return objects.Switch(self.now, self.command, {}, ())
 
 class Project:
+    VEX = "/.vex"
     def __init__(self, config_dir, working_dir):
         self.working_dir = working_dir
         self.dir = config_dir
@@ -1199,25 +1200,25 @@ class Project:
 
     def repo_to_full_path(self, prefix, file):
         file = os.path.normpath(file)
-        if os.path.commonpath((file, "/.vex")) == '/.vex':
-            path = os.path.join(self.settings.dir, os.path.relpath(file, '/.vex'))
+        if os.path.commonpath((file, self.VEX)) == self.VEX:
+            path = os.path.relpath(file, self.VEX)
+            return os.path.normpath(os.path.join(self.settings.dir, path))
         else:
             path = os.path.relpath(file, prefix)
-        return os.path.normpath(os.path.join(self.working_dir, path))
+            return os.path.normpath(os.path.join(self.working_dir, path))
 
     def full_to_repo_path(self, prefix, file):
         file = os.path.normpath(file)
         if os.path.commonpath((self.settings.dir, file)) == self.settings.dir:
-            filename = os.path.relpath(file, self.settings.dir)
-            return ("/.vex" if filename == "." else os.path.join("/.vex", filename))
-        if file.startswith(self.dir):
-            raise VexBug('nope. not .vex')
-        # normalize name to NFC?
-        filename = os.path.relpath(file, self.working_dir)
-        filename = self.normalize(filename)
-        if filename == '.':
-            return prefix
-        return os.path.join(prefix, filename)
+            path = os.path.relpath(file, self.settings.dir)
+            path = self.normalize(path)
+            return os.path.normpath(os.path.join(self.VEX, path))
+        else:
+            if file.startswith(self.dir):
+                raise VexBug('nope. not .vex')
+            path = os.path.relpath(file, self.working_dir)
+            path = self.normalize(path)
+            return os.path.normpath(os.path.join(prefix, path))
 
     # ok, now it's getting awkward. these methods 
     # are coupled to other objects. the lock is called from outside, ...
@@ -1400,7 +1401,7 @@ class Project:
         files = session.files if files is None else files
         for name in files:
             entry = session.files[name]
-            if name in ("/", "/.vex"): continue
+            if name in ("/", self.VEX): continue
             new_addr = None
             if entry.kind == "file":
                 if entry.working is None:
@@ -1444,7 +1445,7 @@ class Project:
             elif entry.kind == "dir":
                 if os.path.commonpath((path, self.working_dir)) != self.working_dir:
                     raise VexBug('file outside of working dir inside tracked')
-                if name not in ("/", "/.vex", prefix):
+                if name not in ("/", self.VEX, prefix):
                     dirs.add(path)
             elif entry.kind == "stash":
                 pass
@@ -1466,7 +1467,7 @@ class Project:
     def restore_session(self, prefix, session):
         for name in sorted(session.files, key=lambda x:x.split('/')):
             entry = session.files[name]
-            if os.path.commonpath((name, prefix)) != prefix and os.path.commonpath((name, '/.vex')) != '/.vex':
+            if os.path.commonpath((name, prefix)) != prefix and os.path.commonpath((name, self.VEX)) != self.VEX:
                 entry.working = None
                 entry.mtime = None
                 continue
@@ -1479,7 +1480,7 @@ class Project:
             path = self.repo_to_full_path(prefix, name)
 
             if entry.kind =='dir':
-                if name not in ('/', '/.vex', prefix):
+                if name not in ('/', self.VEX, prefix):
                     os.makedirs(path, exist_ok=True)
             elif entry.kind =="file":
                 self.files.make_copy(entry.addr, path)
@@ -1498,7 +1499,7 @@ class Project:
 
     def switch(self, new_prefix):
         # check new prefix exists in repo
-        if os.path.commonpath((new_prefix, "/.vex")) == "/.vex":
+        if os.path.commonpath((new_prefix, self.VEX )) == self.VEX:
             raise VexArgument('bad arg')
         if new_prefix not in self.active().files and new_prefix != "/":
             raise VexArgument('bad prefix')
@@ -1571,14 +1572,14 @@ class Project:
             project_uuid = None
             root_path = '/'
             if prefix != '/':
-                root = objects.Root({os.path.relpath(prefix, root_path): objects.Dir(None, {}), '.vex': objects.Dir(None, {})}, {})
+                root = objects.Root({os.path.relpath(prefix, root_path): objects.Dir(None, {}), self.VEX[1:]: objects.Dir(None, {})}, {})
             else:
-                root = objects.Root({'.vex': objects.Dir(None, {})}, {})
+                root = objects.Root({self.VEX[1:]: objects.Dir(None, {})}, {})
             root_uuid = txn.put_manifest(root)
 
             changes = {
                     '/' : objects.AddDir({}),
-                    '/.vex' : objects.AddDir({}),
+                    self.VEX : objects.AddDir({}),
             }
             if prefix != '/':
                 changes[prefix] = objects.AddDir({})
@@ -1596,11 +1597,11 @@ class Project:
             txn.set_name(branch_name, branch)
 
             files = {
-               '/': objects.Tracked('dir', 'tracked', working=None),
-                '/.vex': objects.Tracked('dir', 'tracked', working=True),
+                '/': objects.Tracked('dir', 'tracked', working=None),
+                self.VEX: objects.Tracked('dir', 'tracked', working=True),
                 prefix: objects.Tracked('dir', 'tracked', working=True),
-                '/.vex/ignore': objects.Tracked('file', 'added', working=True),
-                '/.vex/include': objects.Tracked('file', 'added', working=True),
+                os.path.join(self.VEX, 'ignore'): objects.Tracked('file', 'added', working=True),
+                os.path.join(self.VEX, 'include'): objects.Tracked('file', 'added', working=True),
             }
             session = objects.Session(session_uuid, branch_uuid, commit_uuid, commit_uuid, files)
             txn.put_session(session)
@@ -1728,7 +1729,7 @@ class Project:
                     to_add.add(filename)
                 filename = os.path.split(filename)[0]
                 name = os.path.split(name)[0]
-                while name != '/' and name !='/.vex':
+                while name != '/' and name != self.VEX:
                     dirs[name] = filename
                     name = os.path.split(name)[0]
                     filename = os.path.split(filename)[0]
