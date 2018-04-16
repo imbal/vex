@@ -103,7 +103,7 @@ class objects:
     @codec.register
     class Restart:
         n = 0
-        def __init__(self, timestamp, *, prev, base, changelog):
+        def __init__(self, n, timestamp, *, prev, base, changelog):
             self.prev = prev
             self.base = base
             self.timestamp = timestamp
@@ -127,9 +127,9 @@ class objects:
         def next_n(self, kind):
             if kind == objects.Amend:
                 raise VexBug('what')
-            if kind in (objects.Commit, objects.Prepare):
-                return self.n
-            return self.n+1
+            if kind in (objects.Commit,):
+                return self.n+1
+            return self.n
 
     @codec.register
     class Commit:
@@ -142,7 +142,7 @@ class objects:
             self.changelog = changelog
 
         def next_n(self, kind):
-            if kind == objects.Amend:
+            if kind in (objects.Amend, objects.Prepare):
                 return self.n
             return self.n+1
 
@@ -157,7 +157,7 @@ class objects:
             self.changelog = changelog
 
         def next_n(self, kind):
-            if kind == objects.Amend:
+            if kind in (objects.Amend, objects.Prepare):
                 return self.n
             return self.n+1
 
@@ -1711,16 +1711,18 @@ class Project:
         with self.do('prepare') as txn:
             prepare = session.prepare
 
+            old_uuid = prepare
             old = txn.get_change(prepare)
             n = old.next_n(objects.Prepare)
             while old and isinstance(old, objects.Prepare):
+                old_uuid = old.prev
                 old = txn.get_change(old.prev)
 
 
             txn.store_changed_files(changes)
             txn.update_active_changes(changes)
 
-            prepare = objects.Prepare(n, txn.now, prev=old.uuid, prepared=prepare, changes=changes)
+            prepare = objects.Prepare(n, txn.now, prev=old_uuid, prepared=prepare, changes=changes)
             prepare_uuid = txn.put_change(prepare)
 
             txn.set_active_prepare(prepare_uuid)
