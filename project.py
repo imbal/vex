@@ -324,8 +324,7 @@ class objects:
 
     @codec.register
     class Redo:
-        def __init__(self, next, dos):
-            self.next = next
+        def __init__(self, dos):
             self.dos = dos
 
     # Working copy state
@@ -565,14 +564,10 @@ class ActionLog:
 
         obj = self.store.get_obj(current)
 
-        if self.redos.exists(current):
-            next = self.redos.get(current)
-        else:
-            next = None
         dos = [current]
         if obj.prev and self.redos.exists(obj.prev):
             dos.extend(self.redos.get(obj.prev).dos)
-        redo = objects.Redo(next, dos)
+        redo = objects.Redo(dos)
         self.settings.set("next", obj.prev)
 
         yield obj.action
@@ -595,7 +590,7 @@ class ActionLog:
         do = next.dos.pop(n)
 
         obj = self.store.get_obj(do)
-        redo = objects.Redo(next.next, next.dos)
+        redo = objects.Redo(next.dos)
         self.settings.set("next", do)
 
         yield obj.action
