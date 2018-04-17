@@ -317,6 +317,12 @@ class objects:
             self.action = action
 
     @codec.register
+    class DoQuiet:
+        def __init__(self, prev, action):
+            self.prev = prev
+            self.action = action
+
+    @codec.register
     class Redo:
         def __init__(self, next, dos):
             self.next = next
@@ -335,11 +341,12 @@ class objects:
     @codec.register
     class Branch:
         States = set(('created', 'active','inactive','merged', 'closed'))
-        def __init__(self, uuid, name, state, head, base, init, upstream, sessions):
+        def __init__(self, uuid, name, state, prefix, head, base, init, upstream, sessions):
             if not (uuid and state and head and init): raise Exception('no')
             if state not in self.States: raise Exception('no')
             self.uuid = uuid
             self.state = state
+            self.prefix = prefix
             self.name = name
             self.head = head
             self.base = base
@@ -522,6 +529,17 @@ class ActionLog:
 
         return out
 
+    @contextmanager
+    def do_nohistory(self, action):
+        if not self.clean_state():
+            raise VexCorrupt('Project history not in a clean state.')
+        obj = objects.DoQuiet(self.current(), action)
+        # XXX
+        # self.settings.set("next", addr)
+
+        yield action
+
+        # self.settings.set("current", addr)
 
     @contextmanager
     def do(self, action):
@@ -1120,7 +1138,7 @@ class ProjectChange:
         branch_uuid = UUID()
         origin = self.get_branch(from_branch)
         upstream = from_branch if not fork else None
-        b = objects.Branch(branch_uuid, name, 'created', from_commit, from_commit, origin.init, upstream, [])
+        b = objects.Branch(branch_uuid, name, 'created', self.prefix(), from_commit, from_commit, origin.init, upstream, [])
         self.put_branch(b)
         return b
 
@@ -1167,9 +1185,11 @@ class ProjectSwitch:
         self.active_session = {'old': self.project.state.get('active'), 'new': new_session}
 
     def set_branch_state(self, branch_uuid, state):
+        # XXX
         pass
 
     def set_session_state(self, session_uuid, state):
+        # XXX
         pass
 
     def action(self):
@@ -1319,11 +1339,11 @@ class Project:
         active = self.state.get("active")
         txn = ProjectChange(self, command, active)
         yield txn
-        action = txn.action()
-        if any(action.blobs.values()):
-            raise VexBug(action.blobs)
-        if action.changes:
-            self.apply_changes('new', action.changes)
+        with self.actions.do_nohistory(txn.action()) as action:
+            if any(action.blobs.values()):
+                raise VexBug(action.blobs)
+            if action.changes:
+                self.apply_changes('new', action.changes)
 
     @contextmanager
     def do(self, command):
@@ -1653,11 +1673,10 @@ class Project:
 
             commit = objects.Start(txn.now, uuid=branch_uuid, changelog=changelog_uuid, root=root_uuid)
             commit_uuid = txn.put_change(commit)
-
             session_uuid = UUID()
 
             branch_name = 'latest'
-            branch = objects.Branch(branch_uuid, branch_name, 'active', commit_uuid, None, commit_uuid, None, [session_uuid])
+            branch = objects.Branch(branch_uuid, branch_name, 'active', prefix, commit_uuid, None, commit_uuid, None, [session_uuid])
             txn.put_branch(branch)
             txn.set_name(branch_name, branch.uuid)
 
@@ -1931,15 +1950,19 @@ class Project:
                 txn.put_branch(branch)
                 txn.put_branch(old)
 
-    def open_branch(self, name):
+    def open_branch(self, name, branch_uuid=None, session_uuid=None):
         with self.do_nohistory('open') as txn:
-            branch_uuid = txn.get_name(name)
+            branch_uuid = txn.get_name(name) if not branch_uuid else branch_uuid
             if branch_uuid is None:
                 raise Exception('no')
             # check for >1
             # print(branch_uuid)
             branch = txn.get_branch(branch_uuid)
-            sessions = branch.sessions
+            sessions = [txn.get_session(uuid) for uuid in branch.sessions]
+            if session_uuid:
+                sessions = [s for s in sessions if s.state == 'attached']
+            else:
+                sessions = [s for s in sessions if s.uuid == session_uuid]
             # print(sessions)
             if not sessions:
                 session = txn.create_session(branch_uuid, 'attached', branch.head)
@@ -1949,7 +1972,7 @@ class Project:
             elif len(sessions) == 1:
                 session_uuid = sessions[0]
             else:
-                raise VexUnfinished('welp')
+                raise VexArgument('welp, too many attached sessions')
         with self.do_switch('open {}'.format(name)) as txn:
             txn.switch_session(session_uuid)
 
@@ -1965,6 +1988,7 @@ class Project:
         with self.do_switch('new') as txn:
             txn.set_branch_state(branch.uuid, "active")
             txn.switch_session(session.uuid)
+            # if branch upstream diff, set prefix XXX
 
 
 def get_project(check=True, empty=True):
