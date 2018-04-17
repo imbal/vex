@@ -1961,7 +1961,7 @@ class Project:
             # print(sessions)
             if not sessions:
                 session = txn.create_session(branch_uuid, 'attached', branch.head)
-                session_uuid = session
+                session_uuid = session.uuid
                 branch.sessions.append(session_uuid)
                 txn.put_branch(branch)
             elif len(sessions) == 1:

@@ -6,7 +6,7 @@ from cli import Command
 from project import Project, VexBug, VexNoProject, VexNoHistory, VexUnclean, VexError, VexArgument
 import rson
 
-VEX = "Vex"
+VEX = ".vex"
 
 def get_project(check=True, empty=True):
     working_dir = os.getcwd()
