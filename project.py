@@ -946,7 +946,7 @@ class ProjectChange:
 
                 entry = old_entries.get(name)
                 if changes and name in changes:
-                    for change in reversed(changes.pop(name)):
+                    for change in changes.pop(name):
                         if isinstance(change, objects.NewFile):
                             if not isinstance(entry, objects.Dir): raise VexBug('overwrite sync')
                             entry = objects.File(change.addr, change.properties)
@@ -972,7 +972,7 @@ class ProjectChange:
                             if entry: raise VexBug('wait, what')
                             entry = objects.File(change.addr, change.properties)
                         else:
-                            raise VexBug('nope')
+                            raise VexBug('nope', change)
                         
                 if entry and isinstance(entry, objects.Dir):
                     path = os.path.join(prefix, name)
@@ -1658,11 +1658,11 @@ class Project:
             root_uuid = txn.put_manifest(root)
 
             changes = {
-                    '/' : objects.AddDir({}),
-                    self.VEX : objects.AddDir({}),
+                    '/' : [ objects.AddDir({}, properties={}) ] ,
+                    self.VEX : [ objects.AddDir({}, properties={}) ],
             }
             if prefix != '/':
-                changes[prefix] = objects.AddDir({})
+                changes[prefix] = objects.AddDir({}, properties={})
             changelog = objects.Changelog(prev=None, summary="init", message="", changes=changes, author=author_uuid)
             changelog_uuid = txn.put_manifest(changelog)
 
@@ -1676,11 +1676,11 @@ class Project:
             txn.set_name(branch_name, branch.uuid)
 
             files = {
-                '/': objects.Tracked('dir', 'tracked', working=None),
-                self.VEX: objects.Tracked('dir', 'tracked', working=True),
-                prefix: objects.Tracked('dir', 'tracked', working=True),
-                os.path.join(self.VEX, 'ignore'): objects.Tracked('file', 'added', working=True),
-                os.path.join(self.VEX, 'include'): objects.Tracked('file', 'added', working=True),
+                '/': objects.Tracked('dir', 'tracked', working=None, properties={}),
+                self.VEX: objects.Tracked('dir', 'tracked', working=True, properties={}),
+                prefix: objects.Tracked('dir', 'tracked', working=True, properties={}),
+                os.path.join(self.VEX, 'ignore'): objects.Tracked('file', 'added', working=True, properties={}),
+                os.path.join(self.VEX, 'include'): objects.Tracked('file', 'added', working=True, properties={}),
             }
             session = objects.Session(session_uuid, branch_uuid, 'attached', commit_uuid, commit_uuid, files)
             txn.put_session(session)
@@ -1736,6 +1736,8 @@ class Project:
             txn.store_changed_files(changes)
             txn.update_active_changes(changes)
 
+            changes = {k:[v] for k,v in changes.items()}
+
             prepare = objects.Prepare(n, txn.now, prev=old_uuid, prepared=prepare, changes=changes)
             prepare_uuid = txn.put_change(prepare)
 
@@ -1750,26 +1752,29 @@ class Project:
             session = txn.refresh_active()
             files = [txn.full_to_repo_path(filename) for filename in files] if files else None
 
+            my_changes = txn.active_changes(files)
+
             changes = {}
+            for name, c in my_changes.items():
+                if name not in changes: changes[name] = []
+                changes[name].append(c)
+
             old_uuid = session.prepare
             old = txn.get_change(session.prepare)
             n = old.next_n(kind)
             while old and isinstance(old, objects.Prepare):
                 for name, c in old.changes.items():
                     if name not in changes: changes[name] = []
-                    changes[name].append(c)
+                    changes[name].extend(c)
                 old_uuid = old.prepared
                 old = txn.get_change(old.prepared)
-
-            my_changes = txn.active_changes(files)
-            for name, c in my_changes.items():
-                if name not in changes: changes[name] = []
-                changes[name].append(c)
 
 
             if not changes:
                 # print('what')
                 return False
+
+            changes = {k:v[::-1] for k,v in changes.items()}
 
 
         with self.do(command) as txn:
