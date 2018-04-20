@@ -171,6 +171,8 @@ By default, `vex init name` creates a repository with a `/name` directory inside
 
 - `vex remotes:add` *
 
+# Things that are not done:
+
 ### Handling mistakes, purging old commits
 
 - `vex purge` *
@@ -185,13 +187,13 @@ By default, `vex init name` creates a repository with a `/name` directory inside
 
 ### Running a server
 
-- `vex serve`
+- `vex serve` *
 
 - `/.vex/settings/authorized_keys`
 
 ### Project settings
 
-- `vex settings` 
+- `vex settings` * 
 
    `<working_dir>/.vex/settings/foo` mapped to a `<repo>/.vex/foo` file
 
