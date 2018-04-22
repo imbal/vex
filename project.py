@@ -668,7 +668,7 @@ class ProjectChange:
         self.new_sessions = {}
         self.old_settings = {}
         self.new_settings = {}
-        self.new_changes = set()
+        self.new_commits = set()
         self.new_manifests = set()
         self.new_files = set()
 
@@ -1038,10 +1038,10 @@ class ProjectChange:
 
         prepared = []
 
-        old = self.get_change(commit)
+        old = self.get_commit(commit)
         while old and isinstance(old, objects.Prepare):
             prepared.append(old.changes)
-            old = self.get_change(commit.prepared)
+            old = self.get_commit(commit.prepared)
 
         walk('/', old.root, root=True)
         for changes in reversed(prepared):
@@ -1069,14 +1069,14 @@ class ProjectChange:
         self.new_manifests.add(addr)
         return addr
 
-    def get_change(self, addr):
-        if addr in self.new_changes:
+    def get_commit(self, addr):
+        if addr in self.new_commits:
             return self.scratch.get_obj(addr)
-        return self.project.changes.get_obj(addr)
+        return self.project.commits.get_obj(addr)
 
-    def put_change(self, obj):
+    def put_commit(self, obj):
         addr = self.scratch.put_obj(obj)
-        self.new_changes.add(addr)
+        self.new_commits.add(addr)
         return addr
 
     def get_session(self, uuid):
@@ -1168,8 +1168,8 @@ class ProjectChange:
         else:
             changes = {}
 
-        if self.new_changes or self.new_manifests or self.new_files:
-            blobs = dict(changes=self.new_changes, manifests=self.new_manifests, files=self.new_files)
+        if self.new_commits or self.new_manifests or self.new_files:
+            blobs = dict(commits=self.new_commits, manifests=self.new_manifests, files=self.new_files)
         else:
             blobs = {}
         return objects.Action(self.now, self.command, changes, blobs)
@@ -1203,7 +1203,7 @@ class ProjectSwitch:
 class VexRepo:
     def __init__(self, config_dir):
         self.dir = config_dir
-        self.changes =   BlobStore(os.path.join(config_dir, 'project', 'commits'))
+        self.commits =   BlobStore(os.path.join(config_dir, 'project', 'commits'))
         self.manifests = BlobStore(os.path.join(config_dir, 'project', 'manifests'))
         self.files =     BlobStore(os.path.join(config_dir, 'project', 'files'))
         self.branches =   DirStore(os.path.join(config_dir, 'project', 'branches'))
@@ -1211,7 +1211,7 @@ class VexRepo:
 
     def makedirs(self):
         os.makedirs(self.dir, exist_ok=True)
-        self.changes.makedirs()
+        self.commits.makedirs()
         self.manifests.makedirs()
         self.files.makedirs()
         self.branches.makedirs()
@@ -1225,7 +1225,7 @@ class Project:
         self.dir = config_dir
         self.vex = VexRepo(config_dir)
 
-        self.changes = self.vex.changes
+        self.commits = self.vex.commits
         self.manifests = self.vex.manifests
         self.files = self.vex.files
         self.branches = self.vex.branches
@@ -1446,9 +1446,9 @@ class Project:
     # Takes Action.blobs and copies them out of the scratch directory
     def copy_blobs(self, blobs):
         for key in blobs:
-            if key == 'changes':
-                for addr in blobs['changes']:
-                    self.changes.copy_from(self.scratch, addr)
+            if key == 'commits':
+                for addr in blobs['commits']:
+                    self.commits.copy_from(self.scratch, addr)
             elif key == 'manifests':
                 for addr in blobs['manifests']:
                     self.manifests.copy_from(self.scratch, addr)
@@ -1612,13 +1612,13 @@ class Project:
         commit = session.prepare
         out = []
         while commit != session.commit:
-            obj = self.changes.get_obj(commit)
+            obj = self.commits.get_obj(commit)
             out.append('{}: *uncommitted* {}: {}'.format(obj.n, obj.__class__.__name__, commit))
             commit = getattr(obj, 'prev', None)
             # print \t date, file, message
 
         while commit != None:
-            obj = self.changes.get_obj(commit)
+            obj = self.commits.get_obj(commit)
             out.append('{}: committed {}: {}'.format(obj.n, obj.__class__.__name__, commit))
             commit = getattr(obj, 'prev', None)
         return out
@@ -1695,7 +1695,7 @@ class Project:
             changelog_uuid = txn.put_manifest(changelog)
 
             commit = objects.Start(txn.now, uuid=branch_uuid, changelog=changelog_uuid, root=root_uuid)
-            commit_uuid = txn.put_change(commit)
+            commit_uuid = txn.put_commit(commit)
             session_uuid = UUID()
 
             branch_name = 'latest'
@@ -1754,11 +1754,11 @@ class Project:
             prepare = session.prepare
 
             old_uuid = prepare
-            old = txn.get_change(prepare)
+            old = txn.get_commit(prepare)
             n = old.next_n(objects.Prepare)
             while old and isinstance(old, objects.Prepare):
                 old_uuid = old.prev
-                old = txn.get_change(old.prev)
+                old = txn.get_commit(old.prev)
 
 
             txn.store_changed_files(changes)
@@ -1767,7 +1767,7 @@ class Project:
             changes = {k:[v] for k,v in changes.items()}
 
             prepare = objects.Prepare(n, txn.now, prev=old_uuid, prepared=prepare, changes=changes)
-            prepare_uuid = txn.put_change(prepare)
+            prepare_uuid = txn.put_commit(prepare)
 
             txn.set_active_prepare(prepare_uuid)
 
@@ -1788,14 +1788,14 @@ class Project:
                 changes[name].append(c)
 
             old_uuid = session.prepare
-            old = txn.get_change(session.prepare)
+            old = txn.get_commit(session.prepare)
             n = old.next_n(kind)
             while old and isinstance(old, objects.Prepare):
                 for name, c in old.changes.items():
                     if name not in changes: changes[name] = []
                     changes[name].extend(c)
                 old_uuid = old.prepared
-                old = txn.get_change(old.prepared)
+                old = txn.get_commit(old.prepared)
 
 
             if not changes:
@@ -1819,7 +1819,7 @@ class Project:
             changelog_uuid = txn.put_manifest(changelog)
 
             commit = kind(n=n, timestamp=txn.now, prev=old_uuid, prepared=session.prepare, root=root_uuid, changelog=changelog_uuid)
-            commit_uuid = txn.put_change(commit)
+            commit_uuid = txn.put_commit(commit)
 
             txn.set_active_commit(commit_uuid)
 
