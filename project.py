@@ -502,9 +502,11 @@ class BlobStore:
 
 class ActionLog:
     START = 'init'
+    Modes = set(('init', 'do', 'undo', 'redo', 'quiet'))
     def __init__(self, dir):
         self.dir = dir
         self.store = BlobStore(os.path.join(dir,'entries'))
+        self.store.prefix = ""
         self.redos = DirStore(os.path.join(dir,'redos' ))
         self.settings = DirStore(dir)
 
@@ -513,14 +515,14 @@ class ActionLog:
         self.store.makedirs()
         self.redos.makedirs()
         self.settings.set("current", self.START)
-        self.settings.set("next", self.START)
+        self.settings.set("next", ('init', self.START, None))
 
     def empty(self):
         return self.current() == self.START
 
     def clean_state(self):
         if self.settings.exists("current") and self.settings.exists("next"):
-            return self.settings.get("current") == self.settings.get("next")
+            return self.settings.get("current") == self.settings.get("next")[1]
 
     def current(self):
         return self.settings.get("current")
@@ -542,13 +544,14 @@ class ActionLog:
     def do_nohistory(self, action):
         if not self.clean_state():
             raise VexCorrupt('Project history not in a clean state.')
-        obj = objects.DoQuiet(self.current(), action)
-        # XXX
-        # self.settings.set("next", addr)
+        current = self.current()
+        obj = objects.DoQuiet(current, action)
+        addr = self.store.put_obj(obj)
+        self.settings.set("next", ['quiet', addr , current])
 
         yield action
 
-        # self.settings.set("current", addr)
+        self.settings.set("next", ['do', current, current])
 
     @contextmanager
     def do(self, action):
@@ -557,7 +560,7 @@ class ActionLog:
         obj = objects.Do(self.current(), action)
 
         addr = self.store.put_obj(obj)
-        self.settings.set("next", addr)
+        self.settings.set("next", ('do', addr, self.current()))
 
         yield action
 
@@ -578,7 +581,7 @@ class ActionLog:
         if obj.prev and self.redos.exists(obj.prev):
             dos.extend(self.redos.get(obj.prev).dos)
         redo = objects.Redo(dos)
-        self.settings.set("next", obj.prev)
+        self.settings.set("next", ('undo', obj.prev, self.current()))
 
         yield obj.action
 
@@ -601,7 +604,7 @@ class ActionLog:
 
         obj = self.store.get_obj(do)
         redo = objects.Redo(next.dos)
-        self.settings.set("next", do)
+        self.settings.set("next", ('redo', do, self.current()))
 
         yield obj.action
 
@@ -614,28 +617,34 @@ class ActionLog:
             yield
             return
 
-        next = self.settings.get("next")
+        mode, next, old_current = self.settings.get("next")
+        if mode not in self.Modes:
+            raise VexCorupt('Real bad')
+        if mode == 'undo' or not old_current:
+            raise VexBug('no')
         obj = self.store.get_obj(next)
-        old_current = obj.prev
         current = self.settings.get("current")
         if current != old_current:
             raise VexCorrupt('History is really corrupted: Interrupted transaction did not come after current change')
         yield obj.action
-        self.settings.set("next", current)
+        self.settings.set("next", ['rollback', old_current, None])
 
     @contextmanager
     def restart_new(self):
         if self.clean_state():
             yield
             return
-        next = self.settings.get("next")
+        mode, next, old_current = self.settings.get("next")
+        if mode not in self.Modes:
+            raise VexCorupt('Real bad')
+        if mode == 'undo' or mode =='quiet' or not old_current:
+            raise VexBug('no')
         obj = self.store.get_obj(next)
-        old_current = obj.prev
         current = self.settings.get("current")
         if current != old_current:
             raise VexCorrupt('History is really corrupted: Interrupted transaction did not come after current change')
         yield obj.action
-        self.settings.set("current", next)
+        self.settings.set("current", ['restart', next, None])
 
 
     def redo_choices(self):
@@ -654,7 +663,7 @@ class ActionLog:
             out.append(obj.action)
         return out
 
-class ProjectChange:
+class Transaction:
     def __init__(self, project, scratch, command):
         self.project = project
         self.scratch = scratch
@@ -744,7 +753,7 @@ class ProjectChange:
                     elif entry.mode != None and (entry.mode != stat.st_mode):
                         modified = True
                     elif entry.mtime is None:
-                        new_addr = self.project.files.addr_for_file(path)
+                        new_addr = self.scratch.addr_for_file(path)
                         if new_addr != entry.addr:
                             modified = True
                         if now - stat.st_mtime >= MTIME_GRACE_SECONDS:
@@ -1108,7 +1117,6 @@ class ProjectChange:
         self.new_branches[branch.uuid] = branch
 
     def get_name(self, name):
-        # print(self.new_names)
         if name in self.new_names:
             return self.new_names[names]
         if self.project.names.exists(name):
@@ -1203,19 +1211,15 @@ class ProjectSwitch:
 class VexRepo:
     def __init__(self, config_dir):
         self.dir = config_dir
-        self.commits =   BlobStore(os.path.join(config_dir, 'project', 'commits'))
-        self.manifests = BlobStore(os.path.join(config_dir, 'project', 'manifests'))
-        self.files =     BlobStore(os.path.join(config_dir, 'project', 'files'))
-        self.branches =   DirStore(os.path.join(config_dir, 'project', 'branches'))
-        self.names =      DirStore(os.path.join(config_dir, 'project', 'branches', 'names'))
+        self.commits =   BlobStore(os.path.join(config_dir, 'objects', 'commits'))
+        self.manifests = BlobStore(os.path.join(config_dir, 'objects', 'manifests'))
+        self.files =     BlobStore(os.path.join(config_dir, 'objects', 'files'))
 
     def makedirs(self):
         os.makedirs(self.dir, exist_ok=True)
         self.commits.makedirs()
         self.manifests.makedirs()
         self.files.makedirs()
-        self.branches.makedirs()
-        self.names.makedirs()
 
 
 class Project:
@@ -1225,15 +1229,12 @@ class Project:
         self.dir = config_dir
         self.vex = VexRepo(config_dir)
 
-        self.commits = self.vex.commits
-        self.manifests = self.vex.manifests
-        self.files = self.vex.files
-        self.branches = self.vex.branches
-        self.names = self.vex.names
 
+        self.branches =   DirStore(os.path.join(config_dir, 'branches'))
+        self.names =      DirStore(os.path.join(config_dir, 'branches', 'names'))
+        self.sessions =   DirStore(os.path.join(config_dir, 'branches', 'sessions'))
         self.state =      DirStore(os.path.join(config_dir, 'state'))
-        self.sessions =   DirStore(os.path.join(config_dir, 'state', 'sessions'))
-        self.actions =   ActionLog(os.path.join(config_dir, 'state', 'history'))
+        self.actions =   ActionLog(os.path.join(config_dir, 'history'))
         self.scratch =   BlobStore(os.path.join(config_dir, 'scratch'))
         self.lockfile =            os.path.join(config_dir, 'lock')
 
@@ -1247,6 +1248,8 @@ class Project:
     def makedirs(self):
         os.makedirs(self.dir, exist_ok=True)
         self.vex.makedirs()
+        self.branches.makedirs()
+        self.names.makedirs()
         self.state.makedirs()
         self.sessions.makedirs()
         self.actions.makedirs()
@@ -1356,7 +1359,7 @@ class Project:
     @contextmanager
     def do_nohistory(self, command):
         active = self.state.get("active")
-        txn = ProjectChange(self, command, active)
+        txn = Transaction(self, self.scratch, command)
         yield txn
         with self.actions.do_nohistory(txn.action()) as action:
             if any(action.blobs.values()):
@@ -1369,7 +1372,7 @@ class Project:
         if not self.actions.clean_state():
             raise VexCorrupt('Project history not in a clean state.')
 
-        txn = ProjectChange(self, self.scratch, command)
+        txn = Transaction(self, self.scratch, command)
         yield txn
         with self.actions.do(txn.action()) as action:
             if not action:
@@ -1427,13 +1430,13 @@ class Project:
         for key in blobs:
             if key == 'commits':
                 for addr in blobs['commits']:
-                    self.commits.copy_from(self.scratch, addr)
+                    self.vex.commits.copy_from(self.scratch, addr)
             elif key == 'manifests':
                 for addr in blobs['manifests']:
-                    self.manifests.copy_from(self.scratch, addr)
+                    self.vex.manifests.copy_from(self.scratch, addr)
             elif key =='files':
                 for addr in blobs['files']:
-                    self.files.copy_from(self.scratch, addr)
+                    self.vex.files.copy_from(self.scratch, addr)
             else:
                 raise VexBug('Project change has unknown values')
 
@@ -1559,7 +1562,7 @@ class Project:
                 if name not in ('/', self.VEX, prefix):
                     os.makedirs(path, exist_ok=True)
             elif entry.kind =="file":
-                self.files.make_copy(entry.addr, path)
+                self.vex.files.make_copy(entry.addr, path)
                 # XXX set up mode from props, set up size
             elif entry.kind == "stash":
                 self.scratch.make_copy(entry.stash, path)
@@ -1651,13 +1654,12 @@ class Project:
         commit = session.prepare
         out = []
         while commit != session.commit:
-            obj = self.commits.get_obj(commit)
+            obj = self.vex.commits.get_obj(commit)
             out.append('{}: *uncommitted* {}: {}'.format(obj.n, obj.__class__.__name__, commit))
             commit = getattr(obj, 'prev', None)
-            # print \t date, file, message
 
         while commit != None:
-            obj = self.commits.get_obj(commit)
+            obj = self.vex.commits.get_obj(commit)
             out.append('{}: committed {}: {}'.format(obj.n, obj.__class__.__name__, commit))
             commit = getattr(obj, 'prev', None)
         return out
@@ -1739,7 +1741,7 @@ class Project:
             for name in changes:
                 e, c = session.files[name], changes[name]
                 if e.kind == 'file':
-                    output[name] = dict(old=self.files.filename(e.addr), new=self.repo_to_full_path(self.prefix(),name))
+                    output[name] = dict(old=self.vex.files.filename(e.addr), new=self.repo_to_full_path(self.prefix(),name))
             output2 = {}
             for name, d in output.items():
                 a,b = os.path.join('./a',name[1:]), os.path.join('./b', name[1:])
@@ -1807,7 +1809,6 @@ class Project:
 
 
             if not changes:
-                # print('what')
                 return False
 
             changes = {k:v[::-1] for k,v in changes.items()}
@@ -1997,14 +1998,12 @@ class Project:
                 branch = txn.create_branch(name, from_commit, from_branch, fork=False)
                 branch_uuid = branch.uuid
             else:
-                # print(branch_uuid)
                 branch = txn.get_branch(branch_uuid)
             sessions = [txn.get_session(uuid) for uuid in branch.sessions]
             if session_uuid:
                 sessions = [s for s in sessions if s.state == 'attached']
             else:
                 sessions = [s for s in sessions if s.uuid == session_uuid]
-            # print(sessions)
             if not sessions:
                 session = txn.create_session(branch_uuid, 'attached', branch.head)
                 session_uuid = session.uuid

@@ -396,16 +396,18 @@ def Branch(name):
         yield branch.name
 
 vex_switch = vex_cmd.subcommand('switch', short="change which directory (inside the project) is worked on")
-@vex_switch.run('prefix')
+@vex_switch.run('[prefix]')
 def Switch(prefix):
     """
 
     """
     p = get_project()
-    
-    with p.lock('switch') as p:
-        prefix = os.path.join(p.prefix(), prefix)
-        p.switch(prefix)
+    if prefix:
+        with p.lock('switch') as p:
+            prefix = os.path.join(p.prefix(), prefix)
+            p.switch(prefix)
+    else:
+        yield p.prefix()
 
 vex_debug = vex_cmd.subcommand('debug', 'internal: run a command without capturing exceptions, or repairing errors')
 @vex_debug.run()
@@ -446,7 +448,7 @@ def DebugStatus():
             branch = p.branches.get(head.branch)
             out.append("commiting to branch {}".format(branch.uuid))
 
-            commit = p.changes.get_obj(head.prepare)
+            commit = p.get_commit(head.prepare)
             out.append("last commit: {}".format(commit.__class__.__name__))
         else:
             if p.history_isempty():
@@ -486,6 +488,28 @@ def DebugRollback():
             yield ('Project has recovered')
         else:
             yield ('Oh dear')
+
+
+
+git_cmd = vex_cmd.subcommand('git', short="interact with a git repository")
+
+git_init_cmd = git_cmd.subcommand('init', short='create a new git project')
+@git_init_cmd.run('--name --email directory')
+def GitInit(name, email, directory):
+    pass
+    # call Init with new settings
+
+
+git_set_cmd = git_cmd.subcommand('set', short='set git options')
+@git_set_cmd.run('--number? --string? --boolean? name value')
+def GitSet(number, string, boolean, name, value):
+    pass
+
+git_get_cmd = git_cmd.subcommand('get', short='get git options')
+@git_get_cmd.run('name')
+def GitGet(name):
+    pass
+
 
 
 vex_cmd.main(__name__)
