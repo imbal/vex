@@ -1930,7 +1930,7 @@ class Project:
     def save_as(self, name, rename=False):
         # take current session
         # inside a transaction, add new branch, session, remove session from old branch 
-        with self.do_nohistory('open') as txn:
+        with self.do_nohistory('saveas') as txn:
             if rename:
                 active = self.active()
                 old = txn.get_branch(active.branch)
@@ -1952,12 +1952,17 @@ class Project:
 
     def open_branch(self, name, branch_uuid=None, session_uuid=None):
         with self.do_nohistory('open') as txn:
+            # check for >1
             branch_uuid = txn.get_name(name) if not branch_uuid else branch_uuid
             if branch_uuid is None:
-                raise Exception('no')
-            # check for >1
-            # print(branch_uuid)
-            branch = txn.get_branch(branch_uuid)
+                active = self.active()
+                from_branch = active.branch
+                from_commit = active.commit
+                branch = txn.create_branch(name, from_commit, from_branch, fork=False)
+                branch_uuid = branch.uuid
+            else:
+                # print(branch_uuid)
+                branch = txn.get_branch(branch_uuid)
             sessions = [txn.get_session(uuid) for uuid in branch.sessions]
             if session_uuid:
                 sessions = [s for s in sessions if s.state == 'attached']

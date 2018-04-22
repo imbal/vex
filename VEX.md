@@ -117,7 +117,9 @@ By default, `vex init name` creates a repository with a `/name` directory inside
 
 - `vex branch` what branch are you on
 
-- `vex open` start a new branch
+- `vex new` create a new branch
+
+- `vex open` start/create a new branch
 
 - `vex saveas`  (see `git checkout -b`)
 
@@ -133,7 +135,9 @@ By default, `vex init name` creates a repository with a `/name` directory inside
 
 ### Updating a branch
 
-- `vex update` * (--all affecting downstream branches too) 
+- `vex squash` * (flatten a branch)
+
+- `vex update` * (rebase, --all affecting downstream branches too) 
 
 - `vex sync` *
 
