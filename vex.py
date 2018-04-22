@@ -301,14 +301,19 @@ def Prepare(file,watch):
             p.prepare(files)
 
 vex_commit = vex_cmd.subcommand('commit', short="save the working copy and add an entry to the project changes")
-@vex_commit.run('[file...]')
-def Commit(file):
+@vex_commit.run('--add? [file...]')
+def Commit(add, file):
     """
 
     """
     p = get_project()
     yield ('Committing')
     with p.lock('commit') as p:
+        if add:
+            for f in p.add([os.getcwd()]):
+                f = os.path.relpath(f)
+                yield "add: {}".format(f)
+
         cwd = os.getcwd()
         files = [os.path.join(cwd, f) for f in file] if file else None
         if p.commit(files):
@@ -489,7 +494,36 @@ def DebugRollback():
         else:
             yield ('Oh dear')
 
+vex_ignore = vex_cmd.subcommand('ignore', short="add ignored files")
+vex_ignore_add = vex_ignore.subcommand('add', 'add ignored files')
+@vex_ignore.run('[file...]')
+@vex_ignore_add.run('[file...]')
+def AddIgnore(file):
+    p = get_project()
+    if file:
+        with p.lock('ignore:add') as p:
+            old = p.settings.get('ignore')
+            old.extend(file)
+            p.settings.set('ignore', old)
+    else:
+        for entry in p.settings.get('ignore'):
+            yield entry
 
+
+vex_include = vex_cmd.subcommand('include', short="add include files")
+vex_include_add = vex_include.subcommand('add', 'add include files')
+@vex_include.run('[file...]')
+@vex_include_add.run('[file...]')
+def AddInclude(file):
+    p = get_project()
+    if file:
+        with p.lock('include:add') as p:
+            old = p.settings.get('include')
+            old.extend(file)
+            p.settings.set('include', old)
+    else:
+        for entry in p.settings.get('include'):
+            yield entry
 
 git_cmd = vex_cmd.subcommand('git', short="interact with a git repository")
 
