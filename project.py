@@ -1257,7 +1257,7 @@ class Transaction:
             blobs = {}
         return objects.Action(self.now, self.command, changes, blobs)
 
-class ProjectSwitch:
+class Switch:
     def __init__(self, project, scratch, command):
         self.project = project
         self.scratch = scratch
@@ -1463,7 +1463,7 @@ class Project:
         if not self.history.clean_state():
             raise VexCorrupt('Project history not in a clean state.')
 
-        txn = ProjectSwitch(self, self.scratch, command)
+        txn = Switch(self, self.scratch, command)
         yield txn
         with self.history.do(txn.action()) as action:
             if not action:
