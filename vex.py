@@ -532,19 +532,24 @@ def AddInclude(file):
 
 
 props_cmd = vex_cmd.subcommand('fileprops', short="get/set properties on files", aliases=['props', 'properties', 'property'])
-props_list_cmd = props_cmd.subcommand('list', short="list properties")
+props_list_cmd = props_cmd.subcommand('get', short="list properties")
 @props_cmd.run('file')
 @props_list_cmd.run('file')
 def ListProps(file):
     p = get_project()
-    if file:
-        filename = os.path.join(os.getcwd(), file)
-        with p.lock('fileprops:list') as p:
-            for key,value in p.get_fileprops(filename).items():
-                file = os.path.relpath(filename)
-                yield "{}:{}:{}".format(file, key,value)
-    else:
-        return
+    filename = os.path.join(os.getcwd(), file)
+    with p.lock('fileprops:list') as p:
+        for key,value in p.get_fileprops(filename).items():
+            file = os.path.relpath(filename)
+            yield "{}:{}:{}".format(file, key,value)
+
+props_set_cmd = props_cmd.subcommand('set', short='set property')
+@props_set_cmd.run('file name value:scalar')
+def SetProp(file, name, value):
+    p = get_project()
+    filename = os.path.join(os.getcwd(), file)
+    with p.lock('fileprops:list') as p:
+        p.set_fileprop(filename, name, value)
 
 git_cmd = vex_cmd.subcommand('git', short="interact with a git repository")
 

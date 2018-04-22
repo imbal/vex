@@ -411,6 +411,11 @@ class objects:
             self.properties = properties
             self.replace = replace
 
+        def set_property(self, name, value):
+            self.properties[name] = value
+            if self.state == 'tracked':
+                self.state = 'modified'
+
 
 # Stores
 
@@ -861,8 +866,7 @@ class Transaction:
                 elif entry.state == "modified":
                     filename = self.repo_to_full_path(repo_name)
                     addr = self.project.scratch.addr_for_file(filename)
-                    if addr != entry.addr:
-                        out[repo_name]=objects.ChangeFile(addr, properties=entry.properties)
+                    out[repo_name]=objects.ChangeFile(addr, properties=entry.properties)
                 elif entry.state == "deleted":
                     if entry.replace == "dir":
                         out[repo_name]=objects.DeleteDir()
@@ -1659,6 +1663,15 @@ class Project:
             file = txn.full_to_repo_path(file) 
             tracked = active.files[file]
             return tracked.properties
+
+    def set_fileprop(self,file, name, value):
+        file = self.check_files([file])[0] if file else None
+        with self.do('fileprops:set') as txn:
+            active = txn.active()
+            file = txn.full_to_repo_path(file) 
+            tracked = active.files[file]
+            tracked.set_property(name, value)
+            txn.put_session(active)
 
 
     # Commands
