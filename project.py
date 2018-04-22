@@ -200,6 +200,29 @@ class objects:
         pass
 
 
+    @codec.register
+    class Changeset:
+        def __init__(self, entries):
+            self.entries = entries
+
+        def append_changes(self, changeset):
+            for name, changes in changeset.items():
+                if name not in self.entries:
+                    self.entries[name] = []
+                self.entries[name].extend(changes)
+
+        def prepend_changes(self, changeset):
+            for name, changes in changeset.items():
+                if name not in self.entries:
+                    self.entries[name] = []
+                for change in changes:
+                    self.entries[name].insert(0, change)
+
+        def items(self):
+            return self.entries.items()
+
+        def __bool__(self):
+            return bool(self.entries)
     # Changelog and entries
     @codec.register
     class Changelog:
@@ -798,7 +821,7 @@ class Transaction:
         self.put_session(copy)
         return copy
 
-    def active_changes(self, files=None):
+    def active_changeset(self, files=None):
         active = self.active()
         out = {}
         if not files:
@@ -872,50 +895,50 @@ class Transaction:
             else:
                 raise VexBug('kind')
 
-        return out
+        return objects.Changeset({k:[v] for k,v in out.items()})
 
-    def update_active_changes(self, changes):
+    def update_active_from_changeset(self, changeset):
         active = self.active()
-        for name, change in changes.items():
-
+        for name, changes in changeset.items():
             working = active.files[name].working
-
-            if isinstance(change, objects.DeleteDir):
-                active.files.pop(name)
-            if isinstance(change, objects.DeleteFile):
-                active.files.pop(name)
-            else:
-                if working:
-                    path = self.repo_to_full_path(name)
-                    stat = os.stat(path)
-                    if (time.time() - stat.st_mtime) < MTIME_GRACE_SECONDS:
-                        mtime = None
+            for change in changes:
+                if isinstance(change, objects.DeleteDir):
+                    active.files.pop(name)
+                if isinstance(change, objects.DeleteFile):
+                    active.files.pop(name)
+                else:
+                    if working:
+                        path = self.repo_to_full_path(name)
+                        stat = os.stat(path)
+                        if (time.time() - stat.st_mtime) < MTIME_GRACE_SECONDS:
+                            mtime = None
+                        else:
+                            mtime = stat.st_mtime
+                        mode = stat.st_mode
+                        size = stat.st_size
                     else:
-                        mtime = stat.st_mtime
-                    mode = stat.st_mode
-                    size = stat.st_size
-                else:
-                    mtime = None
-                    mode = None
-                    size = None
+                        mtime = None
+                        mode = None
+                        size = None
 
-                if isinstance(change, (objects.AddFile, objects.NewFile)):
-                    active.files[name] = objects.Tracked("file", "tracked", working=working, addr=change.addr, properties=change.properties, mtime=mtime, mode=mode, size=size)
-                elif isinstance(change, objects.ChangeFile):
-                    active.files[name] = objects.Tracked("file", "tracked", working=working, addr=change.addr, properties=change.properties, mtime=mtime, mode=mode, size=size)
-                elif isinstance(change, (objects.AddDir, objects.NewDir)):
-                    active.files[name] = objects.Tracked("dir", "tracked",  working=working, properties=change.properties, mtime=mtime, mode=mode, size=size)
-                elif isinstance(change, objects.ChangeDir):
-                    active.files[name] = objects.Tracked("dir", "tracked", working=working, properties=change.properties, mtime=mtime, mode=mode, size=size)
-                else:
-                    raise VexBug(change)
+                    if isinstance(change, (objects.AddFile, objects.NewFile)):
+                        active.files[name] = objects.Tracked("file", "tracked", working=working, addr=change.addr, properties=change.properties, mtime=mtime, mode=mode, size=size)
+                    elif isinstance(change, objects.ChangeFile):
+                        active.files[name] = objects.Tracked("file", "tracked", working=working, addr=change.addr, properties=change.properties, mtime=mtime, mode=mode, size=size)
+                    elif isinstance(change, (objects.AddDir, objects.NewDir)):
+                        active.files[name] = objects.Tracked("dir", "tracked",  working=working, properties=change.properties, mtime=mtime, mode=mode, size=size)
+                    elif isinstance(change, objects.ChangeDir):
+                        active.files[name] = objects.Tracked("dir", "tracked", working=working, properties=change.properties, mtime=mtime, mode=mode, size=size)
+                    else:
+                        raise VexBug(change)
 
 
         self.put_session(active)
 
-    def store_changed_files(self, changes):
+    def store_changeset_files(self, changeset):
         active = self.active()
-        for name, change in changes.items():
+        for name, changes in changeset.items():
+            change = changes[-1]
             entry = active.files[name]
             if entry.kind == 'file' and entry.working:
                 filename = self.repo_to_full_path(name)
@@ -927,10 +950,10 @@ class Transaction:
                 self.new_files.add(entry.stash)
 
 
-    def active_root(self, old, changes):
+    def new_root_with_changeset(self, old, changeset):
         active = self.active()
         dir_changes = {}
-        for path, entry in sorted((p.split('/'),e) for p,e in changes.items()):
+        for path, entry in sorted((p.split('/'),e) for p,e in changeset.items()):
             prefix, name = "/".join(path[:-1]), path[-1]
             prefix = prefix or "/"
             name = name or "."
@@ -1035,15 +1058,16 @@ class Transaction:
                     output[path] = objects.Tracked('file', 'tracked', addr=entry.addr, properties=entry.properties)
 
         def extract(changes):
-            for path, change in changes.items():
-                if isinstance(change, (objects.AddFile, objects.NewFile, objects.ChangeFile)):
-                    output[name] = objects.Tracked("file", "tracked", addr=change.addr, properties=change.properties)
-                elif isinstance(change, (objects.AddDir, objects.NewDir, objects.ChangeDir)):
-                    output[name] = objects.Tracked("dir", "tracked", properties=change.properties)
-                elif isinstance(change, (objects.DeleteDir, objects.DeleteFile)):
-                    output.pop(name)
-                else:
-                    raise VexBug(change)
+            for path, changes in changes.items():
+                for change in changes:
+                    if isinstance(change, (objects.AddFile, objects.NewFile, objects.ChangeFile)):
+                        output[name] = objects.Tracked("file", "tracked", addr=change.addr, properties=change.properties)
+                    elif isinstance(change, (objects.AddDir, objects.NewDir, objects.ChangeDir)):
+                        output[name] = objects.Tracked("dir", "tracked", properties=change.properties)
+                    elif isinstance(change, (objects.DeleteDir, objects.DeleteFile)):
+                        output.pop(name)
+                    else:
+                        raise VexBug(change)
 
         prepared = []
 
@@ -1735,10 +1759,10 @@ class Project:
         with self.do_nohistory('diff') as txn:
             session = txn.refresh_active()
             files = [txn.full_to_repo_path(filename) for filename in files] if files else None
-            changes = txn.active_changes(files)
+            changesset = txn.active_changeset(files)
 
             output = {}
-            for name in changes:
+            for name in changeset:
                 e, c = session.files[name], changes[name]
                 if e.kind == 'file':
                     output[name] = dict(old=self.vex.files.filename(e.addr), new=self.repo_to_full_path(self.prefix(),name))
@@ -1755,9 +1779,9 @@ class Project:
             session = txn.refresh_active()
             files = [txn.full_to_repo_path(filename) for filename in files] if files else None
 
-            changes = txn.active_changes(files)
+            changeset = txn.active_changeset(files)
 
-            if not changes:
+            if not changeset:
                 return False
 
         with self.do('prepare') as txn:
@@ -1771,12 +1795,10 @@ class Project:
                 old = txn.get_commit(old.prev)
 
 
-            txn.store_changed_files(changes)
-            txn.update_active_changes(changes)
+            txn.store_changeset_files(changeset)
+            txn.update_active_from_changeset(changeset)
 
-            changes = {k:[v] for k,v in changes.items()}
-
-            prepare = objects.Prepare(n, txn.now, prev=old_uuid, prepared=prepare, changes=changes)
+            prepare = objects.Prepare(n, txn.now, prev=old_uuid, prepared=prepare, changes=changeset.entries)
             prepare_uuid = txn.put_commit(prepare)
 
             txn.set_active_prepare(prepare_uuid)
@@ -1790,20 +1812,16 @@ class Project:
             session = txn.refresh_active()
             files = [txn.full_to_repo_path(filename) for filename in files] if files else None
 
-            my_changes = txn.active_changes(files)
+            my_changeset = txn.active_changeset(files)
 
-            changes = {}
-            for name, c in my_changes.items():
-                if name not in changes: changes[name] = []
-                changes[name].append(c)
+            changes = objects.Changeset({})
+            changes.append_changes(my_changeset)
 
             old_uuid = session.prepare
             old = txn.get_commit(session.prepare)
             n = old.next_n(kind)
             while old and isinstance(old, objects.Prepare):
-                for name, c in old.changes.items():
-                    if name not in changes: changes[name] = []
-                    changes[name].extend(c)
+                changes.prepend_changes(old.changes)
                 old_uuid = old.prepared
                 old = txn.get_commit(old.prepared)
 
@@ -1811,20 +1829,17 @@ class Project:
             if not changes:
                 return False
 
-            changes = {k:v[::-1] for k,v in changes.items()}
-
-
         with self.do(command) as txn:
-            root_uuid = txn.active_root(old.root, changes)
+            root_uuid = txn.new_root_with_changeset(old.root, changes)
 
             if root_uuid == old.root:
                 raise VexBug('changes but no root change')
-            txn.store_changed_files(my_changes)
-            txn.update_active_changes(my_changes)
+            txn.store_changeset_files(my_changeset)
+            txn.update_active_from_changeset(my_changeset)
 
             author = txn.get_state('author')
 
-            changelog = objects.Changelog(prev=old.changelog, summary="Summary", message="Message", changes=changes, author=author)
+            changelog = objects.Changelog(prev=old.changelog, summary="Summary", message="Message", changes=changes.entries, author=author)
             changelog_uuid = txn.put_manifest(changelog)
 
             commit = kind(n=n, timestamp=txn.now, prev=old_uuid, prepared=session.prepare, root=root_uuid, changelog=changelog_uuid)
