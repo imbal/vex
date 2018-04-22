@@ -416,8 +416,16 @@ class DirStore:
 
 
 class BlobStore:
+    prefix = "vex:"
     def __init__(self, dir):
         self.dir = dir
+
+    def hashlib(self):
+        return hashlib.shake_256()
+
+    def prefixed_addr(self, hash):
+        return "{}{}".format(self.prefix, hash.hexdigest(20))
+
 
     def makedirs(self):
         os.makedirs(self.dir, exist_ok=True)
@@ -439,25 +447,27 @@ class BlobStore:
         shutil.copyfile(self.filename(addr), filename)
 
     def addr_for_file(self, file):
-        hash = hashlib.shake_256()
+        hash = self.hashlib()
         with open(file,'rb') as fh:
             buf = fh.read(4096)
             while buf:
                 hash.update(buf)
                 buf = fh.read(4096)
+        return self.prefixed_addr(hash)
 
-        return "shake-256-20-{}".format(hash.hexdigest(20))
 
     def inside(self, file):
         return os.path.commonpath((file, self.dir)) == self.dir
 
     def addr_for_buf(self, buf):
-        hash = hashlib.shake_256()
+        hash = self.hashlib()
         hash.update(buf)
-        return "shake-256-20-{}".format(hash.hexdigest(20))
+        return self.prefixed_addr(hash)
 
     def filename(self, addr):
-        return os.path.join(self.dir, addr)
+        if not addr.startswith(self.prefix):
+            raise VexBug('bug')
+        return os.path.join(self.dir, addr[len(self.prefix):])
 
     def exists(self, addr):
         return os.path.exists(self.filename(addr))
@@ -1190,34 +1200,53 @@ class ProjectSwitch:
     def action(self):
         return objects.Switch(self.now, self.command, self.prefix, self.active_session, {}, {})
 
-class Project:
-    VEX = "/.vex"
-    def __init__(self, config_dir, working_dir):
-        self.working_dir = working_dir
+class VexRepo:
+    def __init__(self, config_dir):
         self.dir = config_dir
         self.changes =   BlobStore(os.path.join(config_dir, 'project', 'commits'))
         self.manifests = BlobStore(os.path.join(config_dir, 'project', 'manifests'))
         self.files =     BlobStore(os.path.join(config_dir, 'project', 'files'))
         self.branches =   DirStore(os.path.join(config_dir, 'project', 'branches'))
         self.names =      DirStore(os.path.join(config_dir, 'project', 'branches', 'names'))
-        self.state =      DirStore(os.path.join(config_dir, 'state'))
-        self.sessions =   DirStore(os.path.join(config_dir, 'state', 'sessions'))
-        self.actions =   ActionLog(os.path.join(config_dir, 'state', 'history'))
-        self.scratch =   BlobStore(os.path.join(config_dir, 'scratch'))
-        self.lockfile =            os.path.join(config_dir, 'lock')
-        self.settings =  DirStore(os.path.join(config_dir, 'settings'))
-
-    # methods, look, don't ask, they're just plain methods, ok?
 
     def makedirs(self):
         os.makedirs(self.dir, exist_ok=True)
         self.changes.makedirs()
         self.manifests.makedirs()
         self.files.makedirs()
-        self.sessions.makedirs()
         self.branches.makedirs()
         self.names.makedirs()
+
+
+class Project:
+    VEX = "/.vex"
+    def __init__(self, config_dir, working_dir):
+        self.working_dir = working_dir
+        self.dir = config_dir
+        self.vex = VexRepo(config_dir)
+
+        self.changes = self.vex.changes
+        self.manifests = self.vex.manifests
+        self.files = self.vex.files
+        self.branches = self.vex.branches
+        self.names = self.vex.names
+
+        self.state =      DirStore(os.path.join(config_dir, 'state'))
+        self.sessions =   DirStore(os.path.join(config_dir, 'state', 'sessions'))
+        self.actions =   ActionLog(os.path.join(config_dir, 'state', 'history'))
+        self.scratch =   BlobStore(os.path.join(config_dir, 'scratch'))
+        self.lockfile =            os.path.join(config_dir, 'lock')
+
+        self.settings =  DirStore(os.path.join(config_dir, 'settings'))
+
+    # methods, look, don't ask, they're just plain methods, ok?
+
+
+    def makedirs(self):
+        os.makedirs(self.dir, exist_ok=True)
+        self.vex.makedirs()
         self.state.makedirs()
+        self.sessions.makedirs()
         self.actions.makedirs()
         self.scratch.makedirs()
         self.settings.makedirs()
@@ -1658,11 +1687,11 @@ class Project:
             root_uuid = txn.put_manifest(root)
 
             changes = {
-                    '/' : [ objects.AddDir({}, properties={}) ] ,
-                    self.VEX : [ objects.AddDir({}, properties={}) ],
+                    '/' : [ objects.AddDir(properties={}) ] ,
+                    self.VEX : [ objects.AddDir(properties={}) ],
             }
             if prefix != '/':
-                changes[prefix] = objects.AddDir({}, properties={})
+                changes[prefix] = objects.AddDir(properties={})
             changelog = objects.Changelog(prev=None, summary="init", message="", changes=changes, author=author_uuid)
             changelog_uuid = txn.put_manifest(changelog)
 

@@ -72,7 +72,7 @@ def Init(directory, working, config, prefix, include, ignore):
         if not p.history_isempty():
             raise VexError("A vex project already exists here")
         else:
-            yield ('A empty project was round, re-creating project in "{}"...'.format(directory))
+            yield ('A empty project was round, re-creating project in "{}"...'.format(os.path.relpath(config_dir)))
             with p.lock('init') as p:
                 p.init(prefix, include, ignore)
     else:
