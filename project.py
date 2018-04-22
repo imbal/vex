@@ -628,7 +628,6 @@ class HistoryStore:
         c = self.db.cursor() 
         buf = codec.dump(value)
         c.execute('update current set value = ? where id = 0', [buf])
-        self.db.commit()
         c.execute('insert or ignore into current (id,value) values (0,?)',[buf])
         self.db.commit()
 
@@ -636,7 +635,6 @@ class HistoryStore:
         c = self.db.cursor() 
         buf = codec.dump(value)
         c.execute('update next set value = ? where id = 0', [buf])
-        self.db.commit()
         c.execute('insert or ignore into next (id,value) values (0,?)',[buf])
         self.db.commit()
 
@@ -655,7 +653,6 @@ class HistoryStore:
         c.execute('insert into dos (addr, prev, action) values (?,?,?)',[addr, prev, buf])
         self.db.commit()
         return addr
-
 
     def get_redos(self, addr):
         c = self.db.cursor() 
