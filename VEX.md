@@ -1,10 +1,56 @@
 # Vex - A database for files 
 
-Note: This is a work-in-progress, large chunks of this README are fictional. Please don't link to this project yet, it isn't ready for an audience yet. Thank you!
-
 This README assumes some familiarily with `git`, `hg`, or `svn`
 
+Note: This is a work-in-progress, large chunks of this README are fictional. Please don't link to this project yet, it isn't ready for an audience yet. Thank you!
+
+## A Manifesto for yet another Source Control System
+
+- The working copy is sacred. Preserve it at all costs.
+- Everything should be as easy to do as it is to undo/redo.
+- Don't ever leave the project in a broken state: unless the user *explicitly* asked, rollback.
+- UUIDs are good for you, and use the same encoding for everything.
+- The history of a project is when the changes were applied, not when the changes were written.
+
+Imagine `git`, except:
+
+- Branches automatically stash and unstash
+- It tracks directories as well as files
+- The index is the stage (like `hg`)
+- Branches can have more than one working copy associated with it,  detached heads never get lost.
+- Instead of a reflog, `undo` and `redo`.
+- `log` always shows the changes in the order they were applied, not written
+- Instead of rewriting history, rebasing creates a new merge commit, and then replays the changes atop. 
+- Subtree checkouts, subversion-like fileprops
+
+Imagine `hg`, except:
+
+- Branches work more like `hg bookmarks` or `git branch` internally.
+- Branches automatically stash and unstash.
+- Branches can have multiple heads `hg heads` is roughly `vex sessions`.
+- `log` always shows the changes in the order they were applied, not written
+- Instead of rewriting history, rebasing creates a new merge commit, and then replays the changes atop. 
+- Subtree checkouts, subversion-like fileprops.
+
+Imagine `svn`, except:
+
+- Branches work as outlined above.
+- Commiting offline and sharing changes asynchronously.
+- But yes, subtree checkouts, and fileprops are still around. Finally.
+
+Now Imagine:
+
+- Online mode (i.e push on commit), Partial checkouts.
+- Large file, large directory, and binary support.
+- Branch configuration inside a tracked directory, used for default properties, ignore lists, author settings, and merge policies.
+- UUIDs everywhere: Changing author information without rebuilding project
+- Working submodules/repos
+- Purging: a way strip changes from a project and push it to remote services
+
+
 ## Cheatsheet:
+
+These commands are implemented, but are unfinished:
 
 | vex | hg | git  |
 | --- | --- | --- |
@@ -14,40 +60,13 @@ This README assumes some familiarily with `git`, `hg`, or `svn`
 | `vex status`		| `hg status`	| `git status` 	|
 | `vex commit`		| `hg commit`	| `git commit -a` 	|
 | `vex log`	    	| `hg log`		| `git log` 	|
+| `vex new`         | `hg bookmark` | `git branch, checkout`|
+| `vex open`        | `hg bookmark` | `git checkout`|
+| `vex saveas`      | `hg bookmark` | `git checkout -b`|
 | ...			    | ...			| ...		|
-| `vex undo`		| `hg rollback`	| `git ???` 	|
-| `vex redo`		| `hg ???`		| `git ???` 	|
-| `vex switch`		| `hg ???`		| `git ???` 	|
-
-## `vex` vs ....
-
-Unlike `hg`, `git`, or `svn`, you can undo/redo *everything*
-
-- `vex undo` undoes the last command that changed something
-- `vex undo --list` shows the list of commands that can be undone
-- `vex undo` can be run more than once,
-- `vex redo` redoes the last undone command
-- `vex redo --list` shows the potential options, `vex redo --choice=<n>` to pick one
-- `vex redo` can be run more than once, and redone more than once
-
-For `hg` users:
-
-- Branches work more like hg bookmarks or git branches
-- Merges work more like commits, having a single predecessor
-- Everything else is quite similar
-
-For `git` users:
-
-- A thoughtful content tracker
-- Branches automatically stash and unstash
-- Rebasing doesn't destroy history, and rebased branches can be shared
-- Vex tracks directories as well as files
-
-For `svn` users:
-
-- Offline and asynchronous commits
-- Files can have properties attached to them
-- Subtree checkouts `vex switch --prefix=/<path>`
+| `vex undo`		| `hg rollback` for commits	| check stackoverflow 	|
+| `vex redo`		|              	            | 	|
+| `vex switch`		| no subtree checkouts		| no subtree checkouts	|
 
 
 ## Workflows
@@ -69,11 +88,14 @@ By default, `vex init name` creates a repository with a `/name` directory inside
 
 ### Undoing changes
 
-- `vex history` 
+- `vex undo` undoes the last command that changed something
+- `vex undo --list` shows the list of commands that can be undone
+- `vex undo` can be run more than once,
+- `vex redo` redoes the last undone command
+- `vex redo --list` shows the potential options, `vex redo --choice=<n>` to pick one
+- `vex redo` can be run more than once, and redone more than once
 
-- `vex undo`
-
-- `vex redo`
+```Example placeholder```
 
 ### Moving around the project
 

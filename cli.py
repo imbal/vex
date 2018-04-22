@@ -506,7 +506,7 @@ class CommandDescription:
         if self.subcommands:
             output.append("commands:")
             for cmd in self.subcommands.values():
-                output.append("\t{.name}\t{}".format(cmd, cmd.short or ""))
+                output.append("  {.name:10}  {}".format(cmd, cmd.short or ""))
             output.append("")
         return "\n".join(output)
 
