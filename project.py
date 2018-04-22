@@ -535,36 +535,27 @@ class BlobStore:
 
 # Action log: Used to track undo/redo and changes to repository state
 
-
-class History:
-    START = 'init'
-    Modes = set(('init', 'do', 'undo', 'redo', 'quiet'))
+class HistoryStore:
     def __init__(self, dir):
         self.dir = dir
         self._store = BlobStore(os.path.join(dir,'entries'))
         self._store.prefix = ""
         self._redos = DirStore(os.path.join(dir,'redos' ))
         self._settings = DirStore(dir)
-
+    
     def makedirs(self):
         os.makedirs(self.dir, exist_ok=True)
         self._store.makedirs()
         self._redos.makedirs()
-        self._settings.set("current", self.START)
-        self._settings.set("next", ('init', self.START, None))
-
-    def empty(self):
-        return self.current() == self.START
-
-    def clean_state(self):
-        if self._settings.exists("current") and self._settings.exists("next"):
-            return self._settings.get("current") == self._settings.get("next")[1]
 
     def current(self):
         return self._settings.get("current")
 
     def next(self):
         return self._settings.get("next")
+
+    def exists(self):
+        return self._settings.exists("current") and self._settings.exists("next")
 
     def set_current(self, value):
         self._settings.set('current', value)
@@ -591,12 +582,30 @@ class History:
         redo = objects.Redo(addrs)
         self._redos.set(addr, redo)
 
+class History:
+    START = 'init'
+    Modes = set(('init', 'do', 'undo', 'redo', 'quiet'))
+    def __init__(self, dir):
+        self.store = HistoryStore(dir)
+
+    def makedirs(self):
+        self.store.makedirs()
+        self.store.set_current(self.START)
+        self.store.set_next(('init', self.START, None))
+
+    def empty(self):
+        return self.store.current() == self.START
+
+    def clean_state(self):
+        if self.store.exists():
+            return self.store.current() == self.store.next()[1]
+
     def entries(self):
-        current = self.current()
+        current = self.store.current()
         out = []
         while current != self.START:
-            obj = self.get_entry(current)
-            redos = [self.get_entry(x).action.command for x in self.get_redos(current)]
+            obj = self.store.get_entry(current)
+            redos = [self.store.get_entry(x).action.command for x in self.store.get_redos(current)]
             out.append((obj.action, redos))
             current = obj.prev
 
@@ -606,55 +615,55 @@ class History:
     def do_nohistory(self, action):
         if not self.clean_state():
             raise VexCorrupt('Project history not in a clean state.')
-        current = self.current()
+        current = self.store.current()
         obj = objects.DoQuiet(current, action)
-        addr = self.put_entry(obj)
-        self.set_next(['quiet', addr , current])
+        addr = self.store.put_entry(obj)
+        self.store.set_next(['quiet', addr , current])
 
         yield action
 
-        self.set_next(['do', current, current])
+        self.store.set_next(['do', current, current])
 
     @contextmanager
     def do(self, action):
         if not self.clean_state():
             raise VexCorrupt('Project history not in a clean state.')
-        current = self.current()
+        current = self.store.current()
 
-        addr = self.add_entry(current, action)
-        self.set_next(('do', addr,current))
+        addr = self.store.add_entry(current, action)
+        self.store.set_next(('do', addr,current))
 
         yield action
 
-        self.set_current(addr)
+        self.store.set_current(addr)
 
     @contextmanager
     def undo(self):
         if not self.clean_state():
             raise VexCorrupt('Project history not in a clean state.')
-        current = self.current()
+        current = self.store.current()
         if current == self.START:
             yield None
             return
 
-        obj = self.get_entry(current)
+        obj = self.store.get_entry(current)
 
         redos = [current]
-        redos.extend(self.get_redos(obj.prev))
-        self.set_next(('undo', obj.prev, current))
+        redos.extend(self.store.get_redos(obj.prev))
+        self.store.set_next(('undo', obj.prev, current))
 
         yield obj.action
 
-        self.set_redos(obj.prev, redos)
-        self.set_current(obj.prev)
+        self.store.set_redos(obj.prev, redos)
+        self.store.set_current(obj.prev)
 
     @contextmanager
     def redo(self, n=0):
         if not self.clean_state():
             raise VexCorrupt('Project history not in a clean state.')
-        current = self.current()
+        current = self.store.current()
 
-        redos = self.get_redos(current)
+        redos = self.store.get_redos(current)
 
         if not redos:
             yield None
@@ -662,13 +671,13 @@ class History:
 
         do = redos.pop(n)
 
-        obj = self.get_entry(do)
-        self.set_next(('redo', do, current))
+        obj = self.store.get_entry(do)
+        self.store.set_next(('redo', do, current))
 
         yield obj.action
 
-        self.set_redos(current, redos)
-        self.set_current(do)
+        self.store.set_redos(current, redos)
+        self.store.set_current(do)
 
     @contextmanager
     def rollback_new(self):
@@ -676,17 +685,17 @@ class History:
             yield
             return
 
-        mode, next, old_current = self.next()
+        mode, next, old_current = self.store.next()
         if mode not in self.Modes:
             raise VexCorupt('Real bad')
         if mode == 'undo' or not old_current:
             raise VexBug('no')
-        obj = self.get_entry(next)
-        current = self.current()
+        obj = self.store.get_entry(next)
+        current = self.store.current()
         if current != old_current:
             raise VexCorrupt('History is really corrupted: Interrupted transaction did not come after current change')
         yield obj.action
-        self.set_next(['rollback', old_current, None])
+        self.store.set_next(['rollback', old_current, None])
 
     @contextmanager
     def restart_new(self):
@@ -698,25 +707,25 @@ class History:
             raise VexCorupt('Real bad')
         if mode == 'undo' or not old_current:
             raise VexBug('no')
-        obj = self.get_entry(next)
-        current = self.current()
+        obj = self.store.get_entry(next)
+        current = self.store.current()
         if current != old_current:
             raise VexCorrupt('History is really corrupted: Interrupted transaction did not come after current change')
         yield obj.action
         if mode == 'quiet':
-            self.set_next(['restart', old_current, None])
+            self.store.set_next(['restart', old_current, None])
         else:
-            self.set_current(['restart', next, None])
+            self.store.set_current(['restart', next, None])
 
 
     def redo_choices(self):
-        current = self.current()
+        current = self.store.current()
 
-        redos = self.get_redos(current)
+        redos = self.store.get_redos(current)
 
         out = []
         for do in redos:
-            obj = self.get_entry(do)
+            obj = self.store.get_entry(do)
             out.append(obj.action)
         return out
 
