@@ -301,8 +301,8 @@ def Prepare(file,watch):
             p.prepare(files)
 
 vex_commit = vex_cmd.subcommand('commit', short="save the working copy and add an entry to the project changes")
-@vex_commit.run('--add? [file...]')
-def Commit(add, file):
+@vex_commit.run('--add? --prepared? [file...]')
+def Commit(prepared, add, file):
     """
 
     """
@@ -316,7 +316,12 @@ def Commit(add, file):
 
         cwd = os.getcwd()
         files = [os.path.join(cwd, f) for f in file] if file else None
-        if p.commit(files):
+        if prepared and not files:
+            done = p.commit_prepared()
+        else:
+            done = p.commit(files)
+
+        if done:
             yield 'Committed'
         else:
             yield 'Nothing to commit'

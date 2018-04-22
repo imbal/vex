@@ -668,14 +668,17 @@ class ActionLog:
         mode, next, old_current = self.settings.get("next")
         if mode not in self.Modes:
             raise VexCorupt('Real bad')
-        if mode == 'undo' or mode =='quiet' or not old_current:
+        if mode == 'undo' or not old_current:
             raise VexBug('no')
         obj = self.store.get_obj(next)
         current = self.settings.get("current")
         if current != old_current:
             raise VexCorrupt('History is really corrupted: Interrupted transaction did not come after current change')
         yield obj.action
-        self.settings.set("current", ['restart', next, None])
+        if mode == 'quiet':
+            self.settings.set("current", ['restart', old+current, None])
+        else:
+            self.settings.set("current", ['restart', next, None])
 
 
     def redo_choices(self):
@@ -909,36 +912,37 @@ class Transaction:
         active = self.active()
         for name, changes in changeset.items():
             working = active.files[name].working
-            for change in changes:
-                if isinstance(change, objects.DeleteDir):
-                    active.files.pop(name)
-                if isinstance(change, objects.DeleteFile):
-                    active.files.pop(name)
-                else:
-                    if working:
-                        path = self.repo_to_full_path(name)
-                        stat = os.stat(path)
-                        if (time.time() - stat.st_mtime) < MTIME_GRACE_SECONDS:
-                            mtime = None
-                        else:
-                            mtime = stat.st_mtime
-                        mode = stat.st_mode
-                        size = stat.st_size
-                    else:
-                        mtime = None
-                        mode = None
-                        size = None
+            change = changes[-1]
 
-                    if isinstance(change, (objects.AddFile, objects.NewFile)):
-                        active.files[name] = objects.Tracked("file", "tracked", working=working, addr=change.addr, properties=change.properties, mtime=mtime, mode=mode, size=size)
-                    elif isinstance(change, objects.ChangeFile):
-                        active.files[name] = objects.Tracked("file", "tracked", working=working, addr=change.addr, properties=change.properties, mtime=mtime, mode=mode, size=size)
-                    elif isinstance(change, (objects.AddDir, objects.NewDir)):
-                        active.files[name] = objects.Tracked("dir", "tracked",  working=working, properties=change.properties, mtime=mtime, mode=mode, size=size)
-                    elif isinstance(change, objects.ChangeDir):
-                        active.files[name] = objects.Tracked("dir", "tracked", working=working, properties=change.properties, mtime=mtime, mode=mode, size=size)
+            if isinstance(change, objects.DeleteDir):
+                active.files.pop(name)
+            if isinstance(change, objects.DeleteFile):
+                active.files.pop(name)
+            else:
+                if working:
+                    path = self.repo_to_full_path(name)
+                    stat = os.stat(path)
+                    if (time.time() - stat.st_mtime) < MTIME_GRACE_SECONDS:
+                        mtime = None
                     else:
-                        raise VexBug(change)
+                        mtime = stat.st_mtime
+                    mode = stat.st_mode
+                    size = stat.st_size
+                else:
+                    mtime = None
+                    mode = None
+                    size = None
+
+                if isinstance(change, (objects.AddFile, objects.NewFile)):
+                    active.files[name] = objects.Tracked("file", "tracked", working=working, addr=change.addr, properties=change.properties, mtime=mtime, mode=mode, size=size)
+                elif isinstance(change, objects.ChangeFile):
+                    active.files[name] = objects.Tracked("file", "tracked", working=working, addr=change.addr, properties=change.properties, mtime=mtime, mode=mode, size=size)
+                elif isinstance(change, (objects.AddDir, objects.NewDir)):
+                    active.files[name] = objects.Tracked("dir", "tracked",  working=working, properties=change.properties, mtime=mtime, mode=mode, size=size)
+                elif isinstance(change, objects.ChangeDir):
+                    active.files[name] = objects.Tracked("dir", "tracked", working=working, properties=change.properties, mtime=mtime, mode=mode, size=size)
+                else:
+                    raise VexBug(change)
 
 
         self.put_session(active)
@@ -1812,18 +1816,12 @@ class Project:
             txn.set_active_prepare(prepare_uuid)
 
     def amend(self, files):
-        return self.commit(files, kind=objects.Amend, command='amend')
-
-    def commit(self, files, kind=objects.Commit, command='commit'):
         files = self.check_files(files) if files else None
         with self.do_nohistory(command) as txn:
             session = txn.refresh_active()
             files = [txn.full_to_repo_path(filename) for filename in files] if files else None
 
-            my_changeset = txn.active_changeset(files)
-
-            changes = objects.Changeset({})
-            changes.append_changes(my_changeset)
+            changes = txn.active_changeset(files)
 
             old_uuid = session.prepare
             old = txn.get_commit(session.prepare)
@@ -1837,19 +1835,68 @@ class Project:
             if not changes:
                 return False
 
+        return self.commit_changeset(changes, kind=objects.Amend, command='amend')
+
+    def commit_prepared(self):
+        kind = objects.Commit
+        command = 'commit'
+        with self.do_nohistory('commit') as txn:
+            session = txn.active()
+            changes = objects.Changeset({})
+
+            old_uuid = session.prepare
+            old = txn.get_commit(session.prepare)
+            while old and isinstance(old, objects.Prepare):
+                changes.prepend_changes(old.changes)
+                old_uuid = old.prepared
+                old = txn.get_commit(old.prepared)
+
+
+            if not changes:
+                return False
+
+        return self.commit_changeset(changes, old_uuid, kind, command)
+
+    def commit(self, files):
+        kind = objects.Commit
+        command = 'commit'
+        files = self.check_files(files) if files else None
+        with self.do_nohistory(command) as txn:
+            session = txn.refresh_active()
+            files = [txn.full_to_repo_path(filename) for filename in files] if files else None
+
+            changes = txn.active_changeset(files)
+
+            old_uuid = session.prepare
+            old = txn.get_commit(session.prepare)
+            while old and isinstance(old, objects.Prepare):
+                changes.prepend_changes(old.changes)
+                old_uuid = old.prepared
+                old = txn.get_commit(old.prepared)
+
+
+            if not changes:
+                return False
+
+        return self.commit_changeset(changes, old_uuid, kind, command)
+
+    def commit_changeset(self, changeset, old_uuid, kind, command):
         with self.do(command) as txn:
-            root_uuid = txn.new_root_with_changeset(old.root, changes)
+            session = txn.active()
+            old = txn.get_commit(old_uuid)
+            root_uuid = txn.new_root_with_changeset(old.root, changeset)
 
             if root_uuid == old.root:
                 raise VexBug('changes but no root change')
-            txn.store_changeset_files(my_changeset)
-            txn.update_active_from_changeset(my_changeset)
+            txn.store_changeset_files(changeset)
+            txn.update_active_from_changeset(changeset)
 
             author = txn.get_state('author')
 
-            changelog = objects.Changelog(prev=old.changelog, summary="Summary", message="Message", changes=changes.entries, author=author)
+            changelog = objects.Changelog(prev=old.changelog, summary="Summary", message="Message", changes=changeset.entries, author=author)
             changelog_uuid = txn.put_manifest(changelog)
 
+            n = old.next_n(kind)
             commit = kind(n=n, timestamp=txn.now, prev=old_uuid, prepared=session.prepare, root=root_uuid, changelog=changelog_uuid)
             commit_uuid = txn.put_commit(commit)
 
