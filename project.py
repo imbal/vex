@@ -340,12 +340,6 @@ class objects:
             self.action = action
 
     @codec.register
-    class DoQuiet:
-        def __init__(self, prev, action):
-            self.prev = prev
-            self.action = action
-
-    @codec.register
     class Redo:
         def __init__(self, dos):
             self.dos = dos
@@ -616,7 +610,7 @@ class History:
         if not self.clean_state():
             raise VexCorrupt('Project history not in a clean state.')
         current = self.store.current()
-        obj = objects.DoQuiet(current, action)
+        obj = objects.Do(current, action)
         addr = self.store.put_entry(obj)
         self.store.set_next(['quiet', addr , current])
 
