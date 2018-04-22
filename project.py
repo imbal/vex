@@ -802,12 +802,20 @@ class Transaction:
                         entry.state = "modified"
                         entry.mode = stat.st_mode
                         entry.size = stat.st_size
+                        if stat.st_mode & 64:
+                            entry.properties['vex:executable'] = True
+                        elif 'vex:executable' in entry.properties:
+                            entry.properties.pop('vex:executable')
                         if now - stat.st_mtime >= MTIME_GRACE_SECONDS:
                             entry.mtime = stat.st_mtime
                 elif entry.state == 'modified':
                     stat = os.stat(path)
                     entry.mode = stat.st_mode
                     entry.size = stat.st_size
+                    if stat.st_mode & 64:
+                        entry.properties['vex:executable'] = True
+                    elif 'vex:executable' in entry.properties:
+                        entry.properties.pop('vex:executable')
                 else:
                     raise VexBug('welp')
             elif entry.kind == "dir":
@@ -1603,12 +1611,18 @@ class Project:
                     os.makedirs(path, exist_ok=True)
             elif entry.kind =="file":
                 self.vex.files.make_copy(entry.addr, path)
-                # XXX set up mode from props, set up size
+                if entry.properties.get('vex:executable'):
+                    stat = os.stat(path)
+                    os.chmod(path, stat.st_mode | 64)
+                else:
+                    print('not exec', name)
             elif entry.kind == "stash":
                 self.scratch.make_copy(entry.stash, path)
                 entry.kind = "file"
                 entry.stash = None
-                # XXX set up mode from props, set up size
+                if entry.properties.get('vex:executable'):
+                    stat = os.stat(path)
+                    os.chmod(path, stat.st_mode | 64)
             elif entry.kind == "ignore":
                 pass
             else:
@@ -1908,7 +1922,8 @@ class Project:
             root_uuid = txn.new_root_with_changeset(old.root, changeset)
 
             if root_uuid == old.root:
-                raise VexBug('changes but no root change')
+                txn.update_active_from_changeset(changeset)
+                return False
             txn.store_changeset_files(changeset)
             txn.update_active_from_changeset(changeset)
 
