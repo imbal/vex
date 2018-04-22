@@ -530,6 +530,22 @@ def AddInclude(file):
         for entry in p.settings.get('include'):
             yield entry
 
+
+props_cmd = vex_cmd.subcommand('fileprops', short="get/set properties on files", aliases=['props', 'properties', 'property'])
+props_list_cmd = props_cmd.subcommand('list', short="list properties")
+@props_cmd.run('file')
+@props_list_cmd.run('file')
+def ListProps(file):
+    p = get_project()
+    if file:
+        filename = os.path.join(os.getcwd(), file)
+        with p.lock('fileprops:list') as p:
+            for key,value in p.get_fileprops(filename).items():
+                file = os.path.relpath(filename)
+                yield "{}:{}:{}".format(file, key,value)
+    else:
+        return
+
 git_cmd = vex_cmd.subcommand('git', short="interact with a git repository")
 
 git_init_cmd = git_cmd.subcommand('init', short='create a new git project')

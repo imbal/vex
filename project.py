@@ -1652,6 +1652,14 @@ class Project:
                         return True
                 elif fnmatch.fnmatch(name, rule):
                     return True
+    def get_fileprops(self,file):
+        file = self.check_files([file])[0] if file else None
+        with self.do_nohistory('fileprops:get') as txn:
+            active = txn.active()
+            file = txn.full_to_repo_path(file) 
+            tracked = active.files[file]
+            return tracked.properties
+
 
     # Commands
 
