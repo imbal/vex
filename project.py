@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 import os
-import shutil
-import os.path
-import hashlib
-import unicodedata
-import subprocess
 import fcntl
 import time
+import shutil
+import sqlite3
 import fnmatch
+import os.path
+import hashlib
+import subprocess
+import unicodedata
 
 from datetime import datetime, timezone
 from uuid import uuid4
@@ -339,11 +340,6 @@ class objects:
             self.prev = prev
             self.action = action
 
-    @codec.register
-    class Redo:
-        def __init__(self, dos):
-            self.dos = dos
-
     # Working copy state
 
     @codec.register
@@ -529,7 +525,7 @@ class BlobStore:
 
 # Action log: Used to track undo/redo and changes to repository state
 
-class HistoryStore:
+class OldHistoryStore:
     def __init__(self, dir):
         self.dir = dir
         self._store = BlobStore(os.path.join(dir,'entries'))
@@ -563,18 +559,121 @@ class HistoryStore:
     def put_entry(self, obj):
         return self._store.put_obj(obj)
 
-    def add_entry(self, current, action):
-        obj = objects.Do(current, action)
-        return self.put_entry(obj)
-
     def get_redos(self, addr):
         if self._redos.exists(addr):
-            return self._redos.get(addr).dos
+            return self._redos.get(addr)
         return []
 
-    def set_redos(self, addr, addrs):
-        redo = objects.Redo(addrs)
+    def set_redos(self, addr, redo):
         self._redos.set(addr, redo)
+
+class HistoryStore:
+    def __init__(self, file):
+        self.file = file
+        self._db = None
+    
+    @property
+    def db(self):
+        if self._db:
+            return self._db
+        self._db = sqlite3.connect(self.file)
+        return self._db
+
+    def makedirs(self):
+        c = self.db.cursor()
+        c.execute('''
+            create table if not exists dos(
+                addr text primary key,
+                prev text not null, 
+                timestamp datetime default current_timestamp,
+                action text)
+        ''')
+        c.execute('''
+            create table if not exists redos(
+                addr text primary key,
+                dos text not null)
+        ''')
+        c.execute('''
+            create table if not exists next(
+                id INTEGER PRIMARY KEY CHECK (id = 0) default 0,
+                value text not null)
+        ''')
+        c.execute('''
+            create table if not exists current (
+                id INTEGER PRIMARY KEY CHECK (id = 0) default 0,
+                value text not null)
+        ''')
+        self.db.commit()
+
+    def exists(self):
+        if os.path.exists(self.file):
+            return bool(self.current())
+
+    def current(self):
+        c = self.db.cursor() 
+        c.execute('select value from current where id = 0')
+        row = c.fetchone()
+        if row:
+            return codec.parse(row[0])
+
+    def next(self):
+        c = self.db.cursor() 
+        c.execute('select value from next where id = 0')
+        row = c.fetchone()
+        if row:
+            return codec.parse(row[0])
+
+    def set_current(self, value):
+        if not value: raise Exception()
+        c = self.db.cursor() 
+        buf = codec.dump(value)
+        c.execute('update current set value = ? where id = 0', [buf])
+        self.db.commit()
+        c.execute('insert or ignore into current (id,value) values (0,?)',[buf])
+        self.db.commit()
+
+    def set_next(self, value):
+        c = self.db.cursor() 
+        buf = codec.dump(value)
+        c.execute('update next set value = ? where id = 0', [buf])
+        self.db.commit()
+        c.execute('insert or ignore into next (id,value) values (0,?)',[buf])
+        self.db.commit()
+
+    def get_entry(self, addr):
+        c = self.db.cursor() 
+        c.execute('select prev, action from dos where addr = ?', [addr])
+        row = c.fetchone()
+        if row:
+            return objects.Do(str(row[0]),codec.parse(row[1]))
+
+    def put_entry(self, obj):
+        c=self.db.cursor()
+        prev = obj.prev
+        buf = codec.dump(obj.action)
+        addr = UUID().split('-',1)[0]
+        c.execute('insert into dos (addr, prev, action) values (?,?,?)',[addr, prev, buf])
+        self.db.commit()
+        return addr
+
+
+    def get_redos(self, addr):
+        c = self.db.cursor() 
+        c.execute('select dos from redos where addr = ?', [addr])
+        row = c.fetchone()
+        if row:
+            row = codec.parse(row[0])
+        if row:
+            return row
+        return []
+
+    def set_redos(self, addr, redo):
+        c = self.db.cursor() 
+        buf = codec.dump(redo)
+        c.execute('update redos set dos = ? where addr = ?', [buf, addr])
+        self.db.commit()
+        c.execute('insert or ignore into redos (addr,dos) values (?,?)',[addr, buf])
+        self.db.commit()
 
 class History:
     START = 'init'
@@ -588,11 +687,12 @@ class History:
         self.store.set_next(('init', self.START, None))
 
     def empty(self):
-        return self.store.current() == self.START
+        return self.store.current() in (self.START,)
 
     def clean_state(self):
         if self.store.exists():
-            return self.store.current() == self.store.next()[1]
+            if self.store.current():
+                return self.store.current() == self.store.next()[1]
 
     def entries(self):
         current = self.store.current()
@@ -624,7 +724,7 @@ class History:
             raise VexCorrupt('Project history not in a clean state.')
         current = self.store.current()
 
-        addr = self.store.add_entry(current, action)
+        addr = self.store.put_entry(objects.Do(current, action))
         self.store.set_next(('do', addr,current))
 
         yield action
@@ -1258,6 +1358,10 @@ class Switch:
         self.command = command
         self.prefix = {}
         self.active_session = {}
+        self.old_branch_states = {}
+        self.new_branch_states = {}
+        self.old_session_states = {}
+        self.new_session_states = {}
         self.now = NOW()
 
     def switch_prefix(self, new_prefix):
@@ -1267,15 +1371,26 @@ class Switch:
         self.active_session = {'old': self.project.state.get('active'), 'new': new_session}
 
     def set_branch_state(self, branch_uuid, state):
-        # XXX
-        pass
+        if branch_uuid in self.new_branch_states:
+            self.new_branch_states[uuid] = state
+        else:
+            old = self.project.branches.get(uuid)
+            self.new_branch_states[uuid] = state
+            self.old_branch_states[uuid] = old.state
+
 
     def set_session_state(self, session_uuid, state):
-        # XXX
-        pass
+        if session_uuid in self.new_session_states:
+            self.new_session_states[uuid] = state
+        else:
+            old = self.project.sessions.get(uuid)
+            self.new_session_states[uuid] = state
+            self.old_session_states[uuid] = old.state
 
     def action(self):
-        return objects.Switch(self.now, self.command, self.prefix, self.active_session, {}, {})
+        branches = dict(old=self.old_branch_states, new=self.new_branch_states)
+        sessions = dict(old=self.old_session_states, new=self.new_session_states)
+        return objects.Switch(self.now, self.command, self.prefix, self.active_session, sessions, branches)
 
 class VexRepo:
     def __init__(self, config_dir):
@@ -1635,8 +1750,6 @@ class Project:
                 if entry.properties.get('vex:executable'):
                     stat = os.stat(path)
                     os.chmod(path, stat.st_mode | 64)
-                else:
-                    print('not exec', name)
             elif entry.kind == "stash":
                 self.scratch.make_copy(entry.stash, path)
                 entry.kind = "file"
