@@ -449,25 +449,28 @@ class BlobStore:
     def prefixed_addr(self, hash):
         return "{}{}".format(self.prefix, hash.hexdigest(20))
 
-
     def makedirs(self):
         os.makedirs(self.dir, exist_ok=True)
 
     def copy_from(self, other, addr):
         if other.exists(addr) and not self.exists(addr):
             src, dest = other.filename(addr), self.filename(addr)
+            os.makedirs(os.path.split(dest)[0], exist_ok=True)
             shutil.copyfile(src, dest)
         elif not self.exists(addr):
             raise VexCorrupt('Missing file {}'.format(other.filename(addr)))
+
     def move_from(self, other, addr):
         if other.exists(addr) and not self.exists(addr):
             src, dest = other.filename(addr), self.filename(addr)
+            os.makedirs(os.path.split(dest)[0], exist_ok=True)
             os.rename(src, dest)
         elif not self.exists(addr):
             raise VexCorrupt('Missing file {}'.format(other.filename(addr)))
 
-    def make_copy(self, addr, filename):
-        shutil.copyfile(self.filename(addr), filename)
+    def make_copy(self, addr, dest):
+        filename = self.filename(addr)
+        shutil.copyfile(filename, dest)
 
     def addr_for_file(self, file):
         hash = self.hashlib()
@@ -490,7 +493,8 @@ class BlobStore:
     def filename(self, addr):
         if not addr.startswith(self.prefix):
             raise VexBug('bug')
-        return os.path.join(self.dir, addr[len(self.prefix):])
+        addr = addr[len(self.prefix):]
+        return os.path.join(self.dir, addr[:2], addr[2:])
 
     def exists(self, addr):
         return os.path.exists(self.filename(addr))
@@ -498,13 +502,17 @@ class BlobStore:
     def put_file(self, file, addr=None):
         addr = addr or self.addr_for_file(file)
         if not self.exists(addr):
-            shutil.copyfile(file, self.filename(addr))
+            filename = self.filename(addr)
+            os.makedirs(os.path.split(filename)[0], exist_ok=True)
+            shutil.copyfile(file, filename)
         return addr
 
     def put_buf(self, buf, addr=None):
         addr = addr or self.addr_for_buf(buf)
         if not self.exists(addr):
-            with open(self.filename(addr), 'xb') as fh:
+            filename = self.filename(addr)
+            os.makedirs(os.path.split(filename)[0], exist_ok=True)
+            with open(filename, 'xb') as fh:
                 fh.write(buf)
         return addr
 
