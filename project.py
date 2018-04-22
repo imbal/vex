@@ -536,41 +536,67 @@ class BlobStore:
 # Action log: Used to track undo/redo and changes to repository state
 
 
-class ActionLog:
+class History:
     START = 'init'
     Modes = set(('init', 'do', 'undo', 'redo', 'quiet'))
     def __init__(self, dir):
         self.dir = dir
-        self.store = BlobStore(os.path.join(dir,'entries'))
-        self.store.prefix = ""
-        self.redos = DirStore(os.path.join(dir,'redos' ))
-        self.settings = DirStore(dir)
+        self._store = BlobStore(os.path.join(dir,'entries'))
+        self._store.prefix = ""
+        self._redos = DirStore(os.path.join(dir,'redos' ))
+        self._settings = DirStore(dir)
 
     def makedirs(self):
         os.makedirs(self.dir, exist_ok=True)
-        self.store.makedirs()
-        self.redos.makedirs()
-        self.settings.set("current", self.START)
-        self.settings.set("next", ('init', self.START, None))
+        self._store.makedirs()
+        self._redos.makedirs()
+        self._settings.set("current", self.START)
+        self._settings.set("next", ('init', self.START, None))
 
     def empty(self):
         return self.current() == self.START
 
     def clean_state(self):
-        if self.settings.exists("current") and self.settings.exists("next"):
-            return self.settings.get("current") == self.settings.get("next")[1]
+        if self._settings.exists("current") and self._settings.exists("next"):
+            return self._settings.get("current") == self._settings.get("next")[1]
 
     def current(self):
-        return self.settings.get("current")
+        return self._settings.get("current")
+
+    def next(self):
+        return self._settings.get("next")
+
+    def set_current(self, value):
+        self._settings.set('current', value)
+
+    def set_next(self, value):
+        self._settings.set('next', value)
+
+    def get_entry(self, addr):
+        return self._store.get_obj(addr)
+
+    def put_entry(self, obj):
+        return self._store.put_obj(obj)
+
+    def add_entry(self, current, action):
+        obj = objects.Do(current, action)
+        return self.put_entry(obj)
+
+    def get_redos(self, addr):
+        if self._redos.exists(addr):
+            return self._redos.get(addr).dos
+        return []
+
+    def set_redos(self, addr, addrs):
+        redo = objects.Redo(addrs)
+        self._redos.set(addr, redo)
 
     def entries(self):
         current = self.current()
         out = []
         while current != self.START:
-            obj = self.store.get_obj(current)
-            redos = ()
-            if self.redos.exists(current):
-                redos = [self.store.get_obj(x).action.command for x in self.redos.get(current).dos]
+            obj = self.get_entry(current)
+            redos = [self.get_entry(x).action.command for x in self.get_redos(current)]
             out.append((obj.action, redos))
             current = obj.prev
 
@@ -582,25 +608,25 @@ class ActionLog:
             raise VexCorrupt('Project history not in a clean state.')
         current = self.current()
         obj = objects.DoQuiet(current, action)
-        addr = self.store.put_obj(obj)
-        self.settings.set("next", ['quiet', addr , current])
+        addr = self.put_entry(obj)
+        self.set_next(['quiet', addr , current])
 
         yield action
 
-        self.settings.set("next", ['do', current, current])
+        self.set_next(['do', current, current])
 
     @contextmanager
     def do(self, action):
         if not self.clean_state():
             raise VexCorrupt('Project history not in a clean state.')
-        obj = objects.Do(self.current(), action)
+        current = self.current()
 
-        addr = self.store.put_obj(obj)
-        self.settings.set("next", ('do', addr, self.current()))
+        addr = self.add_entry(current, action)
+        self.set_next(('do', addr,current))
 
         yield action
 
-        self.settings.set("current", addr)
+        self.set_current(addr)
 
     @contextmanager
     def undo(self):
@@ -611,18 +637,16 @@ class ActionLog:
             yield None
             return
 
-        obj = self.store.get_obj(current)
+        obj = self.get_entry(current)
 
-        dos = [current]
-        if obj.prev and self.redos.exists(obj.prev):
-            dos.extend(self.redos.get(obj.prev).dos)
-        redo = objects.Redo(dos)
-        self.settings.set("next", ('undo', obj.prev, self.current()))
+        redos = [current]
+        redos.extend(self.get_redos(obj.prev))
+        self.set_next(('undo', obj.prev, current))
 
         yield obj.action
 
-        new_next = self.redos.set(obj.prev, redo)
-        self.settings.set("current", obj.prev)
+        self.set_redos(obj.prev, redos)
+        self.set_current(obj.prev)
 
     @contextmanager
     def redo(self, n=0):
@@ -630,22 +654,21 @@ class ActionLog:
             raise VexCorrupt('Project history not in a clean state.')
         current = self.current()
 
-        if not self.redos.exists(current):
+        redos = self.get_redos(current)
+
+        if not redos:
             yield None
             return
 
-        next = self.redos.get(current)
+        do = redos.pop(n)
 
-        do = next.dos.pop(n)
-
-        obj = self.store.get_obj(do)
-        redo = objects.Redo(next.dos)
-        self.settings.set("next", ('redo', do, self.current()))
+        obj = self.get_entry(do)
+        self.set_next(('redo', do, current))
 
         yield obj.action
 
-        self.redos.set(current, redo)
-        self.settings.set("current", do)
+        self.set_redos(current, redos)
+        self.set_current(do)
 
     @contextmanager
     def rollback_new(self):
@@ -653,52 +676,47 @@ class ActionLog:
             yield
             return
 
-        mode, next, old_current = self.settings.get("next")
+        mode, next, old_current = self.next()
         if mode not in self.Modes:
             raise VexCorupt('Real bad')
         if mode == 'undo' or not old_current:
             raise VexBug('no')
-        obj = self.store.get_obj(next)
-        current = self.settings.get("current")
+        obj = self.get_entry(next)
+        current = self.current()
         if current != old_current:
             raise VexCorrupt('History is really corrupted: Interrupted transaction did not come after current change')
         yield obj.action
-        self.settings.set("next", ['rollback', old_current, None])
+        self.set_next(['rollback', old_current, None])
 
     @contextmanager
     def restart_new(self):
         if self.clean_state():
             yield
             return
-        mode, next, old_current = self.settings.get("next")
+        mode, next, old_current = self.next()
         if mode not in self.Modes:
             raise VexCorupt('Real bad')
         if mode == 'undo' or not old_current:
             raise VexBug('no')
-        obj = self.store.get_obj(next)
-        current = self.settings.get("current")
+        obj = self.get_entry(next)
+        current = self.current()
         if current != old_current:
             raise VexCorrupt('History is really corrupted: Interrupted transaction did not come after current change')
         yield obj.action
         if mode == 'quiet':
-            self.settings.set("current", ['restart', old+current, None])
+            self.set_next(['restart', old_current, None])
         else:
-            self.settings.set("current", ['restart', next, None])
+            self.set_current(['restart', next, None])
 
 
     def redo_choices(self):
         current = self.current()
 
-        if not self.redos.exists(current):
-            return
+        redos = self.get_redos(current)
 
-        next = self.redos.get(current)
-
-        if next is None:
-            return
         out = []
-        for do in next.dos:
-            obj = self.store.get_obj(do)
+        for do in redos:
+            obj = self.get_entry(do)
             out.append(obj.action)
         return out
 
@@ -1282,7 +1300,7 @@ class Project:
         self.names =      DirStore(os.path.join(config_dir, 'branches', 'names'))
         self.sessions =   DirStore(os.path.join(config_dir, 'branches', 'sessions'))
         self.state =      DirStore(os.path.join(config_dir, 'state'))
-        self.actions =   ActionLog(os.path.join(config_dir, 'history'))
+        self.history =   History(os.path.join(config_dir, 'history'))
         self.scratch =   BlobStore(os.path.join(config_dir, 'scratch'))
         self.lockfile =            os.path.join(config_dir, 'lock')
 
@@ -1300,7 +1318,7 @@ class Project:
         self.names.makedirs()
         self.state.makedirs()
         self.sessions.makedirs()
-        self.actions.makedirs()
+        self.history.makedirs()
         self.scratch.makedirs()
         self.settings.makedirs()
 
@@ -1312,7 +1330,7 @@ class Project:
         return os.path.exists(self.dir)
 
     def history_isempty(self):
-        return self.actions.empty()
+        return self.history.empty()
 
     def prefix(self):
         if self.state.exists("prefix"):
@@ -1323,7 +1341,7 @@ class Project:
             return self.sessions.get(self.state.get("active"))
 
     def clean_state(self):
-        return self.actions.clean_state()
+        return self.history.clean_state()
 
     def repo_to_full_path(self, prefix, file):
         file = os.path.normpath(file)
@@ -1379,7 +1397,7 @@ class Project:
 
     # ... and so are these, but, they interact with the action log
     def rollback_new_action(self):
-        with self.actions.rollback_new() as action:
+        with self.history.rollback_new() as action:
             if action:
                 if isinstance(action, objects.Action):
                     self.apply_changes('old', action.changes)
@@ -1391,7 +1409,7 @@ class Project:
             return action
 
     def restart_new_action(self):
-        with self.actions.restart_new() as action:
+        with self.history.restart_new() as action:
             if action:
                 if isinstance(action, objects.Action):
                     self.copy_blobs(action.blobs)
@@ -1409,7 +1427,7 @@ class Project:
         active = self.state.get("active")
         txn = Transaction(self, self.scratch, command)
         yield txn
-        with self.actions.do_nohistory(txn.action()) as action:
+        with self.history.do_nohistory(txn.action()) as action:
             if any(action.blobs.values()):
                 raise VexBug(action.blobs)
             if action.changes:
@@ -1417,12 +1435,12 @@ class Project:
 
     @contextmanager
     def do(self, command):
-        if not self.actions.clean_state():
+        if not self.history.clean_state():
             raise VexCorrupt('Project history not in a clean state.')
 
         txn = Transaction(self, self.scratch, command)
         yield txn
-        with self.actions.do(txn.action()) as action:
+        with self.history.do(txn.action()) as action:
             if not action:
                 return
             if isinstance(action, objects.Action):
@@ -1433,12 +1451,12 @@ class Project:
 
     @contextmanager
     def do_switch(self, command):
-        if not self.actions.clean_state():
+        if not self.history.clean_state():
             raise VexCorrupt('Project history not in a clean state.')
 
         txn = ProjectSwitch(self, self.scratch, command)
         yield txn
-        with self.actions.do(txn.action()) as action:
+        with self.history.do(txn.action()) as action:
             if not action:
                 return
             if isinstance(action, objects.Switch):
@@ -1691,7 +1709,7 @@ class Project:
     # Commands
 
     def undo(self):
-        with self.actions.undo() as action:
+        with self.history.undo() as action:
             if not action:
                 return
             if isinstance(action, objects.Action):
@@ -1702,10 +1720,10 @@ class Project:
                 raise VexBug('action')
 
     def list_undos(self):
-        return self.actions.entries()
+        return self.history.entries()
 
     def redo(self, choice):
-        with self.actions.redo(choice) as action:
+        with self.history.redo(choice) as action:
             if not action:
                 return
             if isinstance(action, objects.Action):
@@ -1716,7 +1734,7 @@ class Project:
                 raise VexBug('action')
 
     def list_redos(self):
-        return self.actions.redo_choices()
+        return self.history.redo_choices()
 
     def log(self):
         with self.do_nohistory('log') as txn:
