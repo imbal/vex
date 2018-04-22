@@ -1261,9 +1261,6 @@ class Project:
     def history_isempty(self):
         return self.actions.empty()
 
-    def history(self):
-        return self.actions.entries()
-
     def prefix(self):
         if self.state.exists("prefix"):
             return self.state.get("prefix")
@@ -1422,9 +1419,11 @@ class Project:
             else:
                 raise VexBug('action')
 
-    def redo_choices(self):
-        return self.actions.redo_choices()
+    def list_undos(self):
+        return self.actions.entries()
 
+    def list_redos(self):
+        return self.actions.redo_choices()
 
     # Take Action.changes and applies them to project
     def apply_changes(self, kind, changes):

@@ -24,10 +24,11 @@ This README assumes some familiarily with `git`, `hg`, or `svn`
 Unlike `hg`, `git`, or `svn`, you can undo/redo *everything*
 
 - `vex undo` undoes the last command that changed something
+- `vex undo --list` shows the list of commands that can be undone
 - `vex undo` can be run more than once,
 - `vex redo` redoes the last undone command
 - `vex redo --list` shows the potential options, `vex redo --choice=<n>` to pick one
-- `vex history` shows the list of commands
+- `vex redo` can be run more than once, and redone more than once
 
 For `hg` users:
 
@@ -37,6 +38,7 @@ For `hg` users:
 
 For `git` users:
 
+- A thoughtful content tracker
 - Branches automatically stash and unstash
 - Rebasing doesn't destroy history, and rebased branches can be shared
 - Vex tracks directories as well as files

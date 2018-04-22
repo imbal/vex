@@ -641,7 +641,18 @@ class Command:
             sys.exit(code)
 
     def render(self):
-        long =self.run_fn.__doc__ if (not self.long and self.run_fn) else self.long
+        long = self.long
+        if self.run_fn and not long:
+            long = self.run_fn.__doc__
+        if long:
+            out = []
+            for para in long.lstrip().rstrip().split('\n\n'):
+                para = " ".join(x for x in para.split() if x)
+                out.append(para)
+            long = "\n\n".join(out)
+        else:
+            long = None
+
         return CommandDescription(
             name = self.name,
             prefix = self.prefix,

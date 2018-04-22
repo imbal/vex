@@ -53,12 +53,31 @@ def Error(path, args, exception, traceback):
             yield ('Good news: The changes that were attempted have been undone')
 
 
-vex_init = vex_cmd.subcommand('init',short="Create a new Vex Project")
+vex_init = vex_cmd.subcommand('init',short="create a new vex project")
 @vex_init.run('--working --config --prefix --include... --ignore... [directory]')
 def Init(directory, working, config, prefix, include, ignore):
+    """
+        Create a new vex project in a given directory. 
+
+        - If no directory given, it is assumed to be the current directory.
+        - Inside that directory, a `.vex` directory is created to store the project history.
+        - An initial empty commit is added.
+        - The subtree checkout defaults to `/directory_name`.
+        
+        i.e a `vex init` in `/a/b` creates a `/a/b/.vex` directory, an empty commit, and checks
+        out `/b` in the repo, into `/a/b` on the filesystem.`
+
+        If you make a mistake, `vex undo` will undo the initial commit, but not remove
+        the `.vex` directory. 
+
+        `init` takes multiple `--include=<file>` and `--ignore=<file>` arguments, 
+        defaulting to `--include='*' --ignore='.vex' --ignore='.*'`
+
+    """
+
     working_dir = working or directory or os.getcwd()
     config_dir = config or os.path.join(working_dir, VEX)
-    prefix = prefix or os.path.split(working_dir)[1] or 'root'
+    prefix = prefix or os.path.split(working_dir)[1] or ''
     prefix = os.path.join('/', prefix)
 
     include = include or ["*"] 
@@ -81,23 +100,78 @@ def Init(directory, working, config, prefix, include, ignore):
         p.makelock()
 
 
-vex_undo = vex_cmd.subcommand('undo', short="Undo the last command")
-@vex_undo.run()
-def Undo():
+vex_undo = vex_cmd.subcommand('undo', short="undo the last command")
+@vex_undo.run('--list?')
+def Undo(list):
+    """
+        `vex undo` will return the project to how it was before the last command changed 
+        things. running `vex history` will show the list of commands that can be undone.
+
+        for example:
+
+        - `vex diff` / `vex status` / `vex log` and some other commands do not do anything
+        and so cannot be undone.
+
+        - calling `vex undo` after `vex commit` will not change the working copy, but will 
+        remove the commit from the list of changes to the project
+
+        - calling `vex undo` after calling `vex switch` to change which directory inside the
+        repo to work on, will change the directory back. Edits to files are not undone.
+
+        - calling `vex undo` after creating a branch with `vex new` will switch back
+        to the old branch, but save the existing local changes incase `vex redo` is called.
+
+        `vex undo --list` shows the list of commands that have been performed,
+        and the order they will be undone in.
+
+        similarly `vex redo --list` shows the actions that can be redone.
+"""
+
     p = get_project()
 
-    with p.lock('undo') as p:
-        action = p.undo()
-    if action:
-        yield ('undid', action.command)
+    if list:
+        for entry,redos in p.undo_list():
+            alternative = ""
+            if len(redos) == 1:
+                alternative = "(can redo {})".format(redos[0])
+            elif len(redos) > 0:
+                alternative = "(can redo {}, or {})".format(",".join(redos[:-1]), redos[-1])
 
-vex_redo = vex_cmd.subcommand('redo', "Redo last undone command")
+            yield "{}\t{}\t{}".format(entry.time, entry.command,alternative)
+            yield ""
+    else:
+        with p.lock('undo') as p:
+            action = p.undo()
+        if action:
+            yield ('undid', action.command)
+
+vex_redo = vex_cmd.subcommand('redo', "redo last undone command")
 @vex_redo.run('--list? --choice')
 def Redo(list, choice):
+    """
+        `vex redo` will redo the last action undone. `vex redo --list` will show the
+        list of commands to choose from.
+
+        `vex redo` is not the same as re-running the command, as `vex redo` will
+        repeat the original changes made, without consulting the files in the working copy,
+        or restoring the files if the command is something like `vex open`. 
+
+        for example, redoing a `vex commit` will not commit the current versions of the files in the project
+        
+        redoing a `vex new <branch_name>` will reopen a branch, restoring the working copy
+        with any local changes before `vex undo` was called.
+        
+        similarly, calling undo and redo on a `vex switch` operation, will just change which
+        directory is checked out, saving and restoring local changes to files.
+
+        if you do a different action after undo, you can still undo and redo.
+
+        `vex redo --list` shows the actions that can be redone and `vex redo --choice=<n>` picks one.
+    """
     p = get_project(empty=False)
 
     with p.lock('redo') as p:
-        choices = p.redo_choices()
+        choices = p.list_redos()
 
         if list:
             if choices:
@@ -113,32 +187,15 @@ def Redo(list, choice):
         else:
             yield ('Nothing to redo')
 
-vex_log = vex_cmd.subcommand('changelog', aliases=['log'], short="List changes to project")
-@vex_log.run()
-def Log():
-    p = get_project()
-    for entry in p.log():
-        yield (entry)
-        yield ""
 
-vex_history = vex_cmd.subcommand('history', short="Show what commands can be undone")
-@vex_history.run()
-def History():
-    p = get_project()
 
-    for entry,redos in p.history():
-        alternative = ""
-        if len(redos) == 1:
-            alternative = "(can redo {})".format(redos[0])
-        elif len(redos) > 0:
-            alternative = "(can redo {}, or {})".format(",".join(redos[:-1]), redos[-1])
-
-        yield "{}\t{}\t{}".format(entry.time, entry.command,alternative)
-        yield ""
-
-vex_status = vex_cmd.subcommand('status', short="Show status of files in project")
-@vex_status.run()
-def Status():
+vex_status = vex_cmd.subcommand('status', short="list the files being tracked by vex")
+@vex_status.run('--all?')
+def Status(all):
+    """
+        `vex status` shows the state of each visible file, `vex status --all` shows the status 
+        of every file in the current session/branch.
+    """
     p = get_project()
     cwd = os.getcwd()
     with p.lock('status') as p:
@@ -146,19 +203,37 @@ def Status():
         for reponame in sorted(files, key=lambda p:p.split(':')):
             entry = files[reponame]
             if entry.working is None:
-                pass # yield "hidden:{:9}\t{} ".format(entry.state, reponame)
+                if all:
+                    yield "hidden:{:9}\t{} ".format(entry.state, reponame)
             elif reponame.startswith('/.vex/') or reponame == '/.vex':
                 path = os.path.relpath(reponame, '/.vex')
-                pass # yield "{}:{:8}\t{}".format('setting', entry.state, path)
+                if all:
+                    yield "{}:{:8}\t{}".format('setting', entry.state, path)
             else:
                 path = os.path.relpath(reponame, p.prefix())
                 yield "{:16}\t{}{}".format(entry.state, path, ('*' if entry.stash else '') )
         yield ""
 
+vex_log = vex_cmd.subcommand('changelog', aliases=['log'], short="list changes to project")
+@vex_log.run()
+def Log():
+    """
+        `vex changelog` or `vex log` shows the list of commits inside a branch, using 
+        the current branch if none given.
+    """
+    
+    p = get_project()
+    for entry in p.log():
+        yield (entry)
+        yield ""
 
-vex_diff = vex_cmd.subcommand('diff')
+
+vex_diff = vex_cmd.subcommand('diff', short="show the differences between two parts of a project")
 @vex_diff.run('[file...]')
 def Diff(file):
+    """
+        `vex diff` shows the changes waiting to be committed.
+    """
     p = get_project()
     with p.lock('diff') as p:
         cwd = os.getcwd()
@@ -166,9 +241,12 @@ def Diff(file):
         for name, diff in  p.diff(files).items():
             yield diff
 
-vex_add = vex_cmd.subcommand('add','Add files to the project')
+vex_add = vex_cmd.subcommand('add','add files to the project')
 @vex_add.run('file:str...')
 def Add(file):
+    """
+
+    """
     cwd = os.getcwd()
     if not file:
         files = [cwd]
@@ -184,9 +262,12 @@ def Add(file):
             f = os.path.relpath(f)
             yield "add: {}".format(f)
 
-vex_forget = vex_cmd.subcommand('forget','Remove files from the project, without deleting them')
+vex_forget = vex_cmd.subcommand('forget','remove files from the project, without deleting them')
 @vex_forget.run('file...')
 def Forget(file):
+    """
+
+    """
     if not file:
         return
 
@@ -202,9 +283,11 @@ def Forget(file):
             f = os.path.relpath(f)
             yield "forget: {}".format(f)
 
-vex_prepare = vex_cmd.subcommand('prepare', short="Save current working copy to prepare for commit", aliases=['save'])
+vex_prepare = vex_cmd.subcommand('prepare', short="save current working copy to prepare for commit", aliases=['save'])
 @vex_prepare.run('--watch [file...]')
 def Prepare(file,watch):
+    """
+    """
     p = get_project()
     yield ('Preparing')
     with p.lock('prepare') as p:
@@ -217,9 +300,12 @@ def Prepare(file,watch):
         else:
             p.prepare(files)
 
-vex_commit = vex_cmd.subcommand('commit')
+vex_commit = vex_cmd.subcommand('commit', short="save the working copy and add an entry to the project changes")
 @vex_commit.run('[file...]')
 def Commit(file):
+    """
+
+    """
     p = get_project()
     yield ('Committing')
     with p.lock('commit') as p:
@@ -230,9 +316,12 @@ def Commit(file):
         else:
             yield 'Nothing to commit'
 
-vex_amend = vex_cmd.subcommand('amend')
+vex_amend = vex_cmd.subcommand('amend', short="replace the last commit with the current changes in the project")
 @vex_amend.run('[file...]')
 def Amend(file):
+    """
+
+    """
     p = get_project()
     yield ('Amending')
     with p.lock('amend') as p:
@@ -244,30 +333,55 @@ def Amend(file):
             yield 'Nothing to commit'
         # check that session() and branch()
 
-vex_saveas = vex_cmd.subcommand('saveas', short="Rename head/branch")
-@vex_saveas.run('--rename? name')
-def SaveAs(name, rename):
+vex_branches = vex_cmd.subcommand('branches', short="list branches")
+@vex_branches.run()
+def Branches():
     p = get_project()
-    with p.lock('saveas') as p:
-        p.save_as(name, rename=rename)
+    with p.lock('branches') as p:
+        branches = p.list_branches()
+        for (name, branch) in branches:
+            if name:
+                yield name
+            else:
+                yield branch.uuid
 
-vex_open = vex_cmd.subcommand('open', short="Open existing branch")
+
+vex_open = vex_cmd.subcommand('open', short="open or create a branch")
 @vex_open.run('name')
 def Open(name):
+    """
+
+    """
     p = get_project()
     with p.lock('open') as p:
         p.open_branch(name)
 
-vex_new = vex_cmd.subcommand('new', short="Create new branch")
+vex_new = vex_cmd.subcommand('new', short="create a new branch")
 @vex_new.run('name')
 def New(name):
+    """
+
+    """
     p = get_project()
     with p.lock('new') as p:
         p.new_branch(name)
 
-vex_branch = vex_cmd.subcommand('branch', short="Show branch information (about current branch)")
+vex_saveas = vex_cmd.subcommand('saveas', short="rename current branch")
+@vex_saveas.run('--rename? name')
+def SaveAs(name, rename):
+    """
+
+    """
+    p = get_project()
+    with p.lock('saveas') as p:
+        p.save_as(name, rename=rename)
+
+vex_branch = vex_cmd.subcommand('branch', short="show branch information")
 @vex_branch.run('[name]')
 def Branch(name):
+    """
+
+    """
     p = get_project()
     with p.lock('branch') as p:
         if not name:
@@ -281,34 +395,30 @@ def Branch(name):
         # 
         yield branch.name
 
-vex_switch = vex_cmd.subcommand('switch', short="Change working directory")
+vex_switch = vex_cmd.subcommand('switch', short="change which directory (inside the project) is worked on")
 @vex_switch.run('prefix')
 def Switch(prefix):
+    """
+
+    """
     p = get_project()
     
     with p.lock('switch') as p:
         prefix = os.path.join(p.prefix(), prefix)
         p.switch(prefix)
 
-vex_branches = vex_cmd.subcommand('branches', short="List all branches")
-@vex_branches.run()
-def Branches():
-    p = get_project()
-    with p.lock('branches') as p:
-        branches = p.list_branches()
-        for (name, branch) in branches:
-            if name:
-                yield name
-            else:
-                yield branch.uuid
-
-
-vex_debug = vex_cmd.subcommand('debug', 'run a command without capturing exceptions')
+vex_debug = vex_cmd.subcommand('debug', 'internal: run a command without capturing exceptions, or repairing errors')
 @vex_debug.run()
 def Debug():
+    """
+    `vex debug commit` calls `vex commit`, but will always print a full traceback
+    and never attempt to recover from incomplete changes.
+
+    use with care.
+    """
     yield ('Use vex debug <cmd> to run <cmd>, or use `vex debug:status`')
 
-vex_stash = vex_debug.subcommand('stash', short="Save progress without making a commit or checkpoint to undo")
+vex_stash = vex_debug.subcommand('stash', short="internal: save progress without making a commit or checkpoint to undo")
 @vex_stash.run('--watch')
 def Stash(watch):
     p = get_project()
@@ -376,8 +486,6 @@ def DebugRollback():
             yield ('Project has recovered')
         else:
             yield ('Oh dear')
-
-
 
 
 vex_cmd.main(__name__)
