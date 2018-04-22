@@ -1052,7 +1052,7 @@ class ProjectChange:
     def get_file(self, addr):
         if addr in self.new_files:
             return self.scratch.get_file(addr)
-        return self.project.files.get_file(addr)
+        return self.project.get_file(addr)
 
     def put_file(self, file):
         addr = self.scratch.put_file(file)
@@ -1062,7 +1062,7 @@ class ProjectChange:
     def get_manifest(self, addr):
         if addr in self.new_manifests:
             return self.scratch.get_obj(addr)
-        return self.project.manifests.get_obj(addr)
+        return self.project.get_manifest(addr)
 
     def put_manifest(self, obj):
         addr = self.scratch.put_obj(obj)
@@ -1072,7 +1072,7 @@ class ProjectChange:
     def get_commit(self, addr):
         if addr in self.new_commits:
             return self.scratch.get_obj(addr)
-        return self.project.commits.get_obj(addr)
+        return self.project.get_commit(addr)
 
     def put_commit(self, obj):
         addr = self.scratch.put_obj(obj)
@@ -1241,6 +1241,8 @@ class Project:
 
     # methods, look, don't ask, they're just plain methods, ok?
 
+    def nfc_name(self, name):
+        return unicodedata.normalize('NFC', name)
 
     def makedirs(self):
         os.makedirs(self.dir, exist_ok=True)
@@ -1272,18 +1274,6 @@ class Project:
     def clean_state(self):
         return self.actions.clean_state()
 
-    def normalize(self, name):
-        return unicodedata.normalize('NFC', name)
-
-    def normalize_files(self, files):
-        output = []
-        for filename in files:
-            filename = os.path.normpath(filename)
-            if not filename.startswith(self.working_dir):
-                raise VexError("{} is outside project".format(filename))
-            output.append(filename)
-        return files
-
     def repo_to_full_path(self, prefix, file):
         file = os.path.normpath(file)
         if os.path.commonpath((file, self.VEX)) == self.VEX:
@@ -1297,17 +1287,25 @@ class Project:
         file = os.path.normpath(file)
         if os.path.commonpath((self.settings.dir, file)) == self.settings.dir:
             path = os.path.relpath(file, self.settings.dir)
-            path = self.normalize(path)
+            path = self.nfc_name(path)
             return os.path.normpath(os.path.join(self.VEX, path))
         else:
             if file.startswith(self.dir):
                 raise VexBug('nope. not .vex')
             path = os.path.relpath(file, self.working_dir)
-            path = self.normalize(path)
+            path = self.nfc_name(path)
             return os.path.normpath(os.path.join(prefix, path))
 
-    # ok, now it's getting awkward. these methods 
-    # are coupled to other objects. the lock is called from outside, ...
+    def check_files(self, files):
+        output = []
+        for filename in files:
+            filename = os.path.normpath(filename)
+            if not filename.startswith(self.working_dir):
+                raise VexError("{} is outside project".format(filename))
+            output.append(filename)
+        return files
+
+
     __locked = object()
 
     @contextmanager
@@ -1397,33 +1395,14 @@ class Project:
             else:
                 raise VexBug('action')
 
-    def undo(self):
-        with self.actions.undo() as action:
-            if not action:
-                return
-            if isinstance(action, objects.Action):
-                self.apply_changes('old', action.changes)
-            elif isinstance(action, objects.Switch):
-                self.apply_switch('old', action.prefix, action.active)
-            else:
-                raise VexBug('action')
+    def get_commit(self, addr):
+        return self.vex.commits.get_obj(addr)
 
-    def redo(self, choice):
-        with self.actions.redo(choice) as action:
-            if not action:
-                return
-            if isinstance(action, objects.Action):
-                self.apply_changes('new', action.changes)
-            elif isinstance(action, objects.Switch):
-                self.apply_switch('new', action.prefix, action.active)
-            else:
-                raise VexBug('action')
+    def get_manifest(self, addr):
+        return self.vex.manifests.get_obj(addr)
 
-    def list_undos(self):
-        return self.actions.entries()
-
-    def list_redos(self):
-        return self.actions.redo_choices()
+    def get_file(self, addr):
+        return self.vex.files.get_file(addr)
 
     # Take Action.changes and applies them to project
     def apply_changes(self, kind, changes):
@@ -1595,38 +1574,6 @@ class Project:
         self.state.set('prefix', prefix)
         self.state.set('active', session.uuid)
 
-
-    def switch(self, new_prefix):
-        # check new prefix exists in repo
-        if os.path.commonpath((new_prefix, self.VEX )) == self.VEX:
-            raise VexArgument('bad arg')
-        if new_prefix not in self.active().files and new_prefix != "/":
-            raise VexArgument('bad prefix')
-        with self.do_switch('switch') as txn:
-            txn.switch_prefix(new_prefix)
-
-    def log(self):
-        with self.do_nohistory('log') as txn:
-            session = txn.active()
-
-        commit = session.prepare
-        out = []
-        while commit != session.commit:
-            obj = self.commits.get_obj(commit)
-            out.append('{}: *uncommitted* {}: {}'.format(obj.n, obj.__class__.__name__, commit))
-            commit = getattr(obj, 'prev', None)
-            # print \t date, file, message
-
-        while commit != None:
-            obj = self.commits.get_obj(commit)
-            out.append('{}: committed {}: {}'.format(obj.n, obj.__class__.__name__, commit))
-            commit = getattr(obj, 'prev', None)
-        return out
-
-    def status(self):
-        with self.do_nohistory('status') as txn:
-            return txn.refresh_active().files
-
     def list_dir(self, dir):
         output = []
         scan = [dir]
@@ -1666,6 +1613,67 @@ class Project:
                         return True
                 elif fnmatch.fnmatch(name, rule):
                     return True
+
+    # Commands
+
+    def undo(self):
+        with self.actions.undo() as action:
+            if not action:
+                return
+            if isinstance(action, objects.Action):
+                self.apply_changes('old', action.changes)
+            elif isinstance(action, objects.Switch):
+                self.apply_switch('old', action.prefix, action.active)
+            else:
+                raise VexBug('action')
+
+    def list_undos(self):
+        return self.actions.entries()
+
+    def redo(self, choice):
+        with self.actions.redo(choice) as action:
+            if not action:
+                return
+            if isinstance(action, objects.Action):
+                self.apply_changes('new', action.changes)
+            elif isinstance(action, objects.Switch):
+                self.apply_switch('new', action.prefix, action.active)
+            else:
+                raise VexBug('action')
+
+    def list_redos(self):
+        return self.actions.redo_choices()
+
+    def log(self):
+        with self.do_nohistory('log') as txn:
+            session = txn.active()
+
+        commit = session.prepare
+        out = []
+        while commit != session.commit:
+            obj = self.commits.get_obj(commit)
+            out.append('{}: *uncommitted* {}: {}'.format(obj.n, obj.__class__.__name__, commit))
+            commit = getattr(obj, 'prev', None)
+            # print \t date, file, message
+
+        while commit != None:
+            obj = self.commits.get_obj(commit)
+            out.append('{}: committed {}: {}'.format(obj.n, obj.__class__.__name__, commit))
+            commit = getattr(obj, 'prev', None)
+        return out
+
+    def status(self):
+        with self.do_nohistory('status') as txn:
+            return txn.refresh_active().files
+
+    def switch(self, new_prefix):
+        # check new prefix exists in repo
+        if os.path.commonpath((new_prefix, self.VEX )) == self.VEX:
+            raise VexArgument('bad arg')
+        if new_prefix not in self.active().files and new_prefix != "/":
+            raise VexArgument('bad prefix')
+        with self.do_switch('switch') as txn:
+            txn.switch_prefix(new_prefix)
 
     def init(self, prefix, include, ignore):
         self.makedirs()
@@ -1721,7 +1729,7 @@ class Project:
         self.state.set("prefix", prefix)
 
     def diff(self, files):
-        files = self.normalize_files(files) if files else None
+        files = self.check_files(files) if files else None
         with self.do_nohistory('diff') as txn:
             session = txn.refresh_active()
             files = [txn.full_to_repo_path(filename) for filename in files] if files else None
@@ -1740,7 +1748,7 @@ class Project:
             return output2
 
     def prepare(self, files):
-        files = self.normalize_files(files) if files else None
+        files = self.check_files(files) if files else None
         with self.do_nohistory('prepare') as txn:
             session = txn.refresh_active()
             files = [txn.full_to_repo_path(filename) for filename in files] if files else None
@@ -1775,7 +1783,7 @@ class Project:
         return self.commit(files, kind=objects.Amend, command='amend')
 
     def commit(self, files, kind=objects.Commit, command='commit'):
-        files = self.normalize_files(files) if files else None
+        files = self.check_files(files) if files else None
         with self.do_nohistory(command) as txn:
             session = txn.refresh_active()
             files = [txn.full_to_repo_path(filename) for filename in files] if files else None
@@ -1827,7 +1835,7 @@ class Project:
             return True
 
     def add(self, files):
-        files = self.normalize_files(files)
+        files = self.check_files(files)
 
         added = set()
         with self.do('add') as txn:
@@ -1888,7 +1896,7 @@ class Project:
             return added
 
     def forget(self, files):
-        files = self.normalize_files(files)
+        files = self.check_files(files)
 
         with self.do('forget') as txn:
             session = txn.refresh_active()
@@ -1950,7 +1958,7 @@ class Project:
         return branches
 
     def stash(self, files=None):
-        files = self.normalize_files(files) if files is not None else None
+        files = self.check_files(files) if files is not None else None
         with self.do_nohistory('save') as txn:
             files = [txn.full_to_repo_path(filename) for filename in files] if files else None
             self.stash_session(txn.active(), files)
