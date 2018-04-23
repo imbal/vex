@@ -323,7 +323,7 @@ class objects:
 
     # End of Repository State
 
-    # History state
+    # Transaction state
 
     @codec.register
     class Action:
@@ -344,22 +344,7 @@ class objects:
             self.branch_states = branch_states 
             self.names = names
 
-
-    @codec.register
-    class Do:
-        def __init__(self, prev, action):
-            self.prev = prev
-            self.action = action
-
     # Working copy state
-
-    @codec.register
-    class Active:
-        def __init__(self, author, branch, session, prefix):
-            self.author = author
-            self.branch = branch
-            self.session = session
-            self.prefix = prefix
 
     @codec.register
     class Branch:
@@ -376,7 +361,6 @@ class objects:
             self.init = init
             self.upstream = upstream
             self.sessions = sessions
-
 
     @codec.register
     class Session:
@@ -418,13 +402,93 @@ class objects:
             if self.state == 'tracked':
                 self.state = 'modified'
 
+        def refresh(self, path, addr_for_file):
+            if self.kind == "file":
+                if not os.path.exists(path):
+                    self.state = "deleted"
+                    self.kind = self.replace or self.kind
+                    self.addr, self.properties = None, None
+                elif os.path.isdir(path):
+                    if not self.replace: self.replace = self.kind
+                    self.state = "replaced"
+                    self.kind = "dir"
+                elif self.state == 'deleted':
+                    pass
+                elif self.state == 'tracked':
+                    modified = False
+                    now = time.time()
+                    stat = os.stat(path)
+                    old_mtime = self.mtime
+
+                    if self.mtime != None and (self.mtime < stat.st_mtime):
+                        modified=True
+                    elif self.size != None and (self.size != stat.st_size):
+                        modified = True
+                    elif self.mode != None and (self.mode != stat.st_mode):
+                        modified = True
+                    elif self.mtime is None or self.mode is None or self.size is None:
+                        new_addr = addr_for_file(path)
+                        if new_addr != self.addr:
+                            modified = True
+                        else:
+                            self.mode = stat.st_mode
+                            self.size = stat.st_size
+                            if now - stat.st_mtime >= MTIME_GRACE_SECONDS:
+                                self.mtime = stat.st_mtime
+                            if stat.st_mode & 64:
+                                self.properties['vex:executable'] = True
+                            elif 'vex:executable' in self.properties:
+                                self.properties.pop('vex:executable')
+
+                    if modified:
+                        self.state = "modified"
+                        self.mode = stat.st_mode
+                        self.size = stat.st_size
+                        if stat.st_mode & 64:
+                            self.properties['vex:executable'] = True
+                        elif 'vex:executable' in self.properties:
+                            self.properties.pop('vex:executable')
+                        if now - stat.st_mtime >= MTIME_GRACE_SECONDS:
+                            self.mtime = stat.st_mtime
+                elif self.state in ('modified', 'added', 'replaced'):
+                    stat = os.stat(path)
+                    self.mode = stat.st_mode
+                    self.size = stat.st_size
+                    if stat.st_mode & 64:
+                        self.properties['vex:executable'] = True
+                    elif 'vex:executable' in self.properties:
+                        self.properties.pop('vex:executable')
+                else:
+                    raise VexBug('welp')
+            elif self.kind == "dir":
+                if not os.path.exists(path):
+                    self.kind = self.replace or self.kind
+                    self.state = "deleted"
+                    self.properties = None
+                elif os.path.isfile(path):
+                    self.state = "replaced"
+                    if not self.replace: self.replace = self.kind
+                    self.kind = "file"
+                    self.properties = {}
+                    self.addr = None
+                elif self.state == 'added' or self.state =='replaced':
+                    pass
+                elif self.state == 'deleted':
+                    pass
+                elif self.state == 'modified':
+                    pass
+                elif self.state == 'tracked':
+                    pass
+                else:
+                    raise VexBug('welp')
+            elif self.kind == "ignore":
+                pass
 
 # Stores
 
 class DirStore:
     def __init__(self, dir):
         self.dir = dir
-
     def makedirs(self):
         os.makedirs(self.dir, exist_ok=True)
     def filename(self, name):
@@ -433,7 +497,6 @@ class DirStore:
         for name in os.listdir(self.dir):
             if os.path.isfile(self.filename(name)):
                 yield name
-
     def exists(self, addr):
         return os.path.exists(self.filename(addr))
     def get(self, name):
@@ -444,8 +507,6 @@ class DirStore:
     def set(self, name, value):
         with open(self.filename(name),'w+b') as fh:
             fh.write(codec.dump(value))
-
-
 
 class BlobStore:
     prefix = "vex:"
@@ -674,7 +735,7 @@ class History:
         return out
 
     @contextmanager
-    def do_nohistory(self, action):
+    def do_without_undo(self, action):
         if not self.clean_state():
             raise VexCorrupt('Project history not in a clean state.')
         current = self.store.current()
@@ -857,86 +918,7 @@ class PhysicalTransaction:
             if entry.working is None:
                 continue
             path = self.repo_to_full_path(name)
-            if entry.kind == "file":
-                if not os.path.exists(path):
-                    entry.state = "deleted"
-                    entry.kind = entry.replace or entry.kind
-                    entry.addr, entry.properties = None, None
-                elif os.path.isdir(path):
-                    if not entry.replace: entry.replace = entry.kind
-                    entry.state = "replaced"
-                    entry.kind = "dir"
-                elif entry.state == 'deleted':
-                    pass
-                elif entry.state == 'tracked':
-                    modified = False
-                    now = time.time()
-                    stat = os.stat(path)
-                    old_mtime = entry.mtime
-
-                    if entry.mtime != None and (entry.mtime < stat.st_mtime):
-                        modified=True
-                    elif entry.size != None and (entry.size != stat.st_size):
-                        modified = True
-                    elif entry.mode != None and (entry.mode != stat.st_mode):
-                        modified = True
-                    elif entry.mtime is None or entry.mode is None or entry.size is None:
-                        new_addr = self.addr_for_file(path)
-                        if new_addr != entry.addr:
-                            modified = True
-                        else:
-                            entry.mode = stat.st_mode
-                            entry.size = stat.st_size
-                            if now - stat.st_mtime >= MTIME_GRACE_SECONDS:
-                                entry.mtime = stat.st_mtime
-                            if stat.st_mode & 64:
-                                entry.properties['vex:executable'] = True
-                            elif 'vex:executable' in entry.properties:
-                                entry.properties.pop('vex:executable')
-
-                    if modified:
-                        entry.state = "modified"
-                        entry.mode = stat.st_mode
-                        entry.size = stat.st_size
-                        if stat.st_mode & 64:
-                            entry.properties['vex:executable'] = True
-                        elif 'vex:executable' in entry.properties:
-                            entry.properties.pop('vex:executable')
-                        if now - stat.st_mtime >= MTIME_GRACE_SECONDS:
-                            entry.mtime = stat.st_mtime
-                elif entry.state in ('modified', 'added', 'replaced'):
-                    stat = os.stat(path)
-                    entry.mode = stat.st_mode
-                    entry.size = stat.st_size
-                    if stat.st_mode & 64:
-                        entry.properties['vex:executable'] = True
-                    elif 'vex:executable' in entry.properties:
-                        entry.properties.pop('vex:executable')
-                else:
-                    raise VexBug('welp')
-            elif entry.kind == "dir":
-                if not os.path.exists(path):
-                    entry.kind = entry.replace or entry.kind
-                    entry.state = "deleted"
-                    entry.properties = None
-                elif os.path.isfile(path):
-                    entry.state = "replaced"
-                    if not entry.replace: entry.replace = entry.kind
-                    entry.kind = "file"
-                    entry.properties = {}
-                    entry.addr = None
-                elif entry.state == 'added' or entry.state =='replaced':
-                    pass
-                elif entry.state == 'deleted':
-                    pass
-                elif entry.state == 'modified':
-                    pass
-                elif entry.state == 'tracked':
-                    pass
-                else:
-                    raise VexBug('welp')
-            elif entry.kind == "ignore":
-                pass
+            entry.refresh(path, self.addr_for_file)
 
         self.put_session(copy)
         return copy
@@ -1438,6 +1420,9 @@ class Project:
         if self.state.exists("active"):
             return self.sessions.get(self.state.get("active"))
 
+    def addr_for_file(self, file):
+        return self.scratch.addr_for_file(file)
+
     def clean_state(self):
         return self.history.clean_state()
 
@@ -1521,11 +1506,11 @@ class Project:
     # speaking of which
 
     @contextmanager
-    def do_nohistory(self, command):
+    def do_without_undo(self, command):
         active = self.state.get("active")
         txn = PhysicalTransaction(self, self.scratch, command)
         yield txn
-        with self.history.do_nohistory(txn.action()) as action:
+        with self.history.do_without_undo(txn.action()) as action:
             if any(action.blobs.values()):
                 raise VexBug(action.blobs)
             if action.changes:
@@ -1643,17 +1628,7 @@ class Project:
                 if entry.working is None:
                     continue
                 path = self.repo_to_full_path(self.prefix(), name)
-                if not os.path.exists(path):
-                    entry.state = "deleted"
-                    entry.addr, entry.properties = None, None
-                elif os.path.isdir(path):
-                    if not entry.replace: entry.replace = entry.kind
-                    entry.state = "replaced"
-                    entry.kind = "dir"
-                elif entry.state == 'tracked':
-                    new_addr = self.scratch.addr_for_file(path)
-                    if new_addr != entry.addr:
-                        entry.state = "modified"
+                entry.refresh(path, self.addr_for_file)
 
             if entry.kind == 'file' and entry.state in ('added', 'replaced', 'modified'):
                 entry.stash = self.scratch.put_file(path, new_addr)
@@ -1788,7 +1763,7 @@ class Project:
                     return True
     def get_fileprops(self,file):
         file = self.check_files([file])[0] if file else None
-        with self.do_nohistory('fileprops:get') as txn:
+        with self.do_without_undo('fileprops:get') as txn:
             active = txn.active()
             file = txn.full_to_repo_path(file) 
             tracked = active.files[file]
@@ -1835,7 +1810,7 @@ class Project:
         return self.history.redo_choices()
 
     def log(self):
-        with self.do_nohistory('log') as txn:
+        with self.do_without_undo('log') as txn:
             session = txn.active()
 
         commit = session.prepare
@@ -1852,7 +1827,7 @@ class Project:
         return out
 
     def status(self):
-        with self.do_nohistory('status') as txn:
+        with self.do_without_undo('status') as txn:
             return txn.refresh_active().files
 
     def switch(self, new_prefix):
@@ -1861,7 +1836,7 @@ class Project:
             raise VexArgument('bad arg')
         if new_prefix not in self.active().files and new_prefix != "/":
             raise VexArgument('bad prefix')
-        with self.do_nohistory('switch') as txn:
+        with self.do_without_undo('switch') as txn:
             txn.refresh_active()
         with self.do_switch('switch') as txn:
             txn.switch_prefix(new_prefix)
@@ -1872,7 +1847,7 @@ class Project:
             raise VexNoHistory('cant reinit')
         if not prefix.startswith('/'):
             raise VexArgument('crap prefix')
-        with self.do_nohistory('init') as txn:
+        with self.do_without_undo('init') as txn:
             txn.set_setting('ignore', ignore)
             txn.set_setting('include', include)
 
@@ -1926,7 +1901,7 @@ class Project:
 
     def diff(self, files):
         files = self.check_files(files) if files else None
-        with self.do_nohistory('diff') as txn:
+        with self.do_without_undo('diff') as txn:
             session = txn.refresh_active()
             files = [txn.full_to_repo_path(filename) for filename in files] if files else None
             changesset = txn.active_changeset(files)
@@ -1945,7 +1920,7 @@ class Project:
 
     def prepare(self, files):
         files = self.check_files(files) if files else None
-        with self.do_nohistory('prepare') as txn:
+        with self.do_without_undo('prepare') as txn:
             session = txn.refresh_active()
             files = [txn.full_to_repo_path(filename) for filename in files] if files else None
 
@@ -1975,7 +1950,7 @@ class Project:
 
     def amend(self, files):
         files = self.check_files(files) if files else None
-        with self.do_nohistory(command) as txn:
+        with self.do_without_undo(command) as txn:
             session = txn.refresh_active()
             files = [txn.full_to_repo_path(filename) for filename in files] if files else None
 
@@ -1998,7 +1973,7 @@ class Project:
     def commit_prepared(self):
         kind = objects.Commit
         command = 'commit'
-        with self.do_nohistory('commit') as txn:
+        with self.do_without_undo('commit') as txn:
             session = txn.active()
             changes = objects.Changeset({})
 
@@ -2019,7 +1994,7 @@ class Project:
         kind = objects.Commit
         command = 'commit'
         files = self.check_files(files) if files else None
-        with self.do_nohistory(command) as txn:
+        with self.do_without_undo(command) as txn:
             session = txn.refresh_active()
             files = [txn.full_to_repo_path(filename) for filename in files] if files else None
 
@@ -2189,7 +2164,7 @@ class Project:
 
     def stash(self, files=None):
         files = self.check_files(files) if files is not None else None
-        with self.do_nohistory('save') as txn:
+        with self.do_without_undo('save') as txn:
             files = [txn.full_to_repo_path(filename) for filename in files] if files else None
             self.stash_session(txn.active(), files)
 
@@ -2229,7 +2204,7 @@ class Project:
                 txn.put_branch(old)
 
     def open_branch(self, name, branch_uuid=None, session_uuid=None, create=False):
-        with self.do_nohistory('open') as txn:
+        with self.do_without_undo('open') as txn:
             # check for >1
             branch_uuid = txn.get_name(name) if not branch_uuid else branch_uuid
             if branch_uuid is None:
@@ -2260,7 +2235,7 @@ class Project:
             txn.switch_session(session_uuid)
 
     def new_branch(self, name, from_branch=None, from_commit=None, fork=False):
-        with self.do_nohistory('new') as txn:
+        with self.do_without_undo('new') as txn:
             if txn.get_name(name):
                 raise VexArgument('branch {} already exists'.format(name))
             active = self.active()
