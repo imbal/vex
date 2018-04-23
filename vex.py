@@ -30,6 +30,9 @@ def get_project(check=True, empty=True):
 vex_cmd = Command('vex', 'a database for files')
 @vex_cmd.on_error()
 def Error(path, args, exception, traceback):
+    """
+        This gets called if an exception was thrown during normal operation.
+    """
     message = str(exception)
     if path:
         yield ("{}: {}".format(':'.join(path), message))
