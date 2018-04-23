@@ -1597,7 +1597,7 @@ class Project:
             active_prefix = self.prefix()
             new_prefix = prefix[kind]
             if (kind =='new' and active_prefix != prefix['old']) or (kind =='old' and active_prefix != prefix['new']):
-                raise VexCorruption('switch out of sync')
+                raise VexCorrupt('switch out of sync')
         else:
             active_prefix, new_prefix = self.prefix(), self.prefix()
 
@@ -1605,7 +1605,7 @@ class Project:
             active_session = self.state.get("active")
             new_session = session[kind]
             if (kind =='new' and active_session != session['old']) or (kind =='old' and active_session != session['new']):
-                raise VexCorruption('switch out of sync')
+                raise VexCorrupt('switch out of sync')
         else:
             uuid = self.state.get('active')
             active_session, new_session = uuid, uuid
