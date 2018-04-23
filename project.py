@@ -40,19 +40,30 @@ class VexUnclean(VexError): pass
 class VexUnfinished(VexError): pass
 
 class Codec:
-    classes = {}
     def __init__(self):
+        self.classes = {}
+        self.lists = {}
+        self.records = {}
         self.codec = rson.Codec(self.to_tag, self.from_tag)
     def register(self, cls):
         if cls.__name__ in self.classes:
             raise VexBug('Duplicate wire type')
         self.classes[cls.__name__] = cls
         return cls
+    def register_record(self, cls):
+        if cls.__name__ in self.records:
+            raise VexBug('Duplicate wire type')
+        self.records[cls.__name__] = cls
+        return cls
     def to_tag(self, obj):
         name = obj.__class__.__name__
+        if name in self.records:
+            return name, next(iter(obj.__dict__))
         if name not in self.classes: raise VexBug('An {} object cannot be turned into RSON'.format(name))
         return name, obj.__dict__
     def from_tag(self, tag, value):
+        if tag in self.records:
+            return self.records[tag](value)
         return self.classes[tag](**value)
     def dump(self, obj):
         return self.codec.dump(obj).encode('utf-8')
@@ -850,6 +861,9 @@ class Transaction:
     def full_to_repo_path(self, file):
         return self.project.full_to_repo_path(self.prefix(),file)
 
+    def addr_for_file(self, file):
+        return self.scratch.addr_for_file(file)
+
     def active(self):
         session_uuid = self.get_state("active")
         return self.get_session(session_uuid)
@@ -910,7 +924,7 @@ class Transaction:
                     elif entry.mode != None and (entry.mode != stat.st_mode):
                         modified = True
                     elif entry.mtime is None:
-                        new_addr = self.scratch.addr_for_file(path)
+                        new_addr = self.addr_for_file(path)
                         if new_addr != entry.addr:
                             modified = True
                         if now - stat.st_mtime >= MTIME_GRACE_SECONDS:
@@ -983,15 +997,15 @@ class Transaction:
             if entry.kind == 'file':
                 if entry.state == "added":
                     filename = self.repo_to_full_path(repo_name)
-                    addr = self.project.scratch.addr_for_file(filename)
+                    addr = self.addr_for_file(filename)
                     out[repo_name]=objects.AddFile(addr, properties=entry.properties)
                 elif entry.state == "replaced":
                     filename = self.repo_to_full_path(repo_name)
-                    addr = self.project.scratch.addr_for_file(filename)
+                    addr = self.addr_for_file(filename)
                     out[repo_name]=objects.NewFile(addr, properties=entry.properties)
                 elif entry.state == "modified":
                     filename = self.repo_to_full_path(repo_name)
-                    addr = self.project.scratch.addr_for_file(filename)
+                    addr = self.addr_for_file(filename)
                     out[repo_name]=objects.ChangeFile(addr, properties=entry.properties)
                 elif entry.state == "deleted":
                     if entry.replace == "dir":

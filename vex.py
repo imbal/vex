@@ -130,14 +130,16 @@ def Undo(list):
     p = get_project()
 
     if list:
+        count = 0
         for entry,redos in p.list_undos():
+            count -= 1
             alternative = ""
             if len(redos) == 1:
-                alternative = "(can redo {})".format(redos[0])
+                alternative = "(then undid {})".format(redos[0])
             elif len(redos) > 0:
-                alternative = "(can redo {}, or {})".format(",".join(redos[:-1]), redos[-1])
+                alternative = "(then undid {}, and {})".format(",".join(redos[:-1]), redos[-1])
 
-            yield "{}\t{}\t{}".format(entry.time, entry.command,alternative)
+            yield "{}: {}, ran {}\t{}".format(count, entry.time, entry.command,alternative)
             yield ""
     else:
         with p.lock('undo') as p:
