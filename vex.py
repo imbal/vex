@@ -130,7 +130,7 @@ def Undo(list):
     p = get_project()
 
     if list:
-        for entry,redos in p.undo_list():
+        for entry,redos in p.list_undos():
             alternative = ""
             if len(redos) == 1:
                 alternative = "(can redo {})".format(redos[0])
@@ -176,7 +176,7 @@ def Redo(list, choice):
         if list:
             if choices:
                 for n, choice in enumerate(choices):
-                    yield (n, choice.time, choice.command)
+                    yield "{}: {}, {}".format(n, choice.time, choice.command)
             else:
                 yield ('Nothing to redo')
         elif choices:
