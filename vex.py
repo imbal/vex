@@ -245,7 +245,7 @@ def Status(all):
                 yield "{:16}\t{}{}".format(entry.state, path, ('*' if entry.stash else '') )
         yield ""
 
-vex_log = vex_cmd.subcommand('changelog', aliases=['log'], short="list changes to project")
+vex_log = vex_cmd.subcommand('log', aliases=['changelog'], short="list changes to project")
 @vex_log.run()
 def Log():
     """
@@ -272,7 +272,9 @@ def Diff(file):
         for name, diff in  p.diff(files).items():
             yield diff
 
-vex_add = vex_cmd.subcommand('add','add files to the project')
+vex_cmd_files = vex_cmd.group('files')
+
+vex_add = vex_cmd_files.subcommand('add','add files to the project')
 @vex_add.run('file:str...')
 def Add(file):
     """
@@ -293,7 +295,7 @@ def Add(file):
             f = os.path.relpath(f)
             yield "add: {}".format(f)
 
-vex_forget = vex_cmd.subcommand('forget','remove files from the project, without deleting them')
+vex_forget = vex_cmd_files.subcommand('forget','remove files from the project, without deleting them')
 @vex_forget.run('file...')
 def Forget(file):
     """
@@ -314,7 +316,9 @@ def Forget(file):
             f = os.path.relpath(f)
             yield "forget: {}".format(f)
 
-vex_prepare = vex_cmd.subcommand('prepare', short="save current working copy to prepare for commit", aliases=['save'])
+vex_cmd_commit = vex_cmd.group("commit")
+
+vex_prepare = vex_cmd_commit.subcommand('prepare', short="save current working copy to prepare for commit", aliases=['save'])
 @vex_prepare.run('--watch [file...]')
 def Prepare(file,watch):
     """
@@ -331,7 +335,7 @@ def Prepare(file,watch):
         else:
             p.prepare(files)
 
-vex_commit = vex_cmd.subcommand('commit', short="save the working copy and add an entry to the project changes")
+vex_commit = vex_cmd_commit.subcommand('commit', short="save the working copy and add an entry to the project changes")
 @vex_commit.run('--add? --prepared? [file...]')
 def Commit(prepared, add, file):
     """
@@ -357,7 +361,7 @@ def Commit(prepared, add, file):
         else:
             yield 'Nothing to commit'
 
-vex_amend = vex_cmd.subcommand('amend', short="replace the last commit with the current changes in the project")
+vex_amend = vex_cmd_commit.subcommand('amend', short="replace the last commit with the current changes in the project")
 @vex_amend.run('[file...]')
 def Amend(file):
     """
@@ -374,7 +378,9 @@ def Amend(file):
             yield 'Nothing to commit'
         # check that session() and branch()
 
-vex_branch = vex_cmd.subcommand('branch', short="open/create branch")
+vex_cmd_branch = vex_cmd.group('branch')
+
+vex_branch = vex_cmd_branch.subcommand('branch', short="open/create branch")
 @vex_branch.run('[name]')
 def Branch(name):
     """
@@ -389,7 +395,7 @@ def Branch(name):
         yield branch.name
 
 vex_branch_list = vex_branch.subcommand('list', short="list branches")
-vex_branches = vex_cmd.subcommand('branches', short="list branches")
+vex_branches = vex_cmd_branch.subcommand('branches', short="list branches")
 @vex_branch_list.run()
 @vex_branches.run()
 def Branches():
@@ -460,7 +466,7 @@ def SaveAs(name):
     with p.lock('saveas') as p:
         if p.names.get(name):
             raise VexArgument('{} exists'.format(name))
-        p.save_as(name, rename=False, swap=False)
+        p.save_as(name)
 
 vex_rename = vex_branch.subcommand('rename', short="rename current branch")
 @vex_rename.run('name')
@@ -472,7 +478,7 @@ def RenameBranch(name):
     with p.lock('rename') as p:
         if p.names.get(name):
             raise VexArgument('{} exists'.format(name))
-        p.save_as(name, rename=True, swap=False)
+        p.rename_branch(name)
 
 vex_swap = vex_branch.subcommand('swap', short="swap name with another branch")
 @vex_swap.run('name')
@@ -484,9 +490,9 @@ def Swap(name):
     with p.lock('swap') as p:
         if not p.names.get(name):
             raise VexArgument("{} doesn't exist".format(name))
-        p.save_as(name, rename=False, swap=True)
+        p.swap_branch(name)
 
-vex_switch = vex_cmd.subcommand('switch', short="change which directory (inside the project) is worked on")
+vex_switch = vex_cmd_files.subcommand('switch', short="change which directory (inside the project) is worked on")
 @vex_switch.run('[prefix]')
 def Switch(prefix):
     """
@@ -500,7 +506,7 @@ def Switch(prefix):
     else:
         yield p.prefix()
 
-vex_ignore = vex_cmd.subcommand('ignore', short="add ignored files")
+vex_ignore = vex_cmd_files.subcommand('ignore', short="add ignored files")
 vex_ignore_add = vex_ignore.subcommand('add', 'add ignored files')
 @vex_ignore.run('[file...]')
 @vex_ignore_add.run('[file...]')
@@ -516,7 +522,7 @@ def AddIgnore(file):
             yield entry
 
 
-vex_include = vex_cmd.subcommand('include', short="add include files")
+vex_include = vex_cmd_files.subcommand('include', short="add include files")
 vex_include_add = vex_include.subcommand('add', 'add include files')
 @vex_include.run('[file...]')
 @vex_include_add.run('[file...]')
@@ -532,7 +538,7 @@ def AddInclude(file):
             yield entry
 
 
-props_cmd = vex_cmd.subcommand('fileprops', short="get/set properties on files", aliases=['props', 'properties', 'property'])
+props_cmd = vex_cmd_files.subcommand('fileprops', short="get/set properties on files", aliases=['props', 'properties', 'property'])
 props_list_cmd = props_cmd.subcommand('get', short="list properties")
 @props_cmd.run('file')
 @props_list_cmd.run('file')
@@ -552,7 +558,8 @@ def SetProp(file, name, value):
     with p.lock('fileprops:list') as p:
         p.set_fileprop(filename, name, value)
 
-vex_debug = vex_cmd.subcommand('debug', 'internal: run a command without capturing exceptions, or repairing errors')
+vex_cmd_debug = vex_cmd.group('debug')
+vex_debug = vex_cmd_debug.subcommand('debug', 'internal: run a command without capturing exceptions, or repairing errors')
 @vex_debug.run()
 def Debug():
     """
@@ -631,8 +638,8 @@ def DebugRollback():
             yield ('Project has recovered')
         else:
             yield ('Oh dear')
-
-git_cmd = vex_cmd.subcommand('git', short="interact with a git repository")
+vex_cmd_git = vex_cmd.group('git')
+git_cmd = vex_cmd_git.subcommand('git', short="interact with a git repository")
 
 git_init_cmd = git_cmd.subcommand('init', short='create a new git project')
 @git_init_cmd.run('--name --email directory')

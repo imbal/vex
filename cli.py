@@ -363,11 +363,12 @@ def try_parse(name, arg, argtype):
         raise BadArg("Don't know how to parse option {}, of unknown type {}".format(name, argtype))
 
 class CommandDescription:
-    def __init__(self, prefix, name, subcommands, subaliases, short, long, argspec):
+    def __init__(self, prefix, name, subcommands, subaliases, groups, short, long, argspec):
         self.prefix = prefix
         self.name = name
         self.subcommands = subcommands
         self.subaliases = subaliases
+        self.groups = groups
         self.short, self.long = short, long
         self.argspec = argspec
 
@@ -494,7 +495,7 @@ class CommandDescription:
 
         output.append("")
 
-        output.append(self.usage())
+        output.append(self.usage(group=None))
         output.append("")
 
         if self.long:
@@ -509,13 +510,15 @@ class CommandDescription:
             output.append('')
 
         if self.subcommands:
-            output.append("commands:")
-            for cmd in self.subcommands.values():
-                output.append("  {.name:10}  {}".format(cmd, cmd.short or ""))
-            output.append("")
+            output.append("commands:") 
+            for group, subcommands in self.groups.items():
+                for name in subcommands:
+                    cmd = self.subcommands[name]
+                    output.append("  {.name:10}  {}".format(cmd, cmd.short or ""))
+                output.append("")
         return "\n".join(output)
 
-    def usage(self):
+    def usage(self, group=None):
         output = []
         args = []
         full_name = list(self.prefix)
@@ -538,10 +541,14 @@ class CommandDescription:
 
 
             output.append("usage: {0} {1}".format(full_name, " ".join(args)))
-        if not self.prefix and self.subcommands:
-            output.append("usage: {0} [help] <{1}> [--help]".format(self.name, "|".join(self.subcommands)))
-        elif self.subcommands:
-            output.append("usage: {0}:<{1}> [--help]".format(help_full_name, "|".join(self.subcommands)))
+        subcommands = self.groups[group]
+        subcommands = "|".join(subcommands)
+        if group is None and len(self.groups) > 1:
+            subcommands += "|..."
+        if not self.prefix and subcommands:
+            output.append("usage: {0} [help] <{1}> [--help]".format(self.name, subcommands))
+        elif subcommands:
+            output.append("usage: {0}:<{1}> [--help]".format(help_full_name, subcommands))
         return "\n".join(output)
 
 
@@ -557,12 +564,21 @@ class Error(Exception):
         self.exit_code = exit_code
         self.value = value
         Exception.__init__(self)
+
+class Group:
+    def __init__(self, name, command):
+        self.name = name
+        self.command = command
         
+    def subcommand(self, name, short=None, long=None, aliases=()):
+        return self.command.subcommand(name, short=short, long=long, aliases=aliases, group=self.name)
+
 class Command:
     def __init__(self, name, short=None, long=None, aliases=()):
         self.name = name
         self.prefix = [] 
         self.subcommands = {}
+        self.groups = {None:[]}
         self.subaliases = {}
         self.run_fn = None
         self.short = short
@@ -580,19 +596,25 @@ class Command:
             return fn
         return _decorator
 
-    def subcommand(self, name, short=None, long=None, aliases=()):
+    def group(self, name):
+        self.groups[name] = []
+        return Group(name, self)
+
+    def subcommand(self, name, short=None, long=None, aliases=(), group=None):
         #if self.argspec:
         #    raise Exception('bad')
         if name in self.subaliases or name in self.subcommands:
             raise Exception('bad')
-        cmd = Command(name, short)
-        cmd.prefix.extend(self.prefix)
-        cmd.prefix.append(self.name)
-        self.subcommands[name] = cmd
         for a in aliases:
             if a in self.subaliases or a in self.subcommands:
                 raise Exception('bad')
+        cmd = Command(name, short)
+        for a in aliases:
             self.subaliases[a] = name
+        cmd.prefix.extend(self.prefix)
+        cmd.prefix.append(self.name)
+        self.subcommands[name] = cmd
+        self.groups[group].append(name)
         return cmd
 
     def run(self, argspec=None):
@@ -663,6 +685,7 @@ class Command:
             prefix = self.prefix,
             subcommands = {k: v.render() for k,v in self.subcommands.items()},
             subaliases = self.subaliases,
+            groups = self.groups,
             short = self.short,
             long = long,
             argspec = self.argspec, 

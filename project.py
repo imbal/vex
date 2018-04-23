@@ -2168,43 +2168,44 @@ class Project:
             files = [txn.full_to_repo_path(filename) for filename in files] if files else None
             self.stash_session(txn.active(), files)
 
+    def swap_branch(self, name, rename=False, swap=False):
+        with self.do('branch:swap') as txn:
+            active = self.active()
+            me = txn.get_branch(active.branch)
+            other = txn.get_name(name)
+            branch = txn.get_branch(other)
+            old_name = me.name
+            txn.set_name(old_name, other)
+            txn.set_name(name, me.uuid)
+            branch.name = old_name
+            me.name = name
+            txn.put_branch(me)
+            txn.put_branch(branch)
+
+    def rename_branch(self, name, rename=False, swap=False):
+        with self.do('branch:rename') as txn:
+            active = self.active()
+            old = txn.get_branch(active.branch)
+            txn.set_name(old.name, None)
+            old.name = name
+            txn.set_name(name, old.uuid)
+            txn.put_branch(old)
+
     def save_as(self, name, rename=False, swap=False):
-        # take current session
-        # inside a transaction, add new branch, session, remove session from old branch 
-        with self.do('saveas') as txn:
-            if swap:
-                active = self.active()
-                me = txn.get_branch(active.branch)
-                other = txn.get_name(name)
-                branch = txn.get_branch(other)
-                old_name = me.name
-                txn.set_name(old_name, other)
-                txn.set_name(name, me.uuid)
-                branch.name = old_name
-                me.name = name
-                txn.put_branch(me)
-                txn.put_branch(branch)
-            elif rename:
-                active = self.active()
-                old = txn.get_branch(active.branch)
-                txn.set_name(old.name, None)
-                old.name = name
-                txn.set_name(name, old.uuid)
-                txn.put_branch(old)
-            else:
-                active = self.active()
-                old = txn.get_branch(active.branch)
-                old.sessions.remove(active.uuid)
-                buuid = UUID()
-                branch = objects.Branch(buuid, name, 'active', txn.prefix(), old.head, old.base, old.init, upstream=old.upstream, sessions=[active.uuid])
-                active.branch = buuid
-                txn.set_name(name, branch.uuid)
-                txn.put_session(active)
-                txn.put_branch(branch)
-                txn.put_branch(old)
+        with self.do('branch:saveas') as txn:
+            active = self.active()
+            old = txn.get_branch(active.branch)
+            old.sessions.remove(active.uuid)
+            buuid = UUID()
+            branch = objects.Branch(buuid, name, 'active', txn.prefix(), old.head, old.base, old.init, upstream=old.upstream, sessions=[active.uuid])
+            active.branch = buuid
+            txn.set_name(name, branch.uuid)
+            txn.put_session(active)
+            txn.put_branch(branch)
+            txn.put_branch(old)
 
     def open_branch(self, name, branch_uuid=None, session_uuid=None, create=False):
-        with self.do_without_undo('open') as txn:
+        with self.do_without_undo('branch:open') as txn:
             # check for >1
             branch_uuid = txn.get_name(name) if not branch_uuid else branch_uuid
             if branch_uuid is None:
@@ -2235,7 +2236,7 @@ class Project:
             txn.switch_session(session_uuid)
 
     def new_branch(self, name, from_branch=None, from_commit=None, fork=False):
-        with self.do_without_undo('new') as txn:
+        with self.do_without_undo('branch:new') as txn:
             if txn.get_name(name):
                 raise VexArgument('branch {} already exists'.format(name))
             active = self.active()
