@@ -42,28 +42,27 @@ class VexUnfinished(VexError): pass
 class Codec:
     def __init__(self):
         self.classes = {}
-        self.lists = {}
-        self.records = {}
+        self.literals = {}
         self.codec = rson.Codec(self.to_tag, self.from_tag)
     def register(self, cls):
-        if cls.__name__ in self.classes:
+        if cls.__name__ in self.classes or cls.__name__ in self.literals:
             raise VexBug('Duplicate wire type')
         self.classes[cls.__name__] = cls
         return cls
-    def register_record(self, cls):
-        if cls.__name__ in self.records:
+    def register_literal(self, cls):
+        if cls.__name__ in self.classes or cls.__name__ in self.literals:
             raise VexBug('Duplicate wire type')
-        self.records[cls.__name__] = cls
+        self.literals[cls.__name__] = cls
         return cls
     def to_tag(self, obj):
         name = obj.__class__.__name__
-        if name in self.records:
-            return name, next(iter(obj.__dict__))
+        if name in self.literals:
+            return name, next(iter(obj.__dict__.values()))
         if name not in self.classes: raise VexBug('An {} object cannot be turned into RSON'.format(name))
         return name, obj.__dict__
     def from_tag(self, tag, value):
-        if tag in self.records:
-            return self.records[tag](value)
+        if tag in self.literals:
+            return self.literals[tag](value)
         return self.classes[tag](**value)
     def dump(self, obj):
         return self.codec.dump(obj).encode('utf-8')
@@ -212,7 +211,7 @@ class objects:
         pass
 
 
-    @codec.register
+    @codec.register_literal # means it becomes @Changeset <entries> not @Changeset {entries: ...}
     class Changeset:
         def __init__(self, entries):
             self.entries = entries
@@ -1917,7 +1916,7 @@ class Project:
             }
             if prefix != '/':
                 changes[prefix] = objects.AddDir(properties={})
-            changelog = objects.Changelog(prev=None, summary="init", message="", changes=changes, author=author_uuid)
+            changelog = objects.Changelog(prev=None, summary="init", message="", changes=objects.Changeset(changes), author=author_uuid)
             changelog_uuid = txn.put_manifest(changelog)
 
             commit = objects.Start(txn.now, uuid=branch_uuid, changelog=changelog_uuid, root=root_uuid)
@@ -1990,7 +1989,7 @@ class Project:
             txn.store_changeset_files(changeset)
             txn.update_active_from_changeset(changeset)
 
-            prepare = objects.Prepare(n, txn.now, prev=old_uuid, prepared=prepare, changes=changeset.entries)
+            prepare = objects.Prepare(n, txn.now, prev=old_uuid, prepared=prepare, changes=changeset)
             prepare_uuid = txn.put_commit(prepare)
 
             txn.set_active_prepare(prepare_uuid)
@@ -2074,7 +2073,7 @@ class Project:
 
             author = txn.get_state('author')
 
-            changelog = objects.Changelog(prev=old.changelog, summary="Summary", message="Message", changes=changeset.entries, author=author)
+            changelog = objects.Changelog(prev=old.changelog, summary="Summary", message="Message", changes=changeset, author=author)
             changelog_uuid = txn.put_manifest(changelog)
 
             n = old.next_n(kind)
