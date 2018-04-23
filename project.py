@@ -533,49 +533,7 @@ class BlobStore:
             return codec.parse(fh.read())
 
 
-# Action log: Used to track undo/redo and changes to repository state
-
-class OldHistoryStore:
-    def __init__(self, dir):
-        self.dir = dir
-        self._store = BlobStore(os.path.join(dir,'entries'))
-        self._store.prefix = ""
-        self._redos = DirStore(os.path.join(dir,'redos' ))
-        self._settings = DirStore(dir)
-    
-    def makedirs(self):
-        os.makedirs(self.dir, exist_ok=True)
-        self._store.makedirs()
-        self._redos.makedirs()
-
-    def current(self):
-        return self._settings.get("current")
-
-    def next(self):
-        return self._settings.get("next")
-
-    def exists(self):
-        return self._settings.exists("current") and self._settings.exists("next")
-
-    def set_current(self, value):
-        self._settings.set('current', value)
-
-    def set_next(self, value):
-        self._settings.set('next', value)
-
-    def get_entry(self, addr):
-        return self._store.get_obj(addr)
-
-    def put_entry(self, obj):
-        return self._store.put_obj(obj)
-
-    def get_redos(self, addr):
-        if self._redos.exists(addr):
-            return self._redos.get(addr)
-        return []
-
-    def set_redos(self, addr, redo):
-        self._redos.set(addr, redo)
+# History: Used to track undo/redo and changes to repository state
 
 class HistoryStore:
     def __init__(self, file):
