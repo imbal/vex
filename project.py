@@ -864,8 +864,6 @@ class Transaction:
                     if not entry.replace: entry.replace = entry.kind
                     entry.state = "replaced"
                     entry.kind = "dir"
-                elif entry.state == 'added' or entry.state == 'replaced':
-                    pass
                 elif entry.state == 'deleted':
                     pass
                 elif entry.state == 'tracked':
@@ -880,12 +878,19 @@ class Transaction:
                         modified = True
                     elif entry.mode != None and (entry.mode != stat.st_mode):
                         modified = True
-                    elif entry.mtime is None:
+                    elif entry.mtime is None or entry.mode is None or entry.size is None:
                         new_addr = self.addr_for_file(path)
                         if new_addr != entry.addr:
                             modified = True
-                        if now - stat.st_mtime >= MTIME_GRACE_SECONDS:
-                            entry.mtime = stat.st_mtime
+                        else:
+                            entry.mode = stat.st_mode
+                            entry.size = stat.st_size
+                            if now - stat.st_mtime >= MTIME_GRACE_SECONDS:
+                                entry.mtime = stat.st_mtime
+                            if stat.st_mode & 64:
+                                entry.properties['vex:executable'] = True
+                            elif 'vex:executable' in entry.properties:
+                                entry.properties.pop('vex:executable')
 
                     if modified:
                         entry.state = "modified"
@@ -897,7 +902,7 @@ class Transaction:
                             entry.properties.pop('vex:executable')
                         if now - stat.st_mtime >= MTIME_GRACE_SECONDS:
                             entry.mtime = stat.st_mtime
-                elif entry.state == 'modified':
+                elif entry.state in ('modified', 'added', 'replaced'):
                     stat = os.stat(path)
                     entry.mode = stat.st_mode
                     entry.size = stat.st_size
@@ -1847,6 +1852,8 @@ class Project:
             raise VexArgument('bad arg')
         if new_prefix not in self.active().files and new_prefix != "/":
             raise VexArgument('bad prefix')
+        with self.do_nohistory('switch') as txn:
+            txn.refresh_active()
         with self.do_switch('switch') as txn:
             txn.switch_prefix(new_prefix)
 
