@@ -28,6 +28,19 @@ def get_project(check=True, empty=True):
 
 # CLI bits. Should handle environs, cwd, etc
 vex_cmd = Command('vex', 'a database for files')
+
+vex_cmd.long = """
+
+vex is a command line program for saving changes to a project, switching
+between different versions, and sharing those changes.
+
+vex supports bash completion: run `complete -o nospace -C vex vex`
+
+
+
+
+"""
+
 @vex_cmd.on_error()
 def Error(path, args, exception, traceback):
     """

@@ -61,9 +61,9 @@ These commands are implemented, but are unfinished:
 | `vex status`		| `hg status`	| `git status` 	|
 | `vex commit`		| `hg commit`	| `git commit -a` 	|
 | `vex log`	    	| `hg log`		| `git log` 	|
-| `vex new`         | `hg bookmark` | `git branch, checkout`|
-| `vex open`        | `hg bookmark` | `git checkout`|
-| `vex saveas`      | `hg bookmark` | `git checkout -b`|
+| `vex branch:new`         | `hg bookmark` | `git branch, checkout`|
+| `vex branch:open`        | `hg bookmark` | `git checkout`|
+| `vex branch:saveas`      | `hg bookmark` | `git checkout -b`|
 | ...			    | ...			| ...		|
 | `vex undo`		| `hg rollback` for commits	| check stackoverflow 	|
 | `vex redo`		|              	            | 	|
