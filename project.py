@@ -1345,8 +1345,8 @@ class Switch:
     def switch_session(self, new_session):
         self.active_session = {'old': self.project.state.get('active'), 'new': new_session}
 
-    def set_branch_state(self, branch_uuid, state):
-        if branch_uuid in self.new_branch_states:
+    def set_branch_state(self, uuid, state):
+        if uuid in self.new_branch_states:
             self.new_branch_states[uuid] = state
         else:
             old = self.project.branches.get(uuid)
@@ -2197,7 +2197,7 @@ class Project:
                 old = txn.get_branch(active.branch)
                 old.sessions.remove(active.uuid)
                 buuid = UUID()
-                branch = objects.Branch(buuid, name, 'active', old.head, old.base, old.init, old.upstream, sessions=[active.uuid])
+                branch = objects.Branch(buuid, name, 'active', txn.prefix(), old.head, old.base, old.init, upstream=old.upstream, sessions=[active.uuid])
                 active.branch = buuid
                 txn.set_name(name, branch.uuid)
                 txn.put_session(active)
