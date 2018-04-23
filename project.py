@@ -1071,7 +1071,6 @@ class Transaction:
 
 
     def new_root_with_changeset(self, old, changeset):
-        active = self.active()
         dir_changes = {}
         for path, entry in sorted((p.split('/'),e) for p,e in changeset.items()):
             prefix, name = "/".join(path[:-1]), path[-1]
@@ -1099,8 +1098,11 @@ class Transaction:
 
             for name in sorted(names):
                 if name == ".":
+                    if not root: raise VexBug('...')
                     for change in changes.pop(name):
                         if isinstance(change, objects.ChangeDir):
+                            properties = change.properties
+                        elif not addr and isinstance(change, objects.AddDir):
                             properties = change.properties
                         else:
                             raise VexBug('welp')
@@ -1385,7 +1387,7 @@ class Project:
     VEX = "/.vex"
     def __init__(self, config_dir, working_dir):
         self.working_dir = working_dir
-        self.dir = config_dir
+        self.config_dir = config_dir
         self.vex = VexRepo(config_dir)
 
 
@@ -1405,7 +1407,7 @@ class Project:
         return unicodedata.normalize('NFC', name)
 
     def makedirs(self):
-        os.makedirs(self.dir, exist_ok=True)
+        os.makedirs(self.config_dir, exist_ok=True)
         self.vex.makedirs()
         self.branches.makedirs()
         self.names.makedirs()
@@ -1420,7 +1422,7 @@ class Project:
             fh.write(b'# created by %d at %a\n'%(os.getpid(), str(NOW())))
 
     def exists(self):
-        return os.path.exists(self.dir)
+        return os.path.exists(self.config_dir)
 
     def history_isempty(self):
         return self.history.empty()
@@ -1452,7 +1454,7 @@ class Project:
             path = self.nfc_name(path)
             return os.path.normpath(os.path.join(self.VEX, path))
         else:
-            if file.startswith(self.dir):
+            if file.startswith(self.config_dir):
                 raise VexBug('nope. not .vex')
             path = os.path.relpath(file, self.working_dir)
             path = self.nfc_name(path)
@@ -1756,6 +1758,8 @@ class Project:
         return output
 
     def match_filename(self, path, name):
+        if path == self.config_dir:
+            return False
         ignore = self.settings.get('ignore')
         if ignore:
             if isinstance(ignore, str): ignore = ignore,
@@ -1865,48 +1869,53 @@ class Project:
             raise VexNoHistory('cant reinit')
         if not prefix.startswith('/'):
             raise VexArgument('crap prefix')
+        with self.do_nohistory('init') as txn:
+            txn.set_setting('ignore', ignore)
+            txn.set_setting('include', include)
+
         with self.do('init') as txn:
             author_uuid = UUID() 
             branch_uuid = UUID()
+            session_uuid = UUID()
+            branch_name = 'latest'
 
-            project_uuid = None
             root_path = '/'
-            if prefix != '/':
-                root = objects.Root({os.path.relpath(prefix, root_path): objects.Dir(None, {}), self.VEX[1:]: objects.Dir(None, {})}, {})
-            else:
-                root = objects.Root({self.VEX[1:]: objects.Dir(None, {})}, {})
-            root_uuid = txn.put_manifest(root)
 
+            ignore_addr = txn.put_file(txn.repo_to_full_path('/.vex/ignore'))
+            include_addr = txn.put_file(txn.repo_to_full_path('/.vex/include'))
+            
             changes = {
                     '/' : [ objects.AddDir(properties={}) ] ,
                     self.VEX : [ objects.AddDir(properties={}) ],
+                    os.path.join(self.VEX, 'ignore'): [ objects.AddFile(addr=ignore_addr, properties={}) ],
+                    os.path.join(self.VEX, 'include'): [ objects.AddFile(addr=include_addr, properties={}) ],
             }
             if prefix != '/':
-                changes[prefix] = objects.AddDir(properties={})
+                changes[prefix] = [ objects.AddDir(properties={})]
+            changes = objects.Changeset(changes)
+
+            root_uuid = txn.new_root_with_changeset(None, changes)
+
             changelog = objects.Changelog(prev=None, summary="init", message="", changes=objects.Changeset(changes), author=author_uuid)
             changelog_uuid = txn.put_manifest(changelog)
 
             commit = objects.Start(txn.now, uuid=branch_uuid, changelog=changelog_uuid, root=root_uuid)
             commit_uuid = txn.put_commit(commit)
-            session_uuid = UUID()
 
-            branch_name = 'latest'
             branch = objects.Branch(branch_uuid, branch_name, 'active', prefix, commit_uuid, None, commit_uuid, None, [session_uuid])
             txn.put_branch(branch)
             txn.set_name(branch_name, branch.uuid)
 
-            files = {
-                '/': objects.Tracked('dir', 'tracked', working=None, properties={}),
-                self.VEX: objects.Tracked('dir', 'tracked', working=True, properties={}),
-                prefix: objects.Tracked('dir', 'tracked', working=True, properties={}),
-                os.path.join(self.VEX, 'ignore'): objects.Tracked('file', 'added', working=True, properties={}),
-                os.path.join(self.VEX, 'include'): objects.Tracked('file', 'added', working=True, properties={}),
-            }
-            session = objects.Session(session_uuid, branch_uuid, 'attached', commit_uuid, commit_uuid, files)
+            files = txn.build_files(commit_uuid)
+            for name, entry in files.items():
+                if os.path.commonpath((name, prefix)) == prefix or os.path.commonpath((name, self.VEX)) == self.VEX:
+                    entry.working = True
+                else:
+                    entry.working = None
+
+            session = objects.Session(session_uuid, branch_uuid, 'attached', commit_uuid, commit_uuid, files) 
             txn.put_session(session)
 
-            txn.set_setting("ignore", ignore)
-            txn.set_setting("include", include)
 
         self.state.set("author", author_uuid)
         self.state.set("active", session_uuid)
@@ -2064,7 +2073,7 @@ class Project:
             dirs = {}
             for filename in files:
                 name = txn.full_to_repo_path(filename)
-                if filename == self.dir: continue
+                if filename == self.config_dir: continue
                 if os.path.isfile(filename):
                     names[name] = filename
                 elif os.path.isdir(filename):
