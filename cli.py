@@ -491,7 +491,7 @@ class CommandDescription:
         full_name = list(self.prefix)
         full_name.append(self.name)
         full_name = "{}{}{}".format(full_name[0], (" " if full_name[1:] else ""), ":".join(full_name[1:]))
-        output.append("{}{}{}".format(full_name, (", " if self.short else ""), self.short or ""))
+        output.append("{}{}{}".format(full_name, (" -- " if self.short else ""), self.short or ""))
 
         output.append("")
 
