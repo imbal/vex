@@ -335,13 +335,14 @@ class objects:
 
     @codec.register
     class Switch:
-        def __init__(self, time, command, prefix, active, session_states, branch_states):
+        def __init__(self, time, command, prefix, active, session_states, branch_states, names):
             self.time = time
             self.command = command
             self.prefix = prefix
             self.active = active
             self.session_states = session_states
             self.branch_states = branch_states 
+            self.names = names
 
 
     @codec.register
@@ -613,12 +614,11 @@ class HistoryStore:
         c.execute('select prev, action from dos where addr = ?', [addr])
         row = c.fetchone()
         if row:
-            return objects.Do(str(row[0]),codec.parse(row[1]))
+            return (str(row[0]),codec.parse(row[1]))
 
-    def put_entry(self, obj):
+    def put_entry(self, prev, obj):
         c=self.db.cursor()
-        prev = obj.prev
-        buf = codec.dump(obj.action)
+        buf = codec.dump(obj)
         addr = UUID().split('-',1)[0]
         c.execute('insert into dos (addr, prev, action) values (?,?,?)',[addr, prev, buf])
         self.db.commit()
@@ -665,10 +665,10 @@ class History:
         current = self.store.current()
         out = []
         while current != self.START:
-            obj = self.store.get_entry(current)
-            redos = [self.store.get_entry(x).action.command for x in self.store.get_redos(current)]
-            out.append((obj.action, redos))
-            current = obj.prev
+            prev, obj = self.store.get_entry(current)
+            redos = [self.store.get_entry(x)[1].command for x in self.store.get_redos(current)]
+            out.append((obj, redos))
+            current = prev
 
         return out
 
@@ -677,8 +677,7 @@ class History:
         if not self.clean_state():
             raise VexCorrupt('Project history not in a clean state.')
         current = self.store.current()
-        obj = objects.Do(current, action)
-        addr = self.store.put_entry(obj)
+        addr = self.store.put_entry(current, action)
         self.store.set_next(['quiet', addr , current])
 
         yield action
@@ -686,15 +685,15 @@ class History:
         self.store.set_next(['do', current, current])
 
     @contextmanager
-    def do(self, action):
+    def do(self, obj):
         if not self.clean_state():
             raise VexCorrupt('Project history not in a clean state.')
         current = self.store.current()
 
-        addr = self.store.put_entry(objects.Do(current, action))
+        addr = self.store.put_entry(current, obj)
         self.store.set_next(('do', addr,current))
 
-        yield action
+        yield obj
 
         self.store.set_current(addr)
 
@@ -707,16 +706,16 @@ class History:
             yield None
             return
 
-        obj = self.store.get_entry(current)
+        prev, obj = self.store.get_entry(current)
 
         redos = [current]
-        redos.extend(self.store.get_redos(obj.prev))
-        self.store.set_next(('undo', obj.prev, current))
+        redos.extend(self.store.get_redos(prev))
+        self.store.set_next(('undo', prev, current))
 
-        yield obj.action
+        yield obj
 
-        self.store.set_redos(obj.prev, redos)
-        self.store.set_current(obj.prev)
+        self.store.set_redos(prev, redos)
+        self.store.set_current(prev)
 
     @contextmanager
     def redo(self, n=0):
@@ -732,10 +731,10 @@ class History:
 
         do = redos.pop(n)
 
-        obj = self.store.get_entry(do)
+        prev, obj = self.store.get_entry(do)
         self.store.set_next(('redo', do, current))
 
-        yield obj.action
+        yield obj
 
         self.store.set_redos(current, redos)
         self.store.set_current(do)
@@ -751,11 +750,11 @@ class History:
             raise VexCorupt('Real bad')
         if mode == 'undo' or not old_current:
             raise VexBug('no')
-        obj = self.store.get_entry(next)
+        prev, obj = self.store.get_entry(next)
         current = self.store.current()
         if current != old_current:
             raise VexCorrupt('History is really corrupted: Interrupted transaction did not come after current change')
-        yield obj.action
+        yield obj
         self.store.set_next(['rollback', old_current, None])
 
     @contextmanager
@@ -768,11 +767,11 @@ class History:
             raise VexCorupt('Real bad')
         if mode == 'undo' or not old_current:
             raise VexBug('no')
-        obj = self.store.get_entry(next)
+        prev, obj = self.store.get_entry(next)
         current = self.store.current()
         if current != old_current:
             raise VexCorrupt('History is really corrupted: Interrupted transaction did not come after current change')
-        yield obj.action
+        yield obj
         if mode == 'quiet':
             self.store.set_next(['restart', old_current, None])
         else:
@@ -786,11 +785,11 @@ class History:
 
         out = []
         for do in redos:
-            obj = self.store.get_entry(do)
-            out.append(obj.action)
+            prev, obj = self.store.get_entry(do)
+            out.append(obj)
         return out
 
-class Transaction:
+class PhysicalTransaction:
     def __init__(self, project, scratch, command):
         self.project = project
         self.scratch = scratch
@@ -1328,7 +1327,7 @@ class Transaction:
             blobs = {}
         return objects.Action(self.now, self.command, changes, blobs)
 
-class Switch:
+class LogicalTransaction:
     def __init__(self, project, scratch, command):
         self.project = project
         self.scratch = scratch
@@ -1339,6 +1338,8 @@ class Switch:
         self.new_branch_states = {}
         self.old_session_states = {}
         self.new_session_states = {}
+        self.old_names = {}
+        self.new_names = {}
         self.now = NOW()
 
     def switch_prefix(self, new_prefix):
@@ -1367,7 +1368,8 @@ class Switch:
     def action(self):
         branches = dict(old=self.old_branch_states, new=self.new_branch_states)
         sessions = dict(old=self.old_session_states, new=self.new_session_states)
-        return objects.Switch(self.now, self.command, self.prefix, self.active_session, sessions, branches)
+        names = dict(old=self.old_names, new=self.new_names)
+        return objects.Switch(self.now, self.command, self.prefix, self.active_session, sessions, branches, names)
 
 class VexRepo:
     def __init__(self, config_dir):
@@ -1520,7 +1522,7 @@ class Project:
     @contextmanager
     def do_nohistory(self, command):
         active = self.state.get("active")
-        txn = Transaction(self, self.scratch, command)
+        txn = PhysicalTransaction(self, self.scratch, command)
         yield txn
         with self.history.do_nohistory(txn.action()) as action:
             if any(action.blobs.values()):
@@ -1533,7 +1535,7 @@ class Project:
         if not self.history.clean_state():
             raise VexCorrupt('Project history not in a clean state.')
 
-        txn = Transaction(self, self.scratch, command)
+        txn = PhysicalTransaction(self, self.scratch, command)
         yield txn
         with self.history.do(txn.action()) as action:
             if not action:
@@ -1549,7 +1551,7 @@ class Project:
         if not self.history.clean_state():
             raise VexCorrupt('Project history not in a clean state.')
 
-        txn = Switch(self, self.scratch, command)
+        txn = LogicalTransaction(self, self.scratch, command)
         yield txn
         with self.history.do(txn.action()) as action:
             if not action:
@@ -2259,6 +2261,8 @@ class Project:
 
     def new_branch(self, name, from_branch=None, from_commit=None, fork=False):
         with self.do_nohistory('new') as txn:
+            if txn.get_name(name):
+                raise VexArgument('branch {} already exists'.format(name))
             active = self.active()
             if not from_branch: from_branch = active.branch
             if not from_commit: from_commit = active.commit
