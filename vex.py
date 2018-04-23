@@ -348,7 +348,23 @@ def Amend(file):
             yield 'Nothing to commit'
         # check that session() and branch()
 
+vex_branch = vex_cmd.subcommand('branch', short="open/create branch")
+@vex_branch.run('[name]')
+def Branch(name):
+    """
+
+    """
+    p = get_project()
+    with p.lock('open') as p:
+        if name:
+            p.open_branch(name, create=True)
+        active = p.active()
+        branch = p.branches.get(active.branch)
+        yield branch.name
+
+vex_branch_list = vex_branch.subcommand('list', short="list branches")
 vex_branches = vex_cmd.subcommand('branches', short="list branches")
+@vex_branch_list.run()
 @vex_branches.run()
 def Branches():
     p = get_project()
@@ -360,40 +376,9 @@ def Branches():
             else:
                 yield branch.uuid
 
-
-vex_open = vex_cmd.subcommand('open', short="open or create a branch")
-@vex_open.run('name')
-def Open(name):
-    """
-
-    """
-    p = get_project()
-    with p.lock('open') as p:
-        p.open_branch(name)
-
-vex_new = vex_cmd.subcommand('new', short="create a new branch")
-@vex_new.run('name')
-def New(name):
-    """
-
-    """
-    p = get_project()
-    with p.lock('new') as p:
-        p.new_branch(name)
-
-vex_saveas = vex_cmd.subcommand('saveas', short="rename current branch")
-@vex_saveas.run('--rename? name')
-def SaveAs(name, rename):
-    """
-
-    """
-    p = get_project()
-    with p.lock('saveas') as p:
-        p.save_as(name, rename=rename)
-
-vex_branch = vex_cmd.subcommand('branch', short="show branch information")
-@vex_branch.run('[name]')
-def Branch(name):
+vex_branch_get = vex_branch.subcommand('get', short="get branch info", aliases=["show", "info"])
+@vex_branch_get.run('[name]')
+def BranchInfo(name):
     """
 
     """
@@ -413,6 +398,38 @@ def Branch(name):
         # 
         yield branch.name
 
+vex_open = vex_branch.subcommand('open', short="open or create a branch")
+@vex_open.run('name')
+def Open(name):
+    """
+
+    """
+    p = get_project()
+    with p.lock('open') as p:
+        p.open_branch(name, create=False)
+
+vex_new = vex_branch.subcommand('new', short="create a new branch")
+@vex_new.run('name')
+def New(name):
+    """
+
+    """
+    p = get_project()
+    with p.lock('new') as p:
+        p.new_branch(name)
+
+vex_saveas = vex_branch.subcommand('saveas', short="rename current branch")
+@vex_saveas.run('--rename? --swap? name')
+def SaveAs(name, rename, swap):
+    """
+
+    """
+    if rename and swap: raise VexArgument('pick one of swap or rename, ok?')
+    p = get_project()
+    with p.lock('saveas') as p:
+        p.save_as(name, rename=rename, swap=swap)
+
+
 vex_switch = vex_cmd.subcommand('switch', short="change which directory (inside the project) is worked on")
 @vex_switch.run('[prefix]')
 def Switch(prefix):
@@ -426,6 +443,58 @@ def Switch(prefix):
             p.switch(prefix)
     else:
         yield p.prefix()
+
+vex_ignore = vex_cmd.subcommand('ignore', short="add ignored files")
+vex_ignore_add = vex_ignore.subcommand('add', 'add ignored files')
+@vex_ignore.run('[file...]')
+@vex_ignore_add.run('[file...]')
+def AddIgnore(file):
+    p = get_project()
+    if file:
+        with p.lock('ignore:add') as p:
+            old = p.settings.get('ignore')
+            old.extend(file)
+            p.settings.set('ignore', old)
+    else:
+        for entry in p.settings.get('ignore'):
+            yield entry
+
+
+vex_include = vex_cmd.subcommand('include', short="add include files")
+vex_include_add = vex_include.subcommand('add', 'add include files')
+@vex_include.run('[file...]')
+@vex_include_add.run('[file...]')
+def AddInclude(file):
+    p = get_project()
+    if file:
+        with p.lock('include:add') as p:
+            old = p.settings.get('include')
+            old.extend(file)
+            p.settings.set('include', old)
+    else:
+        for entry in p.settings.get('include'):
+            yield entry
+
+
+props_cmd = vex_cmd.subcommand('fileprops', short="get/set properties on files", aliases=['props', 'properties', 'property'])
+props_list_cmd = props_cmd.subcommand('get', short="list properties")
+@props_cmd.run('file')
+@props_list_cmd.run('file')
+def ListProps(file):
+    p = get_project()
+    filename = os.path.join(os.getcwd(), file)
+    with p.lock('fileprops:list') as p:
+        for key,value in p.get_fileprops(filename).items():
+            file = os.path.relpath(filename)
+            yield "{}:{}:{}".format(file, key,value)
+
+props_set_cmd = props_cmd.subcommand('set', short='set property')
+@props_set_cmd.run('file name value:scalar')
+def SetProp(file, name, value):
+    p = get_project()
+    filename = os.path.join(os.getcwd(), file)
+    with p.lock('fileprops:list') as p:
+        p.set_fileprop(filename, name, value)
 
 vex_debug = vex_cmd.subcommand('debug', 'internal: run a command without capturing exceptions, or repairing errors')
 @vex_debug.run()
@@ -506,58 +575,6 @@ def DebugRollback():
             yield ('Project has recovered')
         else:
             yield ('Oh dear')
-
-vex_ignore = vex_cmd.subcommand('ignore', short="add ignored files")
-vex_ignore_add = vex_ignore.subcommand('add', 'add ignored files')
-@vex_ignore.run('[file...]')
-@vex_ignore_add.run('[file...]')
-def AddIgnore(file):
-    p = get_project()
-    if file:
-        with p.lock('ignore:add') as p:
-            old = p.settings.get('ignore')
-            old.extend(file)
-            p.settings.set('ignore', old)
-    else:
-        for entry in p.settings.get('ignore'):
-            yield entry
-
-
-vex_include = vex_cmd.subcommand('include', short="add include files")
-vex_include_add = vex_include.subcommand('add', 'add include files')
-@vex_include.run('[file...]')
-@vex_include_add.run('[file...]')
-def AddInclude(file):
-    p = get_project()
-    if file:
-        with p.lock('include:add') as p:
-            old = p.settings.get('include')
-            old.extend(file)
-            p.settings.set('include', old)
-    else:
-        for entry in p.settings.get('include'):
-            yield entry
-
-
-props_cmd = vex_cmd.subcommand('fileprops', short="get/set properties on files", aliases=['props', 'properties', 'property'])
-props_list_cmd = props_cmd.subcommand('get', short="list properties")
-@props_cmd.run('file')
-@props_list_cmd.run('file')
-def ListProps(file):
-    p = get_project()
-    filename = os.path.join(os.getcwd(), file)
-    with p.lock('fileprops:list') as p:
-        for key,value in p.get_fileprops(filename).items():
-            file = os.path.relpath(filename)
-            yield "{}:{}:{}".format(file, key,value)
-
-props_set_cmd = props_cmd.subcommand('set', short='set property')
-@props_set_cmd.run('file name value:scalar')
-def SetProp(file, name, value):
-    p = get_project()
-    filename = os.path.join(os.getcwd(), file)
-    with p.lock('fileprops:list') as p:
-        p.set_fileprop(filename, name, value)
 
 git_cmd = vex_cmd.subcommand('git', short="interact with a git repository")
 

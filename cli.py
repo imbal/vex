@@ -375,15 +375,18 @@ class CommandDescription:
         return "<None>"
 
     def complete_path(self, route, path):
-        if path and path[0] in self.subaliases:
-            path[0] = self.subaliases[path[0]]
-        if path and path[0] in self.subcommands:
-            return self.subcommands[path[0]].complete_path(route+[path[0]], path[1:])
         if path:
             output = []
+            if path and path[0]:
+                path0 = path[0]
+                if path0 in self.subaliases:
+                    path0 = self.subaliases[path0]
+                if path0 in self.subcommands:
+                    output.extend(self.subcommands[path0].complete_path(route+[path[0]], path[1:]))
             prefix = ""
             for name,cmd in self.subcommands.items():
                 if not path[0] or name.startswith(path[0]):
+                    if name == path[0]: continue
                     if cmd.subcommands and cmd.argspec:
                         output.append("{}{}".format(prefix, name))
                     elif cmd.subcommands and not cmd.argspec:

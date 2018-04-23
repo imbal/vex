@@ -2190,11 +2190,24 @@ class Project:
             files = [txn.full_to_repo_path(filename) for filename in files] if files else None
             self.stash_session(txn.active(), files)
 
-    def save_as(self, name, rename=False):
+    def save_as(self, name, rename=False, swap=False):
         # take current session
         # inside a transaction, add new branch, session, remove session from old branch 
         with self.do_nohistory('saveas') as txn:
-            if rename:
+            if swap:
+                active = self.active()
+                me = txn.get_branch(active.branch)
+                other = txn.get_name(name)
+                branch = txb.get_branch(other)
+
+                old_name = me.name
+                txn.set_name(old_name, other)
+                txn.set_name(name, me.uuid)
+                branch.name = old_name
+                me.name = name
+                txn.put_branch(me)
+                txn.put_branch(other)
+            elif rename:
                 active = self.active()
                 old = txn.get_branch(active.branch)
                 txn.set_name(old.name, None)
@@ -2213,11 +2226,13 @@ class Project:
                 txn.put_branch(branch)
                 txn.put_branch(old)
 
-    def open_branch(self, name, branch_uuid=None, session_uuid=None):
+    def open_branch(self, name, branch_uuid=None, session_uuid=None, create=False):
         with self.do_nohistory('open') as txn:
             # check for >1
             branch_uuid = txn.get_name(name) if not branch_uuid else branch_uuid
             if branch_uuid is None:
+                if not create:
+                    raise VexArgument('{} does not exist'.format(name))
                 active = self.active()
                 from_branch = active.branch
                 from_commit = active.commit
