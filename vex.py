@@ -138,9 +138,9 @@ def Undo(list):
             count -= 1
             alternative = ""
             if len(redos) == 1:
-                alternative = "(then ran {} and then undo)".format(redos[0])
+                alternative = "(then ran but undid: {})".format(redos[0])
             elif len(redos) > 0:
-                alternative = "(then ran and undid {}, and {} )".format(",".join(redos[:-1]), redos[-1])
+                alternative = "(then ran but undid: {}, and {} )".format(",".join(redos[:-1]), redos[-1])
 
             yield "{}: {}, ran {}\t{}".format(count, entry.time, entry.command,alternative)
             yield ""

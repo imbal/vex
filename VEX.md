@@ -10,12 +10,12 @@ Note: This is a work-in-progress, large chunks of this README are fictional. Ple
 - Everything should be as easy to do as it is to undo/redo. Not the other way around: permanent changes should be hard.
 - Don't ever leave the project in a broken state: unless the user *explicitly* asked, rollback. If it breaks, try and fix it before complaining about it. 
 - The history of a project is when the changes were applied, not when the changes were written.
-- Flags are a terrible idea, short flags are worse. 
+- Flags are a terrible idea, short flags are worse. (They should be for sharing behaviour across commands, not changing what commands ultimately do. Use another command instead of a flag)
 
 Imagine `git`, except:
 
 - Branches automatically stash and unstash
-- It tracks directories as well as files
+- It tracks directories as well as files, even empty ones.
 - The index is the stage (like `hg`)
 - Branches can have more than one working copy associated with it,  detached heads never get lost.
 - Instead of a reflog, `undo` and `redo`.
@@ -47,6 +47,7 @@ Now Imagine:
 - Working submodules/repos
 - Purging: a way strip changes from a project and push it to remote services
 
+Good, because none of it is ready yet.
 
 ## Cheatsheet:
 

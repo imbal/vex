@@ -2196,13 +2196,12 @@ class Project:
     def save_as(self, name, rename=False, swap=False):
         # take current session
         # inside a transaction, add new branch, session, remove session from old branch 
-        with self.do_nohistory('saveas') as txn:
+        with self.do('saveas') as txn:
             if swap:
                 active = self.active()
                 me = txn.get_branch(active.branch)
                 other = txn.get_name(name)
                 branch = txn.get_branch(other)
-
                 old_name = me.name
                 txn.set_name(old_name, other)
                 txn.set_name(name, me.uuid)
@@ -2274,6 +2273,7 @@ class Project:
         with self.do_switch('new') as txn:
             txn.set_branch_state(branch.uuid, "active")
             txn.switch_session(session.uuid)
+            # XXX move setting name into here
             # if branch upstream diff, set prefix XXX
 
 
