@@ -404,7 +404,10 @@ def Branch(name):
             branch = p.branches.get(active.branch)
         else:
             b = p.names.get(name)
-            branch = p.branches.get(b)
+            if b:
+                branch = p.branches.get(b)
+            else:
+                raise VexArgument("{} isn't a branch".format(name)) 
         # session is ahead (in prepared? in commits?)
         # session has detached ...?
         # 

@@ -435,6 +435,8 @@ class DirStore:
     def exists(self, addr):
         return os.path.exists(self.filename(addr))
     def get(self, name):
+        if not self.exists(name):
+            return None
         with open(self.filename(name), 'rb') as fh:
             return codec.parse(fh.read())
     def set(self, name, value):
