@@ -138,9 +138,9 @@ def Undo(list):
             count -= 1
             alternative = ""
             if len(redos) == 1:
-                alternative = "(then undid {})".format(redos[0])
+                alternative = "(then ran {} and then undo)".format(redos[0])
             elif len(redos) > 0:
-                alternative = "(then undid {}, and {})".format(",".join(redos[:-1]), redos[-1])
+                alternative = "(then ran and undid {}, and {} )".format(",".join(redos[:-1]), redos[-1])
 
             yield "{}: {}, ran {}\t{}".format(count, entry.time, entry.command,alternative)
             yield ""
@@ -151,7 +151,7 @@ def Undo(list):
             yield ('undid', action.command)
 
 vex_redo = vex_cmd.subcommand('redo', "redo last undone command")
-@vex_redo.run('--list? --choice')
+@vex_redo.run('--list? --choice:int')
 def Redo(list, choice):
     """
         `vex redo` will redo the last action undone. `vex redo --list` will show the
@@ -370,8 +370,14 @@ def Branches():
     p = get_project()
     with p.lock('branches') as p:
         branches = p.list_branches()
+        active = p.active()
         for (name, branch) in branches:
-            if name:
+            if branch.uuid == active.branch:
+                if name:
+                    yield "{} *".format(name)
+                else:
+                    yield "{} *".format(branch.uuid)
+            elif name:
                 yield name
             else:
                 yield branch.uuid
@@ -418,17 +424,41 @@ def New(name):
     with p.lock('new') as p:
         p.new_branch(name)
 
-vex_saveas = vex_branch.subcommand('saveas', short="rename current branch")
-@vex_saveas.run('--rename? --swap? name')
-def SaveAs(name, rename, swap):
+vex_saveas = vex_branch.subcommand('saveas', short="save session as a new branch, leaving old one alone")
+@vex_saveas.run('name')
+def SaveAs(name):
     """
 
     """
-    if rename and swap: raise VexArgument('pick one of swap or rename, ok?')
     p = get_project()
     with p.lock('saveas') as p:
-        p.save_as(name, rename=rename, swap=swap)
+        if p.names.get(name):
+            raise VexArgument('{} exists'.format(name))
+        p.save_as(name, rename=False, swap=False)
 
+vex_rename = vex_branch.subcommand('rename', short="rename current branch")
+@vex_rename.run('name')
+def RenameBranch(name):
+    """
+
+    """
+    p = get_project()
+    with p.lock('rename') as p:
+        if p.names.get(name):
+            raise VexArgument('{} exists'.format(name))
+        p.save_as(name, rename=True, swap=False)
+
+vex_swap = vex_branch.subcommand('swap', short="swap name with another branch")
+@vex_swap.run('name')
+def Swap(name):
+    """
+
+    """
+    p = get_project()
+    with p.lock('swap') as p:
+        if not p.names.get(name):
+            raise VexArgument("{} doesn't exist".format(name))
+        p.save_as(name, rename=False, swap=True)
 
 vex_switch = vex_cmd.subcommand('switch', short="change which directory (inside the project) is worked on")
 @vex_switch.run('[prefix]')

@@ -4,13 +4,13 @@ This README assumes some familiarily with `git`, `hg`, or `svn`
 
 Note: This is a work-in-progress, large chunks of this README are fictional. Please don't link to this project yet, it isn't ready for an audience yet. Thank you!
 
-## A Manifesto for yet another Source Control System
+## A Manifesto for yet-another Source Control System
 
 - The working copy is sacred. Preserve it at all costs.
-- Everything should be as easy to do as it is to undo/redo.
-- Don't ever leave the project in a broken state: unless the user *explicitly* asked, rollback.
-- UUIDs are good for you, and use the same encoding for everything.
+- Everything should be as easy to do as it is to undo/redo. Not the other way around: permanent changes should be hard.
+- Don't ever leave the project in a broken state: unless the user *explicitly* asked, rollback. If it breaks, try and fix it before complaining about it. 
 - The history of a project is when the changes were applied, not when the changes were written.
+- Flags are a terrible idea, short flags are worse. 
 
 Imagine `git`, except:
 

@@ -381,12 +381,13 @@ class objects:
     @codec.register
     class Session:
         States = set(('attached', 'detached', 'manual', 'update')) 
-        def __init__(self,uuid, branch, state, prepare, commit, files):
+        def __init__(self,uuid, branch, state, prefix, prepare, commit, files):
             if not (uuid and branch and prepare and commit): raise Exception('no')
             if state not in self.States: raise Exception('no')
             self.uuid = uuid
             self.branch = branch
             self.prepare = prepare
+            self.prefix = prefix
             self.commit = commit
             self.files = files
             self.state = state
@@ -1304,7 +1305,7 @@ class PhysicalTransaction:
         session_uuid = UUID()
         b = self.get_branch(branch_uuid)
         files = self.build_files(commit)
-        session = objects.Session(session_uuid, branch_uuid, state, commit, commit, files)
+        session = objects.Session(session_uuid, branch_uuid, state, self.prefix(), commit, commit, files)
         b.sessions.append(session.uuid)
         self.put_branch(b)
         self.put_session(session)
@@ -1915,7 +1916,7 @@ class Project:
                 else:
                     entry.working = None
 
-            session = objects.Session(session_uuid, branch_uuid, 'attached', commit_uuid, commit_uuid, files) 
+            session = objects.Session(session_uuid, branch_uuid, 'attached', prefix, commit_uuid, commit_uuid, files) 
             txn.put_session(session)
 
 
@@ -2200,7 +2201,7 @@ class Project:
                 active = self.active()
                 me = txn.get_branch(active.branch)
                 other = txn.get_name(name)
-                branch = txb.get_branch(other)
+                branch = txn.get_branch(other)
 
                 old_name = me.name
                 txn.set_name(old_name, other)
@@ -2208,7 +2209,7 @@ class Project:
                 branch.name = old_name
                 me.name = name
                 txn.put_branch(me)
-                txn.put_branch(other)
+                txn.put_branch(branch)
             elif rename:
                 active = self.active()
                 old = txn.get_branch(active.branch)
