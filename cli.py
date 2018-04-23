@@ -726,6 +726,7 @@ def main(root, argv, environ):
 
 
     try:
+        code = 0
         if action.mode == "version":
             result = obj.version()
         elif action.mode == "call" or action.mode == "debug":
@@ -735,6 +736,7 @@ def main(root, argv, environ):
         elif action.mode == "error":
             print("error: {}".format(", ".join(action.errors)))
             result = obj.help(action.path, usage=action.argv.get('usage'))
+            code = -1
 
         if result is not None:
             line = None
@@ -747,7 +749,7 @@ def main(root, argv, environ):
                 elif line is not None:
                     print(line)
                 sys.stdout.flush()
-            return 0
+            return code
     except Error as e:
         print()
         print(e.value)

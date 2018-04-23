@@ -104,11 +104,11 @@ def Init(directory, working, config, prefix, include, ignore):
 
 
 vex_undo = vex_cmd.subcommand('undo', short="undo the last command")
-@vex_undo.run('--list?')
-def Undo(list):
+@vex_undo.run()
+def Undo():
     """
         `vex undo` will return the project to how it was before the last command changed 
-        things. running `vex history` will show the list of commands that can be undone.
+        things. running `vex undo:list` will show the list of commands that can be undone.
 
         for example:
 
@@ -124,35 +124,49 @@ def Undo(list):
         - calling `vex undo` after creating a branch with `vex new` will switch back
         to the old branch, but save the existing local changes incase `vex redo` is called.
 
-        `vex undo --list` shows the list of commands that have been performed,
+        `vex undo:list` shows the list of commands that have been performed,
         and the order they will be undone in.
 
-        similarly `vex redo --list` shows the actions that can be redone.
-"""
+        similarly `vex redo:list` shows the actions that can be redone.
+    """
 
     p = get_project()
 
-    if list:
-        count = 0
-        for entry,redos in p.list_undos():
-            count -= 1
-            alternative = ""
-            if len(redos) == 1:
-                alternative = "(then ran but undid: {})".format(redos[0])
-            elif len(redos) > 0:
-                alternative = "(then ran but undid: {}, and {} )".format(",".join(redos[:-1]), redos[-1])
+    with p.lock('undo') as p:
+        action = p.undo()
+    if action:
+        yield ('undid', action.command)
 
-            yield "{}: {}, ran {}\t{}".format(count, entry.time, entry.command,alternative)
-            yield ""
-    else:
-        with p.lock('undo') as p:
-            action = p.undo()
-        if action:
-            yield ('undid', action.command)
+vex_undo_list = vex_undo.subcommand('list', short="list the commands that canbe undone")
+@vex_undo_list.run()
+def UndoList():
+    """
+        `vex undo` will return the project to how it was before the last command changed 
+        things. running `vex undo:list` will show the list of commands that can be undone.
+
+        `vex undo:list` shows the list of commands that have been performed,
+        and the order they will be undone in.
+
+        similarly `vex redo:list` shows the actions that can be redone.
+    """
+
+    p = get_project()
+
+    count = 0
+    for entry,redos in p.list_undos():
+        count -= 1
+        alternative = ""
+        if len(redos) == 1:
+            alternative = "(then ran but undid: {})".format(redos[0])
+        elif len(redos) > 0:
+            alternative = "(then ran but undid: {}, and {} )".format(",".join(redos[:-1]), redos[-1])
+
+        yield "{}: {}, ran {}\t{}".format(count, entry.time, entry.command,alternative)
+        yield ""
 
 vex_redo = vex_cmd.subcommand('redo', "redo last undone command")
-@vex_redo.run('--list? --choice:int')
-def Redo(list, choice):
+@vex_redo.run('--choice:int')
+def Redo(choice):
     """
         `vex redo` will redo the last action undone. `vex redo --list` will show the
         list of commands to choose from.
@@ -171,20 +185,14 @@ def Redo(list, choice):
 
         if you do a different action after undo, you can still undo and redo.
 
-        `vex redo --list` shows the actions that can be redone and `vex redo --choice=<n>` picks one.
+        `vex redo:list` shows the actions that can be redone and `vex redo --choice=<n>` picks one.
     """
     p = get_project(empty=False)
 
     with p.lock('redo') as p:
         choices = p.list_redos()
 
-        if list:
-            if choices:
-                for n, choice in enumerate(choices):
-                    yield "{}: {}, {}".format(n, choice.time, choice.command)
-            else:
-                yield ('Nothing to redo')
-        elif choices:
+        if choices:
             choice = choice or 0
             action = p.redo(choice)
             if action:
@@ -192,6 +200,24 @@ def Redo(list, choice):
         else:
             yield ('Nothing to redo')
 
+
+vex_redo_list = vex_redo.subcommand('list', "list the commands that can be redone")
+@vex_redo_list.run()
+def RedoList():
+    """
+        `vex redo` will redo the last action undone. `vex redo:list` will show the
+        list of commands to choose from.
+    """
+    p = get_project(empty=False)
+
+    with p.lock('redo') as p:
+        choices = p.list_redos()
+
+        if choices:
+            for n, choice in enumerate(choices):
+                yield "{}: {}, {}".format(n, choice.time, choice.command)
+        else:
+            yield ('Nothing to redo')
 
 
 vex_status = vex_cmd.subcommand('status', short="list the files being tracked by vex")
