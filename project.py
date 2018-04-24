@@ -1275,11 +1275,11 @@ class PhysicalTransaction:
 
         return self.project.setting.get(name)
 
-    def create_branch(self, name, from_commit, from_branch, fork):
+    def create_branch(self, name, prefix, from_commit, from_branch, fork):
         branch_uuid = UUID()
         origin = self.get_branch(from_branch)
         upstream = from_branch if not fork else None
-        b = objects.Branch(branch_uuid, name, 'created', self.prefix(), from_commit, from_commit, origin.init, upstream, [])
+        b = objects.Branch(branch_uuid, name, 'created', prefix, from_commit, from_commit, origin.init, upstream, [])
         self.put_branch(b)
         return b
 
@@ -1287,7 +1287,7 @@ class PhysicalTransaction:
         session_uuid = UUID()
         b = self.get_branch(branch_uuid)
         files = self.build_files(commit)
-        session = objects.Session(session_uuid, branch_uuid, state, self.prefix(), commit, commit, files)
+        session = objects.Session(session_uuid, branch_uuid, state, b.prefix, commit, commit, files)
         b.sessions.append(session.uuid)
         self.put_branch(b)
         self.put_session(session)
@@ -2243,7 +2243,8 @@ class Project:
                 active = self.active()
                 from_branch = active.branch
                 from_commit = active.commit
-                branch = txn.create_branch(name, from_commit, from_branch, fork=False)
+                prefix = active.prefix
+                branch = txn.create_branch(name, prefix, from_commit, from_branch, fork=False)
                 branch_uuid = branch.uuid
             else:
                 branch = txn.get_branch(branch_uuid)
@@ -2269,9 +2270,12 @@ class Project:
             if txn.get_name(name):
                 raise VexArgument('branch {} already exists'.format(name))
             active = self.active()
+            # bug: should pick commit from branch...
+            if not from_branch: prefix = active.prefix
             if not from_branch: from_branch = active.branch
             if not from_commit: from_commit = active.commit
-            branch = txn.create_branch(name, from_commit, from_branch, fork)
+            if not prefix: prefix = txn.get_branch(from_branch).prefix
+            branch = txn.create_branch(name, prefix, from_commit, from_branch, fork)
             session = txn.create_session(branch.uuid, 'attached', branch.head)
 
         with self.do_switch('branch:new {}'.format(name)) as txn:
