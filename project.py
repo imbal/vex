@@ -1,4 +1,30 @@
 #!/usr/bin/env python3
+"""
+    vex - a database for files
+
+    this file depends on rson.py for serialization
+    and is included in vex.py
+
+    this file contains:
+
+    - objects
+        commits, changelogs, things written to and from disk
+    - stores
+        things to store the objects on disk
+    - history
+        a transactional-ish log of items 
+    - transaction
+        a class that represents changes to the project
+        physical: old, new values of entire object
+        logical: smaller updates to objects
+    - project
+        a class that wires up everything,
+        a method inside will:
+            ask for a transaction
+            perform changes without applying them to project
+            tell the history it is about to do something
+            apply those changes
+"""
 import os
 import fcntl
 import time
@@ -14,25 +40,29 @@ from datetime import datetime, timezone
 from uuid import uuid4
 from contextlib import contextmanager
 
-from cli import Command
 import rson
 
 def UUID(): return str(uuid4())
 def NOW(): return datetime.now(timezone.utc)
 
+# If you check a last modified time, it should be reasonably in the past
+# if too close to current time, may miss any current modificatons
+
 MTIME_GRACE_SECONDS = 0.5
 
 class VexError(Exception): pass
 
-# Should not happen
-class VexBug(VexError): pass
-class VexCorrupt(VexError): pass
+# Should not happen: bad state reached internally
+# always throws exception
 
-# Can happen
+class VexBug(Exception): pass
+class VexCorrupt(Exception): pass
+
+# Can happen: bad environment/arguments
 class VexLock(Exception): pass
 class VexArgument(VexError): pass
 
-# State Errors
+# Recoverable State Errors
 class VexNoProject(VexError): pass
 class VexNoHistory(VexError): pass
 class VexUnclean(VexError): pass
@@ -640,7 +670,10 @@ class HistoryStore:
 
     def exists(self):
         if os.path.exists(self.file):
-            return bool(self.current())
+            c = self.db.cursor()
+            c.execute('''SELECT name FROM sqlite_master WHERE name='current' ''')
+            if bool(c.fetchone()):
+                return bool(self.current())
 
     def current(self):
         c = self.db.cursor() 
@@ -716,7 +749,7 @@ class History:
         self.store.set_next(('init', self.START, None))
 
     def empty(self):
-        return self.store.current() in (self.START,)
+        return self.store.exists() and self.store.current() in (self.START,)
 
     def clean_state(self):
         if self.store.exists():
@@ -1136,6 +1169,7 @@ class PhysicalTransaction:
             if not entries:
                 return None
             elif changed:
+                entries = {k:entries[k] for k in sorted(entries)}
                 if root:
                     return self.put_manifest(objects.Root(entries, properties))
                 else:
@@ -1934,11 +1968,11 @@ class Project:
         with self.do_without_undo('diff') as txn:
             session = txn.refresh_active()
             files = [txn.full_to_repo_path(filename) for filename in files] if files else None
-            changesset = txn.active_changeset(files)
+            changeset = txn.active_changeset(files)
 
             output = {}
-            for name in changeset:
-                e, c = session.files[name], changes[name]
+            for name, c in changeset.items():
+                e = session.files[name]
                 if e.kind == 'file':
                     output[name] = dict(old=self.vex.files.filename(e.addr), new=self.repo_to_full_path(self.prefix(),name))
             output2 = {}

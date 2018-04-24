@@ -16,7 +16,9 @@ def get_project(check=True, empty=True):
             break
         new_working_dir = os.path.split(working_dir)[0]
         if new_working_dir == working_dir:
-            raise VexNoProject('No vex project found in {}'.format(os.getcwd()))
+            if check:
+                raise VexNoProject('No vex project found in {}'.format(os.getcwd()))
+            return None
         working_dir = new_working_dir
     p = Project(config_dir, working_dir)
     if check:
@@ -60,7 +62,7 @@ def Error(path, args, exception, traceback):
 
     p = get_project(check=False)
 
-    if p.exists() and not p.clean_state():
+    if p and p.exists() and not p.clean_state():
         p.rollback_new_action()
 
         if not p.clean_state():

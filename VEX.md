@@ -148,13 +148,17 @@ By default, `vex init name` creates a repository with a `/name` directory inside
 
 - `vex branch` what branch are you on
 
-- `vex new` create a new branch
+- `vex branch:new` create a new branch
 
-- `vex open` start/create a new branch
+- `vex branch:open` open existing branch
 
-- `vex saveas`  (see `git checkout -b`)
+- `vex branch:saveas`  (see `git checkout -b`)
 
-- `vex close` *
+- `vex branch:swap`  
+
+- `vex branch:rename` 
+
+- `vex branch:close` *
 
 - `vex branches` list all branches
 
