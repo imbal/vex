@@ -110,9 +110,15 @@ By default, `vex init name` creates a repository with a `/name` directory inside
 
 - `vex remove` *
 
-- `vex ignore` *
+- `vex ignore` 
+
+- `vex include`
 
 - `vex restore` *
+
+### File properties
+
+- `vex fileprops:set`
 
 ### Inspecting changes
 
@@ -244,29 +250,18 @@ Sets a `/.vex/settings/policy` file inside a branch
 
 - `vex lock <branch>`
 
-- `vex 
-
 - `vex branch:set ..`
-
-### File properties
-
-- `vex properties:set`
 
 ### Subcommands
 
 Store some environment variables and entry points in a settings file, and run those commands
 
 - `vex env`
-
+- `vex exec` 
 - `vex make`
-
 - `vex test`
 
-- `vex grep'
-
-- `vex exec` 
-
- `/.vex/settings/bin/x
+Files in `/.vex/settings/bin/x` can be run with `vex run x`
 
 ### Scripting
 
