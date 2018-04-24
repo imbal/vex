@@ -1329,6 +1329,7 @@ class LogicalTransaction:
         self.prefix = {'old': self.project.prefix(), 'new': new_prefix}
 
     def switch_session(self, new_session):
+        if isinstance(new_session, objects.Session): raise VexBug()
         self.active_session = {'old': self.project.state.get('active'), 'new': new_session}
 
     def set_branch_state(self, uuid, state):
@@ -1347,6 +1348,20 @@ class LogicalTransaction:
             old = self.project.sessions.get(uuid)
             self.new_session_states[uuid] = state
             self.old_session_states[uuid] = old.state
+
+    def get_name(self, name):
+        if name in self.new_names:
+            return self.new_names[names]
+        if self.project.names.exists(name):
+            return self.project.names.get(name)
+
+    def set_name(self, name, branch):
+        if name not in self.old_names:
+            if self.project.names.exists(name):
+                self.old_names[name] = self.project.names.get(name)
+            else:
+                self.old_names[name] = None
+        self.new_names[name] = branch
 
     def action(self):
         branches = dict(old=self.old_branch_states, new=self.new_branch_states)
@@ -1483,7 +1498,7 @@ class Project:
         with self.history.rollback_new() as action:
             if action:
                 if isinstance(action, objects.Action):
-                    self.apply_changes('old', action.changes)
+                    self.apply_physical_changes('old', action.changes)
                 elif isinstance(action, objects.Switch):
                     # raise VexUnimplemented('this should probably pass but ...')
                     pass
@@ -1496,7 +1511,7 @@ class Project:
             if action:
                 if isinstance(action, objects.Action):
                     self.copy_blobs(action.blobs)
-                    self.apply_changes('new', action.changes)
+                    self.apply_physical_changes('new', action.changes)
                 elif isinstance(action, objects.Switch):
                     pass
                 else:
@@ -1514,7 +1529,7 @@ class Project:
             if any(action.blobs.values()):
                 raise VexBug(action.blobs)
             if action.changes:
-                self.apply_changes('new', action.changes)
+                self.apply_physical_changes('new', action.changes)
 
     @contextmanager
     def do(self, command):
@@ -1528,7 +1543,7 @@ class Project:
                 return
             if isinstance(action, objects.Action):
                 self.copy_blobs(action.blobs)
-                self.apply_changes('new', action.changes)
+                self.apply_physical_changes('new', action.changes)
             else:
                 raise VexBug('action')
 
@@ -1544,6 +1559,7 @@ class Project:
                 return
             if isinstance(action, objects.Switch):
                 self.apply_switch('new', action.prefix, action.active)
+                self.apply_logical_changes('new', action.session_states, action.branch_states, action.names)
             else:
                 raise VexBug('action')
 
@@ -1557,7 +1573,20 @@ class Project:
         return self.vex.files.get_file(addr)
 
     # Take Action.changes and applies them to project
-    def apply_changes(self, kind, changes):
+    def apply_logical_changes(self, kind, session_states, branch_states, names):
+        for name,value in session_states[kind].items():
+            session = self.sessions.get(name)
+            session.state = value
+            self.sessions.set(name, branch)
+        for name,value in branch_states[kind].items():
+            branch = self.branches.get(name)
+            branch.state = value
+            self.branches.set(name, branch)
+        for name,value in names[kind].items():
+            self.names.set(name, value)
+
+    # Take Action.changes and applies them to project
+    def apply_physical_changes(self, kind, changes):
         for key in changes:
             if key == 'branches':
                 for name,value in changes['branches'][kind].items():
@@ -1603,6 +1632,7 @@ class Project:
             new_session = session[kind]
             if (kind =='new' and active_session != session['old']) or (kind =='old' and active_session != session['new']):
                 raise VexCorrupt('switch out of sync')
+            new_prefix = self.sessions.get(new_session).prefix
         else:
             uuid = self.state.get('active')
             active_session, new_session = uuid, uuid
@@ -1612,10 +1642,7 @@ class Project:
         # check after stash, as it might be same
         new = self.sessions.get(new_session)
         self.clear_session(active_prefix, active)
-        try:
-            self.restore_session(new_prefix, new)
-        except:
-            self.restore_session(active_prefix, active)
+        self.restore_session(new_prefix, new)
 
 
     def stash_session(self, session, files=None):
@@ -1716,6 +1743,7 @@ class Project:
                 pass
             else:
                 raise VexBug('kind')
+        session.prefix = prefix
         self.sessions.set(session.uuid, session)
         self.state.set('prefix', prefix)
         self.state.set('active', session.uuid)
@@ -1786,11 +1814,13 @@ class Project:
             if not action:
                 return
             if isinstance(action, objects.Action):
-                self.apply_changes('old', action.changes)
+                self.apply_physical_changes('old', action.changes)
             elif isinstance(action, objects.Switch):
                 self.apply_switch('old', action.prefix, action.active)
+                self.apply_logical_changes('old', action.session_states, action.branch_states, action.names)
             else:
                 raise VexBug('action')
+            return action
 
     def list_undos(self):
         return self.history.entries()
@@ -1800,11 +1830,13 @@ class Project:
             if not action:
                 return
             if isinstance(action, objects.Action):
-                self.apply_changes('new', action.changes)
+                self.apply_physical_changes('new', action.changes)
             elif isinstance(action, objects.Switch):
                 self.apply_switch('new', action.prefix, action.active)
+                self.apply_logical_changes('new', action.session_states, action.branch_states, action.names)
             else:
                 raise VexBug('action')
+            return action
 
     def list_redos(self):
         return self.history.redo_choices()
@@ -1836,8 +1868,6 @@ class Project:
             raise VexArgument('bad arg')
         if new_prefix not in self.active().files and new_prefix != "/":
             raise VexArgument('bad prefix')
-        with self.do_without_undo('switch') as txn:
-            txn.refresh_active()
         with self.do_switch('switch') as txn:
             txn.switch_prefix(new_prefix)
 
@@ -1958,7 +1988,6 @@ class Project:
 
             old_uuid = session.prepare
             old = txn.get_commit(session.prepare)
-            n = old.next_n(kind)
             while old and isinstance(old, objects.Prepare):
                 changes.prepend_changes(old.changes)
                 old_uuid = old.prepared
@@ -1968,7 +1997,7 @@ class Project:
             if not changes:
                 return False
 
-        return self.commit_changeset(changes, kind=objects.Amend, command='amend')
+        return self.commit_changeset(changes, kind=objects.Amend, command='amend', summary='amended summary', message='amended message')
 
     def commit_prepared(self):
         kind = objects.Commit
@@ -1988,7 +2017,7 @@ class Project:
             if not changes:
                 return False
 
-        return self.commit_changeset(changes, old_uuid, kind, command)
+        return self.commit_changeset(changes, old_uuid, kind, command, "summary", "message")
 
     def commit(self, files):
         kind = objects.Commit
@@ -2011,9 +2040,9 @@ class Project:
             if not changes:
                 return False
 
-        return self.commit_changeset(changes, old_uuid, kind, command)
+        return self.commit_changeset(changes, old_uuid, kind, command, "summary", "message")
 
-    def commit_changeset(self, changeset, old_uuid, kind, command):
+    def commit_changeset(self, changeset, old_uuid, kind, command, summary, message):
         with self.do(command) as txn:
             session = txn.active()
             old = txn.get_commit(old_uuid)
@@ -2027,7 +2056,7 @@ class Project:
 
             author = txn.get_state('author')
 
-            changelog = objects.Changelog(prev=old.changelog, summary="Summary", message="Message", changes=changeset, author=author)
+            changelog = objects.Changelog(prev=old.changelog, summary=summary, message=message, changes=changeset, author=author)
             changelog_uuid = txn.put_manifest(changelog)
 
             n = old.next_n(kind)
@@ -2164,7 +2193,7 @@ class Project:
 
     def stash(self, files=None):
         files = self.check_files(files) if files is not None else None
-        with self.do_without_undo('save') as txn:
+        with self.do_without_undo('debug:stash') as txn:
             files = [txn.full_to_repo_path(filename) for filename in files] if files else None
             self.stash_session(txn.active(), files)
 
@@ -2220,19 +2249,19 @@ class Project:
                 branch = txn.get_branch(branch_uuid)
             sessions = [txn.get_session(uuid) for uuid in branch.sessions]
             if session_uuid:
-                sessions = [s for s in sessions if s.state == 'attached']
-            else:
                 sessions = [s for s in sessions if s.uuid == session_uuid]
+            else:
+                sessions = [s for s in sessions if s.state == 'attached']
             if not sessions:
                 session = txn.create_session(branch_uuid, 'attached', branch.head)
                 session_uuid = session.uuid
                 branch.sessions.append(session_uuid)
                 txn.put_branch(branch)
             elif len(sessions) == 1:
-                session_uuid = sessions[0]
+                session_uuid = sessions[0].uuid
             else:
                 raise VexArgument('welp, too many attached sessions')
-        with self.do_switch('open {}'.format(name)) as txn:
+        with self.do_switch('branch:open {}'.format(name)) as txn:
             txn.switch_session(session_uuid)
 
     def new_branch(self, name, from_branch=None, from_commit=None, fork=False):
@@ -2244,13 +2273,11 @@ class Project:
             if not from_commit: from_commit = active.commit
             branch = txn.create_branch(name, from_commit, from_branch, fork)
             session = txn.create_session(branch.uuid, 'attached', branch.head)
-            txn.set_name(name, branch.uuid)
 
-        with self.do_switch('new') as txn:
+        with self.do_switch('branch:new {}'.format(name)) as txn:
             txn.set_branch_state(branch.uuid, "active")
             txn.switch_session(session.uuid)
-            # XXX move setting name into here
-            # if branch upstream diff, set prefix XXX
+            txn.set_name(name, branch.uuid)
 
 
 def get_project(check=True, empty=True):

@@ -148,7 +148,7 @@ def Undo():
     with p.lock('undo') as p:
         action = p.undo()
     if action:
-        yield ('undid', action.command)
+        yield 'undid {}'.format(action.command)
 
 vex_undo_list = vex_undo.subcommand('list', short="list the commands that canbe undone")
 @vex_undo_list.run()
@@ -209,7 +209,7 @@ def Redo(choice):
             choice = choice or 0
             action = p.redo(choice)
             if action:
-                yield ('redid', action.command)
+                yield 'redid {}'.format(action.command)
         else:
             yield ('Nothing to redo')
 
