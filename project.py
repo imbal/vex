@@ -659,7 +659,9 @@ class HistoryStore:
         c.execute('''
             create table if not exists next(
                 id INTEGER PRIMARY KEY CHECK (id = 0) default 0,
-                value text not null)
+                mode text not null,
+                value text not null,
+                current text)
         ''')
         c.execute('''
             create table if not exists current (
@@ -684,10 +686,10 @@ class HistoryStore:
 
     def next(self):
         c = self.db.cursor() 
-        c.execute('select value from next where id = 0')
+        c.execute('select mode, value, current from next where id = 0')
         row = c.fetchone()
         if row:
-            return codec.parse(row[0])
+            return str(row[0]), str(row[1]), str(row[2])
 
     def set_current(self, value):
         if not value: raise Exception()
@@ -697,11 +699,10 @@ class HistoryStore:
         c.execute('insert or ignore into current (id,value) values (0,?)',[buf])
         self.db.commit()
 
-    def set_next(self, value):
+    def set_next(self, mode, value, current):
         c = self.db.cursor() 
-        buf = codec.dump(value)
-        c.execute('update next set value = ? where id = 0', [buf])
-        c.execute('insert or ignore into next (id,value) values (0,?)',[buf])
+        c.execute('update next set mode = ?, value=?, current = ? where id = 0', [mode, value, current])
+        c.execute('insert or ignore into next (id,mode, value,current) values (0,?,?,?)',[mode, value, current])
         self.db.commit()
 
     def get_entry(self, addr):
@@ -746,7 +747,7 @@ class History:
     def makedirs(self):
         self.store.makedirs()
         self.store.set_current(self.START)
-        self.store.set_next(('init', self.START, None))
+        self.store.set_next('init', self.START, None)
 
     def empty(self):
         return self.store.exists() and self.store.current() in (self.START,)
@@ -773,11 +774,11 @@ class History:
             raise VexCorrupt('Project history not in a clean state.')
         current = self.store.current()
         addr = self.store.put_entry(current, action)
-        self.store.set_next(['quiet', addr , current])
+        self.store.set_next('quiet', addr , current)
 
         yield action
 
-        self.store.set_next(['do', current, current])
+        self.store.set_next('do', current, current)
 
     @contextmanager
     def do(self, obj):
@@ -786,7 +787,7 @@ class History:
         current = self.store.current()
 
         addr = self.store.put_entry(current, obj)
-        self.store.set_next(('do', addr,current))
+        self.store.set_next('do', addr,current)
 
         yield obj
 
@@ -805,7 +806,7 @@ class History:
 
         redos = [current]
         redos.extend(self.store.get_redos(prev))
-        self.store.set_next(('undo', prev, current))
+        self.store.set_next('undo', prev, current)
 
         yield obj
 
@@ -827,7 +828,7 @@ class History:
         do = redos.pop(n)
 
         prev, obj = self.store.get_entry(do)
-        self.store.set_next(('redo', do, current))
+        self.store.set_next('redo', do, current)
 
         yield obj
 
@@ -850,7 +851,7 @@ class History:
         if current != old_current:
             raise VexCorrupt('History is really corrupted: Interrupted transaction did not come after current change')
         yield obj
-        self.store.set_next(['rollback', old_current, None])
+        self.store.set_next('rollback', old_current, None)
 
     @contextmanager
     def restart_new(self):
@@ -868,7 +869,7 @@ class History:
             raise VexCorrupt('History is really corrupted: Interrupted transaction did not come after current change')
         yield obj
         if mode == 'quiet':
-            self.store.set_next(['restart', old_current, None])
+            self.store.set_next('restart', old_current, None)
         else:
             self.store.set_current(['restart', next, None])
 
