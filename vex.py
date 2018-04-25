@@ -72,7 +72,14 @@ def Error(path, args, exception, traceback):
 
 
 vex_init = vex_cmd.subcommand('init',short="create a new vex project")
-@vex_init.run('--working --config --prefix --include... --ignore... [directory]')
+@vex_init.run('''
+    --working    # Working directory, where files are edited/changed
+    --config     # Normally /working_dir/.vex if not given 
+    --prefix     # Subdirectory to check out of the repository, normally the working directory name
+    --include... # files to include whe using vex add, can be passed multiple times 
+    --ignore...  # files to ignore when using vex add, can be passed multiple times
+    [directory]  #
+''')
 def Init(directory, working, config, prefix, include, ignore):
     """
         Create a new vex project in a given directory. 
@@ -90,6 +97,9 @@ def Init(directory, working, config, prefix, include, ignore):
 
         `init` takes multiple `--include=<file>` and `--ignore=<file>` arguments, 
         defaulting to `--include='*' --ignore='.vex' --ignore='.*'`
+
+        `--include`, `--ignore`, can be passed multiple times, and work the 
+        same as `vex include 'pattern'` and `vex ignore 'pattern'`
 
     """
 

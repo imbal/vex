@@ -491,23 +491,22 @@ class CommandDescription:
         full_name = list(self.prefix)
         full_name.append(self.name)
         full_name = "{}{}{}".format(full_name[0], (" " if full_name[1:] else ""), ":".join(full_name[1:]))
-        output.append("{}{}{}".format(full_name, (" -- " if self.short else ""), self.short or ""))
+        output.append("Name: {}{}{}".format(full_name, (" -- " if self.short else ""), self.short or ""))
 
         output.append("")
 
         output.append(self.usage(group=None))
         output.append("")
 
-        if self.long:
-            output.append('description:')
-            output.append(self.long)
-            output.append("")
-
         if self.argspec and self.argspec.descriptions:
-            output.append('options:')
+            output.append('Options:')
             for name, desc in self.argspec.descriptions.items():
-                output.append('\t{}\t{}'.format(name, desc))
+                output.append('  --{}\t{}'.format(name, desc))
             output.append('')
+
+        if self.long:
+            output.append('Description: {}'.format(self.long))
+            output.append("")
 
         if self.subcommands:
             output.append("commands:") 
@@ -540,7 +539,7 @@ class CommandDescription:
                 args.append("[<{}>...]".format(self.argspec.tail))
 
 
-            output.append("usage: {0} {1}".format(full_name, " ".join(args)))
+            output.append("Usage: {0} {1}".format(full_name, " ".join(args)))
         subcommands = self.groups[group]
         subcommands = "|".join(subcommands)
         if group is None and len(self.groups) > 1:
