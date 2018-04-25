@@ -182,9 +182,9 @@ def UndoList():
         count -= 1
         alternative = ""
         if len(redos) == 1:
-            alternative = "(then ran but undid: {})".format(redos[0])
+            alternative = "(then ran but undid: {})".format(redos[0].command)
         elif len(redos) > 0:
-            alternative = "(then ran but undid: {}, and {} )".format(",".join(redos[:-1]), redos[-1])
+            alternative = "(then ran but undid: {}, and {} )".format(",".join(r.command for r in redos[:-1]), redos[-1].command)
 
         yield "{}: {}, ran {}\t{}".format(count, entry.time, entry.command,alternative)
         yield ""
@@ -367,7 +367,6 @@ def Commit(prepared, add, file):
 
     """
     p = get_project()
-    yield ('Committing')
     with p.lock('commit') as p:
         if add:
             for f in p.add([os.getcwd()]):
@@ -377,14 +376,18 @@ def Commit(prepared, add, file):
         cwd = os.getcwd()
         files = [os.path.join(cwd, f) for f in file] if file else None
         if prepared and not files:
-            done = p.commit_prepared()
+            changes = p.commit_prepared()
         else:
-            done = p.commit(files)
+            changes = p.commit(files)
 
-        if done:
-            yield 'Committed'
+        if changes:
+            for name, entries in changes.items():
+                entries = [entry.text for entry in entries]
+                name = os.path.relpath(name, p.prefix())
+                yield "commit: {}, {}".format(', '.join(entries), name)
+
         else:
-            yield 'Nothing to commit'
+            yield 'commit: Nothing to commit'
 
 vex_amend = vex_cmd_commit.subcommand('amend', short="replace the last commit with the current changes in the project")
 @vex_amend.run('[file...]')

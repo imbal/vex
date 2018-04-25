@@ -241,6 +241,16 @@ class objects:
         pass
 
 
+    ###  Changelog and entries
+
+    @codec.register
+    class Changelog:
+        def __init__(self, prev, summary, author, changes, message):
+            self.prev = prev
+            self.summary = summary
+            self.author = author
+            self.message = message
+            self.changes = changes
     @codec.register_literal # means it becomes @Changeset <entries> not @Changeset {entries: ...}
     class Changeset:
         def __init__(self, entries):
@@ -264,55 +274,54 @@ class objects:
 
         def __bool__(self):
             return bool(self.entries)
-    # Changelog and entries
-    @codec.register
-    class Changelog:
-        def __init__(self, prev, summary, author, changes, message):
-            self.prev = prev
-            self.summary = summary
-            self.author = author
-            self.message = message
-            self.changes = changes
 
     @codec.register
     class AddFile:
+        text = "added file"
         def __init__(self, addr, properties):
             self.addr = addr
             self.properties = properties
 
     @codec.register
     class NewFile:
+        text = "replaced with file"
         def __init__(self, addr, properties):
             self.addr = addr
             self.properties = properties
 
     @codec.register
     class DeleteFile:
+        text = "deleted file"
         def __init__(self):
             pass
 
     @codec.register
     class ChangeFile:
+        text = "changed file"
         def __init__(self, addr, properties):
             self.properties = properties
             self.addr = addr
 
     @codec.register
     class AddDir:
+        text = "added directory"
         def __init__(self, properties):
             self.properties = properties
 
     @codec.register
     class NewDir:
+        text = "replaced with directory"
         def __init__(self, properties):
             self.properties = properties
     @codec.register
     class DeleteDir:
+        text= "deleted directory"
         def __init__(self):
             pass
 
     @codec.register
     class ChangeDir:
+        text = "changed directory"
         def __init__(self, addr, properties):
             self.properties = properties
             self.addr = addr
@@ -724,15 +733,14 @@ class HistoryStore:
         c = self.db.cursor() 
         c.execute('select dos from redos where addr = ?', [addr])
         row = c.fetchone()
-        if row:
-            row = codec.parse(row[0])
-        if row:
+        if row and row[0]:
+            row = str(row[0]).split(",")
             return row
         return []
 
     def set_redos(self, addr, redo):
         c = self.db.cursor() 
-        buf = codec.dump(redo)
+        buf = ",".join(redo) if redo else ""
         c.execute('update redos set dos = ? where addr = ?', [buf, addr])
         self.db.commit()
         c.execute('insert or ignore into redos (addr,dos) values (?,?)',[addr, buf])
@@ -762,7 +770,7 @@ class History:
         out = []
         while current != self.START:
             prev, obj = self.store.get_entry(current)
-            redos = [self.store.get_entry(x)[1].command for x in self.store.get_redos(current)]
+            redos = [self.store.get_entry(x)[1] for x in self.store.get_redos(current)]
             out.append((obj, redos))
             current = prev
 
@@ -1992,7 +2000,7 @@ class Project:
             changeset = txn.active_changeset(files)
 
             if not changeset:
-                return False
+                return None
 
         with self.do('prepare') as txn:
             prepare = session.prepare
@@ -2012,6 +2020,7 @@ class Project:
             prepare_uuid = txn.put_commit(prepare)
 
             txn.set_active_prepare(prepare_uuid)
+        return changeset
 
     def amend(self, files):
         files = self.check_files(files) if files else None
@@ -2030,7 +2039,7 @@ class Project:
 
 
             if not changes:
-                return False
+                return None
 
         return self.commit_changeset(changes, kind=objects.Amend, command='amend', summary='amended summary', message='amended message')
 
@@ -2050,7 +2059,7 @@ class Project:
 
 
             if not changes:
-                return False
+                return None
 
         return self.commit_changeset(changes, old_uuid, kind, command, "summary", "message")
 
@@ -2073,7 +2082,7 @@ class Project:
 
 
             if not changes:
-                return False
+                return None
 
         return self.commit_changeset(changes, old_uuid, kind, command, "summary", "message")
 
@@ -2101,7 +2110,7 @@ class Project:
             txn.set_active_commit(commit_uuid)
 
 
-            return True
+            return changeset
 
     def add(self, files):
         files = self.check_files(files)
