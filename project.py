@@ -69,6 +69,33 @@ class VexUnclean(VexError): pass
 
 class VexUnfinished(VexError): pass
 
+
+class LockFile:
+    def __init__(self, lockfile):
+        self.lockfile = lockfile
+
+    def makelock(self):
+        with open(self.lockfile, 'xb') as fh:
+            fh.write(b'# created by %d at %a\n'%(os.getpid(), str(NOW())))
+
+    @contextmanager
+    def __call__(self, command):
+        try:
+            fh = open(self.lockfile, 'wb')
+            fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except (IOError, FileNotFoundError):
+            raise VexLock('Cannot open project lockfile: {}'.format(self.lockfile))
+        try:
+            fh.truncate(0)
+            fh.write(b'# locked by %d at %a\n'%(os.getpid(), str(NOW())))
+            fh.write("{}".format(command).encode('utf-8'))
+            fh.write(b'\n')
+            fh.flush()
+            yield self
+            fh.write(b'# released by %d %a\n'%(os.getpid(), str(NOW())))
+        finally:
+            fh.close()
+
 class Codec:
     def __init__(self):
         self.classes = {}
@@ -1440,7 +1467,7 @@ class Project:
         self.state =      DirStore(os.path.join(config_dir, 'state'))
         self.history =   History(os.path.join(config_dir, 'history'))
         self.scratch =   BlobStore(os.path.join(config_dir, 'scratch'))
-        self.lockfile =            os.path.join(config_dir, 'lock')
+        self.lockfile =  LockFile(os.path.join(config_dir, 'lock'))
 
         self.settings =  DirStore(os.path.join(config_dir, 'settings'))
 
@@ -1461,8 +1488,12 @@ class Project:
         self.settings.makedirs()
 
     def makelock(self):
-        with open(self.lockfile, 'xb') as fh:
-            fh.write(b'# created by %d at %a\n'%(os.getpid(), str(NOW())))
+        self.lockfile.makelock()
+
+    @contextmanager
+    def lock(self, command):
+        with self.lockfile(command):
+            yield self
 
     def exists(self):
         return os.path.exists(self.config_dir)
@@ -1515,26 +1546,6 @@ class Project:
             output.append(filename)
         return files
 
-
-    __locked = object()
-
-    @contextmanager
-    def lock(self, command):
-        try:
-            fh = open(self.lockfile, 'wb')
-            fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except (IOError, FileNotFoundError):
-            raise VexLock('Cannot open project lockfile: {}'.format(self.lockfile))
-        try:
-            fh.truncate(0)
-            fh.write(b'# locked by %d at %a\n'%(os.getpid(), str(NOW())))
-            fh.write(codec.dump(command))
-            fh.write(b'\n')
-            fh.flush()
-            yield self
-            fh.write(b'# released by %d %a\n'%(os.getpid(), str(NOW())))
-        finally:
-            fh.close()
 
     # ... and so are these, but, they interact with the action log
     def rollback_new_action(self):
