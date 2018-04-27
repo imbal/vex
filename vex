@@ -393,10 +393,9 @@ def Prepare(file,watch):
 vex_commit = vex_cmd_commit.subcommand('commit', short="save the working copy and add an entry to the project changes")
 @vex_commit.run('''
     --add?          # Run `vex add` before commiting
-    --prepared?     # Only commit prepared changes, ignore the current state of the working copy
     [file...]       # Commit only a few changed files
 ''')
-def Commit(prepared, add, file):
+def Commit(add, file):
     """
         `vex commit` saves the current state of the project.
 
@@ -410,10 +409,8 @@ def Commit(prepared, add, file):
 
         cwd = os.getcwd()
         files = [os.path.join(cwd, f) for f in file] if file else None
-        if prepared and not files:
-            changes = p.commit_prepared()
-        else:
-            changes = p.commit(files)
+
+        changes = p.commit(files)
 
         if changes:
             for name, entries in changes.items():
@@ -423,6 +420,25 @@ def Commit(prepared, add, file):
 
         else:
             yield 'commit: Nothing to commit'
+
+vex_commit_prepared = vex_commit.subcommand('prepared', short="commit prepared files")
+@vex_commit_prepared.run()
+def CommitPrepared(prepared, add, file):
+    """
+        `vex commit:prepared` transforms earlier `vex prepare` into a commit
+
+    """
+    p = get_project()
+    with p.lock('commit:prepared') as p:
+        changes = p.commit_prepared()
+        if changes:
+            for name, entries in changes.items():
+                entries = [entry.text for entry in entries]
+                name = os.path.relpath(name, p.prefix())
+                yield "commit: {}, {}".format(', '.join(entries), name)
+        else:
+            yield 'commit: Nothing to commit'
+
 
 vex_amend = vex_cmd_commit.subcommand('amend', short="replace the last commit with the current changes in the project")
 @vex_amend.run('''
@@ -575,6 +591,23 @@ def Switch(prefix):
             p.switch(prefix)
     else:
         yield p.prefix()
+
+vex_session = vex_cmd_branch.subcommand('session',short="describe the active session for the current branch")
+vex_sessions = vex_cmd_branch.subcommand('sessions',short="show all sessions for current branch")
+
+@vex_sessions.run()
+def Sessions():
+    p = get_project()
+    with p.lock('sessions') as p:
+        sessions = p.list_sessions()
+        active = p.active()
+        for s in sessions:
+            if s.uuid == active.uuid:
+                yield "{} *".format(s.uuid)
+            else:
+                yield s.uuid
+
+
 
 vex_ignore = vex_cmd_files.subcommand('ignore', short="add ignored files")
 vex_ignore_add = vex_ignore.subcommand('add', 'add ignored files')

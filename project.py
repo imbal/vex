@@ -1514,8 +1514,10 @@ class Repo:
 
     def add_commit_from_scratch(self, addr):
         self.commits.copy_from(self.scratch, addr)
+
     def add_manifest_from_scratch(self, addr):
         self.manifests.copy_from(self.scratch, addr)
+
     def add_file_from_scratch(self, addr):
         self.files.copy_from(self.scratch, addr)
 
@@ -1582,6 +1584,12 @@ class Project:
         if self.state.exists("active"):
             return self.sessions.get(self.state.get("active"))
 
+    def get_branch(self, uuid):
+        return self.branches.get(uuid)
+
+    def get_session(self, uuid):
+        return self.sessions.get(uuid)
+
     def addr_for_file(self, file):
         return self.repo.addr_for_file(file)
 
@@ -1611,7 +1619,6 @@ class Project:
 
     def put_scratch_file(self, value, addr=None):
         return self.repo.put_scratch_file(value, addr)
-
 
     def repo_to_full_path(self, prefix, file):
         file = os.path.normpath(file)
@@ -1908,6 +1915,8 @@ class Project:
                     output.append(p)
         return output
 
+    ###  Commands
+
     def get_fileprops(self,file):
         file = self.check_files([file])[0] if file else None
         with self.do_without_undo('fileprops:get') as txn:
@@ -1924,9 +1933,6 @@ class Project:
             tracked = active.files[file]
             tracked.set_property(name, value)
             txn.put_session(active)
-
-
-    # Commands
 
     def undo(self):
         with self.history.undo() as action:
@@ -2311,12 +2317,6 @@ class Project:
             branches.append((None, branch))
         return branches
 
-    def stash(self, files=None):
-        files = self.check_files(files) if files is not None else None
-        with self.do_without_undo('debug:stash') as txn:
-            files = [txn.full_to_repo_path(filename) for filename in files] if files else None
-            self.stash_session(txn.active(), files)
-
     def swap_branch(self, name, rename=False, swap=False):
         with self.do('branch:swap') as txn:
             active = self.active()
@@ -2402,6 +2402,22 @@ class Project:
             txn.set_branch_state(branch.uuid, "active")
             txn.switch_session(session.uuid)
             txn.set_name(name, branch.uuid)
+
+    def list_sessions(self):
+        out = []
+        active = self.active()
+        branch = self.get_branch(active.branch)
+        for session in branch.sessions:
+            out.append(self.get_session(session))
+        return out
+
+
+    # debug:stash
+    def stash(self, files=None):
+        files = self.check_files(files) if files is not None else None
+        with self.do_without_undo('debug:stash') as txn:
+            files = [txn.full_to_repo_path(filename) for filename in files] if files else None
+            self.stash_session(txn.active(), files)
 
 
 def get_project(check=True, empty=True):
