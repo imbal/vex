@@ -423,7 +423,7 @@ def Commit(add, file):
 
 vex_commit_prepared = vex_commit.subcommand('prepared', short="commit prepared files")
 @vex_commit_prepared.run()
-def CommitPrepared(prepared, add, file):
+def CommitPrepared():
     """
         `vex commit:prepared` transforms earlier `vex prepare` into a commit
 
@@ -607,6 +607,7 @@ def Sessions():
             else:
                 yield s.uuid
 
+# XXX: vex session:add session:new session:attach session:detach session:remove
 
 
 vex_ignore = vex_cmd_files.subcommand('ignore', short="add ignored files")

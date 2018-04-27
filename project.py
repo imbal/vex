@@ -134,11 +134,11 @@ class objects:
     @codec.register
     class Start:
         n = 0
-        def __init__(self, timestamp, *, root, uuid, changelog):
+        def __init__(self, timestamp, *, root, uuid, changesets):
             self.timestamp = timestamp
             self.uuid = uuid
             self.root = root
-            self.changelog = changelog
+            self.changesets = changesets
 
         def next_n(self, kind):
             if kind == objects.Amend:
@@ -148,11 +148,11 @@ class objects:
     @codec.register
     class Fork:
         n = 0
-        def __init__(self, timestamp, *, base, uuid, changelog):
+        def __init__(self, timestamp, *, base, uuid, changesets):
             self.base = base
             self.timestamp = timestamp
             self.uuid = uuid
-            self.changelog = changelog
+            self.changesets = changesets
 
         def next_n(self, kind):
             if kind == objects.Amend:
@@ -161,21 +161,21 @@ class objects:
 
     @codec.register
     class Stop:
-        def __init__(self, n, timestamp, *, prev, uuid, changelog):
+        def __init__(self, n, timestamp, *, prev, uuid, changesets):
             self.n =n
             self.prev = prev
             self.timestamp = timestamp
             self.uuid = uuid
-            self.changelog = changelog
+            self.changesets = changesets
 
     @codec.register
     class Restart:
         n = 0
-        def __init__(self, n, timestamp, *, prev, base, changelog):
+        def __init__(self, n, timestamp, *, prev, base, changesets):
             self.prev = prev
             self.base = base
             self.timestamp = timestamp
-            self.changelog = changelog
+            self.changesets = changesets
 
         def next_n(self, kind):
             if kind == objects.Amend:
@@ -201,13 +201,13 @@ class objects:
 
     @codec.register
     class Commit:
-        def __init__(self, n, timestamp, *, prev, prepared, root, changelog):
+        def __init__(self, n, timestamp, *, prev, prepared, root, changesets):
             self.n =n
             self.prev = prev
             self.prepared = prepared
             self.timestamp = timestamp
             self.root = root
-            self.changelog = changelog
+            self.changesets = changesets
 
         def next_n(self, kind):
             if kind in (objects.Amend, objects.Prepare):
@@ -216,13 +216,13 @@ class objects:
 
     @codec.register
     class Amend:
-        def __init__(self, n, timestamp, *, prev, prepared, root, changelog):
+        def __init__(self, n, timestamp, *, prev, prepared, root, changesets):
             self.n =n
             self.prev = prev
             self.timestamp = timestamp
             self.prepared = prepared
             self.root = root
-            self.changelog = changelog
+            self.changesets = changesets
 
         def next_n(self, kind):
             if kind in (objects.Amend, objects.Prepare):
@@ -231,12 +231,12 @@ class objects:
 
     @codec.register
     class Revert:
-        def __init__(self, n, timestamp, *, prev, root, changelog):
+        def __init__(self, n, timestamp, *, prev, root, changesets):
             self.n =n
             self.prev = prev
             self.timestamp = timestamp
             self.root = root
-            self.changelog = changelog
+            self.changesets = changesets
 
         def next_n(self, kind):
             return self.n+1
@@ -244,14 +244,14 @@ class objects:
 
     @codec.register
     class Apply:
-        def __init__(self, n, timestamp, *, prev, src, root, uuid, changelog):
+        def __init__(self, n, timestamp, *, prev, src, root, uuid, changesets):
             self.n =n
             self.prev = prev
             self.src=src
             self.timestamp = timestamp
             self.root = root
             self.uuid = uuid
-            self.changelog = changelog
+            self.changesets = changesets
 
         def next_n(self, kind):
             return self.n+1
@@ -269,18 +269,13 @@ class objects:
 
 
     ###  Changelog and entries
-
+    # Rationale: a Commit might wrap up multiple changes into one
+    # 
     @codec.register
-    class Changelog:
-        def __init__(self, prev, summary, author, changes, message):
-            self.prev = prev
-            self.summary = summary
+    class Changeset:
+        def __init__(self, entries, *, author=None, message=None):
             self.author = author
             self.message = message
-            self.changes = changes
-    @codec.register_literal # means it becomes @Changeset <entries> not @Changeset {entries: ...}
-    class Changeset:
-        def __init__(self, entries):
             self.entries = entries
 
         def append_changes(self, changeset):
@@ -2025,14 +2020,13 @@ class Project:
             }
             if prefix != '/':
                 changes[prefix] = [ objects.AddDir(properties={})]
-            changes = objects.Changeset(changes)
+            changeset = objects.Changeset(message="", entries=changes, author=author_uuid)
 
-            root_uuid = txn.new_root_with_changeset(None, changes)
+            root_uuid = txn.new_root_with_changeset(None, changeset)
 
-            changelog = objects.Changelog(prev=None, summary="init", message="", changes=objects.Changeset(changes), author=author_uuid)
-            changelog_uuid = txn.put_manifest(changelog)
+            changeset_uuid = txn.put_manifest(changeset)
 
-            commit = objects.Start(txn.now, uuid=branch_uuid, changelog=changelog_uuid, root=root_uuid)
+            commit = objects.Start(txn.now, uuid=branch_uuid, changesets=[changeset_uuid], root=root_uuid)
             commit_uuid = txn.put_commit(commit)
 
             branch = objects.Branch(branch_uuid, branch_name, 'active', prefix, commit_uuid, None, commit_uuid, None, [session_uuid])
@@ -2121,7 +2115,7 @@ class Project:
             if not changes:
                 return None
 
-        return self.commit_changeset(changes, kind=objects.Amend, command='amend', summary='amended summary', message='amended message')
+        return self.commit_changeset(changes, kind=objects.Amend, command='amend', message='amended message')
 
     def commit_prepared(self):
         kind = objects.Commit
@@ -2141,7 +2135,7 @@ class Project:
             if not changes:
                 return None
 
-        return self.commit_changeset(changes, old_uuid, kind, command, "summary", "message")
+        return self.commit_changeset(changes, old_uuid, kind, command, "message")
 
     def commit(self, files):
         kind = objects.Commit
@@ -2164,9 +2158,9 @@ class Project:
             if not changes:
                 return None
 
-        return self.commit_changeset(changes, old_uuid, kind, command, "summary", "message")
+        return self.commit_changeset(changes, old_uuid, kind, command, "message")
 
-    def commit_changeset(self, changeset, old_uuid, kind, command, summary, message):
+    def commit_changeset(self, changeset, old_uuid, kind, command, message):
         with self.do(command) as txn:
             session = txn.active()
             old = txn.get_commit(old_uuid)
@@ -2180,11 +2174,11 @@ class Project:
 
             author = txn.get_state('author')
 
-            changelog = objects.Changelog(prev=old.changelog, summary=summary, message=message, changes=changeset, author=author)
-            changelog_uuid = txn.put_manifest(changelog)
+            changeset = objects.Changeset(message=message, entries=changeset.entries, author=author)
+            changeset_uuid = txn.put_manifest(changeset)
 
             n = old.next_n(kind)
-            commit = kind(n=n, timestamp=txn.now, prev=old_uuid, prepared=session.prepare, root=root_uuid, changelog=changelog_uuid)
+            commit = kind(n=n, timestamp=txn.now, prev=old_uuid, prepared=session.prepare, root=root_uuid, changesets=[changeset_uuid])
             commit_uuid = txn.put_commit(commit)
 
             txn.set_active_commit(commit_uuid)
