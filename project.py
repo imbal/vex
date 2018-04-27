@@ -574,6 +574,12 @@ def match_filename(path, name, ignore, include):
                     return True
             elif fnmatch.fnmatch(name, rule):
                 return True
+def file_diff(name, old, new):
+    # XXX Pass properties
+    a,b = os.path.join('./a',name[1:]), os.path.join('./b', name[1:])
+    p = subprocess.run(["diff", '-u', '--label', a, '--label', b, old, new], stdout=subprocess.PIPE)
+    return p.stdout
+
 # Stores
 
 class DirStore:
@@ -1993,13 +1999,11 @@ class Project:
             output = {}
             for name, c in changeset.items():
                 e = session.files[name]
-                if e.kind == 'file':
+                if e.kind == 'file' and e.addr:
                     output[name] = dict(old=self.vex.files.filename(e.addr), new=self.repo_to_full_path(self.prefix(),name))
             output2 = {}
             for name, d in output.items():
-                a,b = os.path.join('./a',name[1:]), os.path.join('./b', name[1:])
-                p = subprocess.run(["diff", '-u', '--label', a, '--label', b,  d['old'], d['new']], stdout=subprocess.PIPE)
-                output2[name] = p.stdout
+                output2[name] = file_diff(name, d['old'], d['new'])
             return output2
 
     def prepare(self, files):
