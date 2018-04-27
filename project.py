@@ -550,6 +550,30 @@ class objects:
             elif self.kind == "ignore":
                 pass
 
+# Filename patterns
+
+def match_filename(path, name, ignore, include):
+    if ignore:
+        if isinstance(ignore, str): ignore = ignore,
+        for rule in ignore:
+            if '**' in rule:
+                raise VexUnfinished()
+            elif rule.startswith('/'):
+                if rule == path:
+                    return False
+            elif fnmatch.fnmatch(name, rule):
+                return False
+
+    if include:
+        if isinstance(include, str): include = include,
+        for rule in include:
+            if '**' in rule:
+                raise VexUnfinished()
+            elif rule.startswith('/'):
+                if rule == path:
+                    return True
+            elif fnmatch.fnmatch(name, rule):
+                return True
 # Stores
 
 class DirStore:
@@ -1343,7 +1367,7 @@ class PhysicalTransaction:
         if name in self.new_settings:
             return self.new_settings[name]
 
-        return self.project.setting.get(name)
+        return self.project.settings.get(name)
 
     def create_branch(self, name, prefix, from_commit, from_branch, fork):
         branch_uuid = UUID()
@@ -1802,14 +1826,16 @@ class Project:
         self.state.set('prefix', prefix)
         self.state.set('active', session.uuid)
 
-    def list_dir(self, dir):
+    def list_dir(self, dir, ignore, include):
         output = []
         scan = [dir]
         while scan:
             dir = scan.pop()
             for f in os.listdir(dir):
                 p = os.path.join(dir, f)
-                if not self.match_filename(p, f): continue
+                if p == self.config_dir:
+                    continue
+                if not match_filename(p, f, ignore, include): continue
                 if os.path.isdir(p):
                     output.append(p)
                     scan.append(p)
@@ -1817,32 +1843,6 @@ class Project:
                     output.append(p)
         return output
 
-    def match_filename(self, path, name):
-        if path == self.config_dir:
-            return False
-        ignore = self.settings.get('ignore')
-        if ignore:
-            if isinstance(ignore, str): ignore = ignore,
-            for rule in ignore:
-                if '**' in rule:
-                    raise VexUnfinished()
-                elif rule.startswith('/'):
-                    if rule == path:
-                        return False
-                elif fnmatch.fnmatch(name, rule):
-                    return False
-
-        include = self.settings.get('include')
-        if include:
-            if isinstance(include, str): include = include,
-            for rule in include:
-                if '**' in rule:
-                    raise VexUnfinished()
-                elif rule.startswith('/'):
-                    if rule == path:
-                        return True
-                elif fnmatch.fnmatch(name, rule):
-                    return True
     def get_fileprops(self,file):
         file = self.check_files([file])[0] if file else None
         with self.do_without_undo('fileprops:get') as txn:
@@ -2123,12 +2123,14 @@ class Project:
 
             return changeset
 
-    def add(self, files):
+    def add(self, files, include=None, ignore=None):
         files = self.check_files(files)
 
         added = set()
         with self.do('add') as txn:
             session = txn.refresh_active()
+            include = include if include is not None else txn.get_setting('include')
+            ignore = ignore if ignore is not None else txn.get_setting('ignore')
             to_add = set()
             new_files = {}
             names = {}
@@ -2150,7 +2152,7 @@ class Project:
 
 
             for dir in to_add:
-                for filename in self.list_dir(dir):
+                for filename in self.list_dir(dir, ignore, include):
                     name = txn.full_to_repo_path(filename)
                     if os.path.isfile(filename):
                         names[name] = filename

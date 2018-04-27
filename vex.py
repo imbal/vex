@@ -73,11 +73,11 @@ def Error(path, args, exception, traceback):
 
 vex_init = vex_cmd.subcommand('init',short="create a new vex project")
 @vex_init.run('''
-    --working    # Working directory, where files are edited/changed
-    --config     # Normally /working_dir/.vex if not given 
-    --prefix     # Subdirectory to check out of the repository, normally the working directory name
-    --include... # files to include whe using vex add, can be passed multiple times 
-    --ignore...  # files to ignore when using vex add, can be passed multiple times
+    --working:path    # Working directory, where files are edited/changed
+    --config:path     # Normally /working_dir/.vex if not given 
+    --prefix:path     # Subdirectory to check out of the repository, normally the working directory name
+    --include:str... # files to include whe using vex add, can be passed multiple times 
+    --ignore:str...  # files to ignore when using vex add, can be passed multiple times
     [directory]  #
 ''')
 def Init(directory, working, config, prefix, include, ignore):
@@ -190,7 +190,9 @@ def UndoList():
         yield ""
 
 vex_redo = vex_cmd.subcommand('redo', "redo last undone command")
-@vex_redo.run('--choice:int')
+@vex_redo.run('''
+    --choice:int # Which command to redo. `--choice=0` means the last action uandone.     
+''')
 def Redo(choice):
     """
         `vex redo` will redo the last action undone. `vex redo --list` will show the
@@ -211,6 +213,8 @@ def Redo(choice):
         if you do a different action after undo, you can still undo and redo.
 
         `vex redo:list` shows the actions that can be redone and `vex redo --choice=<n>` picks one.
+
+        The order of the list changes when you pick a different item to redo. 
     """
     p = get_project(empty=False)
 
@@ -246,7 +250,9 @@ def RedoList():
 
 
 vex_status = vex_cmd.subcommand('status', short="list the files being tracked by vex")
-@vex_status.run('--all?')
+@vex_status.run('''
+    --all?      # Show all files inside the repo, even ones outside working copy
+''')
 def Status(all):
     """
         `vex status` shows the state of each visible file, `vex status --all` shows the status 
@@ -285,7 +291,9 @@ def Log():
 
 
 vex_diff = vex_cmd.subcommand('diff', short="show the differences between two parts of a project")
-@vex_diff.run('[file...]')
+@vex_diff.run('''
+    [file:path...] # difference between two files
+''')
 def Diff(file):
     """
         `vex diff` shows the changes waiting to be committed.
@@ -300,9 +308,17 @@ def Diff(file):
 vex_cmd_files = vex_cmd.group('files')
 
 vex_add = vex_cmd_files.subcommand('add','add files to the project')
-@vex_add.run('file:str...')
-def Add(file):
+@vex_add.run('''
+    --include:str... # files to include whe using vex add, can be passed multiple times 
+    --ignore:str...  # files to ignore when using vex add, can be passed multiple times
+    [file:path...]     # filename or directory to add
+''')
+def Add(include, ignore, file):
     """
+        `vex add` will add all files given to the project, and recurse through
+        subdirectories too.
+
+        it uses the settings in `vex ignore` and `vex include`
 
     """
     cwd = os.getcwd()
@@ -315,16 +331,23 @@ def Add(file):
     if missing:
         raise VexArgument('cannot find {}'.format(",".join(missing)))
     p = get_project()
+    include = include if include else None
+    ignore = ignore if ignore else None
     with p.lock('add') as p:
-        for f in p.add(files):
+        for f in p.add(files, include=include, ignore=ignore):
             f = os.path.relpath(f)
             yield "add: {}".format(f)
 
 vex_forget = vex_cmd_files.subcommand('forget','remove files from the project, without deleting them')
-@vex_forget.run('file...')
+@vex_forget.run('''
+        [file:path...] # Files to remove from next commit
+''')
 def Forget(file):
     """
+        `vex forget` will instruct vex to stop tracking a file, and it will not appear
+        inside the next commit.
 
+        it does not delete the file from the working copy.
     """
     if not file:
         return
@@ -344,9 +367,16 @@ def Forget(file):
 vex_cmd_commit = vex_cmd.group("commit")
 
 vex_prepare = vex_cmd_commit.subcommand('prepare', short="save current working copy to prepare for commit", aliases=['save'])
-@vex_prepare.run('--watch [file...]')
+@vex_prepare.run('''
+        --watch # Unsupported
+        [file:path...] # Files to add to the commt 
+''')
 def Prepare(file,watch):
     """
+        `vex prepare` is like `vex commit`, except that the next commit will inherit all of the 
+        changes made.
+
+        preparory commits are not applied to branches.
     """
     p = get_project()
     yield ('Preparing')
@@ -361,9 +391,14 @@ def Prepare(file,watch):
             p.prepare(files)
 
 vex_commit = vex_cmd_commit.subcommand('commit', short="save the working copy and add an entry to the project changes")
-@vex_commit.run('--add? --prepared? [file...]')
+@vex_commit.run('''
+    --add?          # Run `vex add` before commiting
+    --prepared?     # Only commit prepared changes, ignore the current state of the working copy
+    [file...]       # Commit only a few changed files
+''')
 def Commit(prepared, add, file):
     """
+        `vex commit` saves the current state of the project.
 
     """
     p = get_project()
@@ -390,9 +425,16 @@ def Commit(prepared, add, file):
             yield 'commit: Nothing to commit'
 
 vex_amend = vex_cmd_commit.subcommand('amend', short="replace the last commit with the current changes in the project")
-@vex_amend.run('[file...]')
+@vex_amend.run('''
+    [file...] # files to change
+''')
 def Amend(file):
     """
+        `vex amend` allows you to re-commit, indicating that the last commit
+        was incomplete.
+
+        `vex amend` is like `vex prepare`, except that it operates on the last commit, 
+        instead of preparing for the next.
 
     """
     p = get_project()

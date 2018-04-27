@@ -31,7 +31,7 @@ ARGTYPES=[x.strip() for x in """
     float num number
     str string
     scalar
-    filename 
+    path 
 """.split() if x]
 #   stretch goals: rwfile jsonfile textfile
 
@@ -321,10 +321,8 @@ def parse_args(argspec, argv, environ):
 def try_parse(name, arg, argtype):
     if argtype in (None, "str", "string"):
         return arg
-    elif argtype == "infile":
-        return FileHandle(arg, "read")
-    elif argtype == "outfile":
-        return FileHandle(arg, "write")
+    elif argtype == "path":
+        return arg
 
     elif argtype in ("int","integer"):
         try:
@@ -509,7 +507,7 @@ class CommandDescription:
             output.append("")
 
         if self.subcommands:
-            output.append("commands:") 
+            output.append("Commands:") 
             for group, subcommands in self.groups.items():
                 for name in subcommands:
                     cmd = self.subcommands[name]
@@ -545,9 +543,9 @@ class CommandDescription:
         if group is None and len(self.groups) > 1:
             subcommands += "|..."
         if not self.prefix and subcommands:
-            output.append("usage: {0} [help] <{1}> [--help]".format(self.name, subcommands))
+            output.append("Usage: {0} [help] <{1}> [--help]".format(self.name, subcommands))
         elif subcommands:
-            output.append("usage: {0}:<{1}> [--help]".format(help_full_name, subcommands))
+            output.append("Usage: {0}:<{1}> [--help]".format(help_full_name, subcommands))
         return "\n".join(output)
 
 
