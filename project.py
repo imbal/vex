@@ -951,9 +951,8 @@ class History:
         return out
 
 class PhysicalTransaction:
-    def __init__(self, project, scratch, command):
+    def __init__(self, project, command):
         self.project = project
-        self.scratch = scratch
         self.command = command
         self.now = NOW()
         self.old_branches = {}
@@ -981,7 +980,7 @@ class PhysicalTransaction:
         return self.project.full_to_repo_path(self.prefix(),file)
 
     def addr_for_file(self, file):
-        return self.scratch.addr_for_file(file)
+        return self.project.addr_for_file(file)
 
     def active(self):
         session_uuid = self.get_state("active")
@@ -1288,31 +1287,31 @@ class PhysicalTransaction:
 
     def get_file(self, addr):
         if addr in self.new_files:
-            return self.scratch.get_file(addr)
+            return self.project.get_scratch_file(addr)
         return self.project.get_file(addr)
 
     def put_file(self, file):
-        addr = self.scratch.put_file(file)
+        addr = self.project.put_scratch_file(file)
         self.new_files.add(addr)
         return addr
 
     def get_manifest(self, addr):
         if addr in self.new_manifests:
-            return self.scratch.get_obj(addr)
+            return self.project.get_scratch_manifest(addr)
         return self.project.get_manifest(addr)
 
     def put_manifest(self, obj):
-        addr = self.scratch.put_obj(obj)
+        addr = self.project.put_scratch_manifest(obj)
         self.new_manifests.add(addr)
         return addr
 
     def get_commit(self, addr):
         if addr in self.new_commits:
-            return self.scratch.get_obj(addr)
+            return self.project.get_scratch_commit(addr)
         return self.project.get_commit(addr)
 
     def put_commit(self, obj):
-        addr = self.scratch.put_obj(obj)
+        addr = self.project.put_scratch_commit(obj)
         self.new_commits.add(addr)
         return addr
 
@@ -1411,9 +1410,8 @@ class PhysicalTransaction:
         return objects.Action(self.now, self.command, changes, blobs)
 
 class LogicalTransaction:
-    def __init__(self, project, scratch, command):
+    def __init__(self, project, command):
         self.project = project
-        self.scratch = scratch
         self.command = command
         self.prefix = {}
         self.active_session = {}
@@ -1469,26 +1467,70 @@ class LogicalTransaction:
         names = dict(old=self.old_names, new=self.new_names)
         return objects.Switch(self.now, self.command, self.prefix, self.active_session, sessions, branches, names)
 
-class VexRepo:
+class Repo:
     def __init__(self, config_dir):
         self.dir = config_dir
         self.commits =   BlobStore(os.path.join(config_dir, 'objects', 'commits'))
         self.manifests = BlobStore(os.path.join(config_dir, 'objects', 'manifests'))
         self.files =     BlobStore(os.path.join(config_dir, 'objects', 'files'))
+        self.scratch =   BlobStore(os.path.join(config_dir, 'objects', 'scratch'))
 
     def makedirs(self):
         os.makedirs(self.dir, exist_ok=True)
         self.commits.makedirs()
         self.manifests.makedirs()
         self.files.makedirs()
+        self.scratch.makedirs()
 
+    def addr_for_file(self, path):
+        return self.scratch.addr_for_file(path)
+
+    def get_commit(self, addr):
+        return self.commits.get_obj(addr)
+
+    def get_manifest(self, addr):
+        return self.manifests.get_obj(addr)
+
+    def get_file(self, addr):
+        return self.files.get_file(addr)
+
+    def get_scratch_file(self, addr):
+        return self.scratch.get_file(addr)
+
+    def get_scratch_commit(self,addr):
+        return self.scratch.get_obj(addr)
+
+    def get_scratch_manifest(self, addr):
+        return self.scratch.get_obj(addr)
+
+    def put_scratch_file(self, value, addr=None):
+        return self.scratch.put_file(value, addr)
+
+    def put_scratch_commit(self, value):
+        return self.scratch.put_obj(value)
+
+    def put_scratch_manifest(self, value):
+        return self.scratch.put_obj(value)
+
+    def add_commit_from_scratch(self, addr):
+        self.commits.copy_from(self.scratch, addr)
+    def add_manifest_from_scratch(self, addr):
+        self.manifests.copy_from(self.scratch, addr)
+    def add_file_from_scratch(self, addr):
+        self.files.copy_from(self.scratch, addr)
+
+    def get_file_path(self, addr):
+        return self.file.filename(addr)
+
+    def copy_from_scratch(self, addr, path):
+        return self.scratch.make_copy(addr, path)
 
 class Project:
     VEX = "/.vex"
     def __init__(self, config_dir, working_dir):
         self.working_dir = working_dir
         self.config_dir = config_dir
-        self.vex = VexRepo(config_dir)
+        self.repo = Repo(config_dir)
 
 
         self.branches =   DirStore(os.path.join(config_dir, 'branches'))
@@ -1496,7 +1538,6 @@ class Project:
         self.sessions =   DirStore(os.path.join(config_dir, 'branches', 'sessions'))
         self.state =      DirStore(os.path.join(config_dir, 'state'))
         self.history =   History(os.path.join(config_dir, 'history'))
-        self.scratch =   BlobStore(os.path.join(config_dir, 'scratch'))
         self.lockfile =  LockFile(os.path.join(config_dir, 'lock'))
 
         self.settings =  DirStore(os.path.join(config_dir, 'settings'))
@@ -1508,13 +1549,12 @@ class Project:
 
     def makedirs(self):
         os.makedirs(self.config_dir, exist_ok=True)
-        self.vex.makedirs()
+        self.repo.makedirs()
         self.branches.makedirs()
         self.names.makedirs()
         self.state.makedirs()
         self.sessions.makedirs()
         self.history.makedirs()
-        self.scratch.makedirs()
         self.settings.makedirs()
 
     def makelock(self):
@@ -1528,6 +1568,9 @@ class Project:
     def exists(self):
         return os.path.exists(self.config_dir)
 
+    def clean_state(self):
+        return self.history.clean_state()
+
     def history_isempty(self):
         return self.history.empty()
 
@@ -1540,10 +1583,35 @@ class Project:
             return self.sessions.get(self.state.get("active"))
 
     def addr_for_file(self, file):
-        return self.scratch.addr_for_file(file)
+        return self.repo.addr_for_file(file)
 
-    def clean_state(self):
-        return self.history.clean_state()
+    def get_commit(self, addr):
+        return self.repo.get_commit(addr)
+
+    def get_manifest(self, addr):
+        return self.repo.get_manifest(addr)
+
+    def get_file(self, addr):
+        return self.repo.get_file(addr)
+
+    def get_scratch_commit(self, addr):
+        return self.repo.get_scratch_commit(addr)
+
+    def get_scratch_manifest(self, addr):
+        return self.repo.get_scratch_manifest(addr)
+
+    def get_scratch_file(self, addr):
+        return self.repo.get_scratch_file(addr)
+
+    def put_scratch_commit(self, value):
+        return self.repo.put_scratch_commit(value)
+
+    def put_scratch_manifest(self, value):
+        return self.repo.put_scratch_manifest(value)
+
+    def put_scratch_file(self, value, addr=None):
+        return self.repo.put_scratch_file(value, addr)
+
 
     def repo_to_full_path(self, prefix, file):
         file = os.path.normpath(file)
@@ -1607,7 +1675,7 @@ class Project:
     @contextmanager
     def do_without_undo(self, command):
         active = self.state.get("active")
-        txn = PhysicalTransaction(self, self.scratch, command)
+        txn = PhysicalTransaction(self, command)
         yield txn
         with self.history.do_without_undo(txn.action()) as action:
             if any(action.blobs.values()):
@@ -1620,7 +1688,7 @@ class Project:
         if not self.history.clean_state():
             raise VexCorrupt('Project history not in a clean state.')
 
-        txn = PhysicalTransaction(self, self.scratch, command)
+        txn = PhysicalTransaction(self, command)
         yield txn
         with self.history.do(txn.action()) as action:
             if not action:
@@ -1636,7 +1704,7 @@ class Project:
         if not self.history.clean_state():
             raise VexCorrupt('Project history not in a clean state.')
 
-        txn = LogicalTransaction(self, self.scratch, command)
+        txn = LogicalTransaction(self, command)
         yield txn
         with self.history.do(txn.action()) as action:
             if not action:
@@ -1646,15 +1714,6 @@ class Project:
                 self.apply_logical_changes('new', action.session_states, action.branch_states, action.names)
             else:
                 raise VexBug('action')
-
-    def get_commit(self, addr):
-        return self.vex.commits.get_obj(addr)
-
-    def get_manifest(self, addr):
-        return self.vex.manifests.get_obj(addr)
-
-    def get_file(self, addr):
-        return self.vex.files.get_file(addr)
 
     # Take Action.changes and applies them to project
     def apply_logical_changes(self, kind, session_states, branch_states, names):
@@ -1692,13 +1751,13 @@ class Project:
         for key in blobs:
             if key == 'commits':
                 for addr in blobs['commits']:
-                    self.vex.commits.copy_from(self.scratch, addr)
+                    self.repo.add_commit_from_scratch(addr)
             elif key == 'manifests':
                 for addr in blobs['manifests']:
-                    self.vex.manifests.copy_from(self.scratch, addr)
+                    self.repo.add_manifest_from_scratch(addr)
             elif key =='files':
                 for addr in blobs['files']:
-                    self.vex.files.copy_from(self.scratch, addr)
+                    self.repo.add_file_from_scratch(addr)
             else:
                 raise VexBug('Project change has unknown values')
 
@@ -1742,7 +1801,7 @@ class Project:
                 entry.refresh(path, self.addr_for_file)
 
             if entry.kind == 'file' and entry.state in ('added', 'replaced', 'modified'):
-                entry.stash = self.scratch.put_file(path, new_addr)
+                entry.stash = self.put_scratch_file(path, addr=new_addr)
                 entry.kind = 'stash'
 
         self.sessions.set(session.uuid, session)
@@ -1812,12 +1871,12 @@ class Project:
                 if name not in ('/', self.VEX, prefix):
                     os.makedirs(path, exist_ok=True)
             elif entry.kind =="file":
-                self.vex.files.make_copy(entry.addr, path)
+                self.repo.copy_from_scratch(entry.addr, path)
                 if entry.properties.get('vex:executable'):
                     stat = os.stat(path)
                     os.chmod(path, stat.st_mode | 64)
             elif entry.kind == "stash":
-                self.scratch.make_copy(entry.stash, path)
+                self.repo.copy_from_scratch(entry.stash, path)
                 entry.kind = "file"
                 entry.stash = None
                 if entry.properties.get('vex:executable'):
@@ -1908,12 +1967,12 @@ class Project:
         commit = session.prepare
         out = []
         while commit != session.commit:
-            obj = self.vex.commits.get_obj(commit)
+            obj = self.get_commit(commit)
             out.append('{}: *uncommitted* {}: {}'.format(obj.n, obj.__class__.__name__, commit))
             commit = getattr(obj, 'prev', None)
 
         while commit != None:
-            obj = self.vex.commits.get_obj(commit)
+            obj = self.get_commit(commit)
             out.append('{}: committed {}: {}'.format(obj.n, obj.__class__.__name__, commit))
             commit = getattr(obj, 'prev', None)
         return out
@@ -2000,7 +2059,7 @@ class Project:
             for name, c in changeset.items():
                 e = session.files[name]
                 if e.kind == 'file' and e.addr:
-                    output[name] = dict(old=self.vex.files.filename(e.addr), new=self.repo_to_full_path(self.prefix(),name))
+                    output[name] = dict(old=self.repo.get_file_path(e.addr), new=self.repo_to_full_path(self.prefix(),name))
             output2 = {}
             for name, d in output.items():
                 output2[name] = file_diff(name, d['old'], d['new'])
