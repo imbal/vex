@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import os
+import sys
 import os.path
 import traceback
 import subprocess
@@ -11,14 +12,21 @@ import rson
 
 VEX = ".vex"
 
+@contextmanager
 def watcher():
     p = subprocess.run('fswatch --version', stdout=subprocess.DEVNULL, shell=True)
     if p.returncode: raise VexBug('fswatch is not installed')
 
     p = subprocess.Popen('fswatch .', shell=True, stdout=subprocess.PIPE)
     def watch_files():
-        for line in p.stdout.readlines():
-            yield line
+        line = None
+        while True:
+            try:
+                line = p.stdout.readline()
+                if not line: break
+                yield line.decode('utf-8').rstrip()
+            except KeyboardInterrupt:
+                break
     try:
         yield watch_files
     finally:
@@ -74,7 +82,7 @@ def Call(mode, path, args, callback):
         if mode =="debug":
             raise
         result= "".join(traceback.format_exception(*sys.exc_info()))
-        message = str(exception)
+        message = str(e)
         vex_error = isinstance(e, VexError)
 
     if path:
@@ -395,7 +403,7 @@ vex_cmd_commit = vex_cmd.group("commit")
 vex_prepare = vex_cmd_commit.subcommand('prepare', short="save current working copy to prepare for commit", aliases=['save'])
 @vex_prepare.run('''
         --add?          # Run `vex add` before commiting
-        --watch # Unsupported
+        --watch?         # Unsupported
         [file:path...] # Files to add to the commt 
 ''')
 def Prepare(file,watch, add):
@@ -416,10 +424,15 @@ def Prepare(file,watch, add):
         cwd = os.getcwd()
         files = file if file else None
         if watch:
+            active = p.active()
+            prefix = p.prefix()
             with watcher() as files:
                 for file in files():
-                    p.prepare([file])
-                    yield os.path.relpath(file)
+                    if p.check_file(file):
+                        repo = p.full_to_repo_path(prefix, file)
+                        if repo in active.files:
+                            p.prepare([file])
+                            yield os.path.relpath(file)
         else:
             p.prepare(files)
 

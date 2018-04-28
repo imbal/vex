@@ -1610,6 +1610,14 @@ class Project:
             output.append(filename)
         return files
 
+    def check_file(self, file):
+        if not file.startswith(self.working_dir):
+            return False
+        if os.path.commonpath((self.settings.dir, file)) == self.settings.dir:
+            return True
+        if os.path.commonpath((self.config_dir, file)) == self.config_dir:
+            return False
+        return True
 
     # ... and so are these, but, they interact with the action log
     def rollback_new_action(self):
@@ -1855,6 +1863,7 @@ class Project:
         self.sessions.set(session.uuid, session)
         self.state.set('prefix', prefix)
         self.state.set('active', session.uuid)
+
 
     ###  Commands
 

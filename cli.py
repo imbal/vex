@@ -420,19 +420,40 @@ class CommandDescription:
             return output
         return ()
 
-    def complete_arg(self, path, text):
+    def complete_arg(self, path, prefix, text):
         if path: 
+            if path[0] in self.subaliases:
+                path[0] = self.subaliases[path[0]]
             if path[0] in self.subcommands:
-                return self.subcommands[path[0]].complete_arg(path[1:], text)
+                return self.subcommands[path[0]].complete_arg(path[1:], prefix, text)
         else:
             if text.startswith('--'):
                 return self.complete_flag(text[2:])
             elif text.startswith('-'):
                 return self.complete_flag(text[1:])
-            else:
-                pass
-                # work out which positional, optional, or tail arg it is
-                # suggest type
+            elif self.argspec:
+                n = len([p for p in prefix if p])
+                field = None
+                if n < len(self.argspec.positional):
+                    for i, name in enumerate(self.argspec.positional):
+                        if i == n:
+                            field = name
+                else:
+                    n-=len(self.argspec.positional)
+                    if n < len(self.argspec.optional):
+                        for i, name in enumerate(self.argspec.optional):
+                            if i == n:
+                                field = name
+                    elif self.argspec.tail:
+                        field = self.argspec.tail
+                if not field:
+                    return ()
+
+                argtype = self.argspec.argtypes.get(field)
+                if argtype == 'path':
+                    return os.listdir()
+                # XXX: suggest
+
         return ()
 
     def complete_flag(self, prefix):
@@ -716,12 +737,12 @@ def main(root, argv, environ):
             if path[0] in ('help', 'debug'):
                 if len(path) > 1:
                     path = path[1].split(':') 
-                    result = obj.complete_arg(path, arg)
+                    result = obj.complete_arg(path, path[2:], arg)
                 else:
                     result = obj.complete_path([], arg.split(':'))
             else:
-                path = path[0].split(':')
-                result = obj.complete_arg(path, arg)
+                path0 = path[0].split(':')
+                result = obj.complete_arg(path0, path[1:], arg)
         else:
             result = obj.complete_path([], arg.split(':'))
             if "help".startswith(arg):
