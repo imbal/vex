@@ -2032,7 +2032,7 @@ class Project:
             return output2
     def prepare(self, files):
         files = self.check_files(files) if files else None
-        with self.do_without_undo('prepare') as txn:
+        with self.do('prepare') as txn:
             session = txn.refresh_active()
             files = [txn.full_to_repo_path(filename) for filename in files] if files else None
 
@@ -2041,7 +2041,6 @@ class Project:
             if not changeset:
                 return None
 
-        with self.do('prepare') as txn:
             prepare = session.prepare
 
             txn.store_changeset_files(changeset)
@@ -2057,56 +2056,14 @@ class Project:
             txn.set_active_prepare(prepare_uuid)
         return changeset
 
-    def amend(self, files):
-        files = self.check_files(files) if files else None
-        with self.do_without_undo(command) as txn:
-            session = txn.refresh_active()
-            files = [txn.full_to_repo_path(filename) for filename in files] if files else None
-
-
-            old_uuid, old, changes = txn.prepared_changeset(session.prepare)
-
-            changes.append_changes(txn.active_changeset(files))
-
-            if not changes:
-                return None
-
-            changes.author = txn.get_state('author')
-
-        return self.commit_changeset(changes, kind='amend', command='amend')
-
     def commit_prepared(self):
-        with self.do_without_undo('commit:prepared') as txn:
+        with self.do('commit:prepared') as txn:
             session = txn.active()
 
-            old_uuid, old, changes = txn.prepared_changeset(session.prepare)
+            old_uuid, old, changeset = txn.prepared_changeset(session.prepare)
 
-            if not changes:
-                return None
+            if not changeset: return False
 
-        return self.commit_changeset(changes, old_uuid, kind='commit', command='commit:prepared')
-
-    def commit_active(self, files):
-        kind = 'commit'
-        command = 'commit'
-        files = self.check_files(files) if files else None
-        with self.do_without_undo(command) as txn:
-            session = txn.refresh_active()
-            files = [txn.full_to_repo_path(filename) for filename in files] if files else None
-
-            old_uuid, old, changes = txn.prepared_changeset(session.prepare)
-
-            changes.append_changes(txn.active_changeset(files))
-
-            if not changes:
-                return None
-
-        return self.commit_changeset(changes, old_uuid, kind, command)
-
-    def commit_changeset(self, changeset, old_uuid, kind, command):
-        with self.do(command) as txn:
-            session = txn.active()
-            old = txn.get_commit(old_uuid)
             root_uuid = txn.new_root_with_changeset(old.root, changeset)
 
             if root_uuid == old.root:
@@ -2118,6 +2075,44 @@ class Project:
 
             changeset.author = txn.get_state('author')
 
+            changeset_uuid = txn.put_manifest(changeset)
+
+            commit = objects.Commit('commit', timestamp=txn.now, previous=old_uuid, parents=dict(prepared=session.prepare), root=root_uuid, changeset=changeset_uuid)
+            commit_uuid = txn.put_commit(commit)
+
+            txn.set_active_commit(commit_uuid)
+
+            return changeset
+    
+    def amend(self, files):
+        return self.commit_active(files, kind='amend', command='amend')
+
+    def commit_active(self, files, kind='commit', command = 'commit'):
+        kind = 'commit'
+        command = 'commit'
+        files = self.check_files(files) if files else None
+
+        with self.do(command) as txn:
+            session = txn.refresh_active()
+            files = [txn.full_to_repo_path(filename) for filename in files] if files else None
+
+            old_uuid, old, changeset = txn.prepared_changeset(session.prepare)
+
+            changeset.append_changes(txn.active_changeset(files))
+
+            if not changeset:
+                return None
+
+            root_uuid = txn.new_root_with_changeset(old.root, changeset)
+
+            if root_uuid == old.root:
+                txn.update_active_from_changeset(changeset)
+                return False
+
+            txn.store_changeset_files(changeset)
+            txn.update_active_from_changeset(changeset)
+
+            changeset.author = txn.get_state('author')
             changeset_uuid = txn.put_manifest(changeset)
 
             commit = objects.Commit(kind, timestamp=txn.now, previous=old_uuid, parents=dict(prepared=session.prepare), root=root_uuid, changeset=changeset_uuid)
