@@ -1404,7 +1404,7 @@ class Repo:
         self.files.copy_from(self.scratch, addr)
 
     def get_file_path(self, addr):
-        return self.file.filename(addr)
+        return self.files.filename(addr)
 
     def copy_from_scratch(self, addr, path):
         return self.scratch.make_copy(addr, path)
@@ -1465,6 +1465,9 @@ class Project:
     def active(self):
         if self.state.exists("active"):
             return self.sessions.get(self.state.get("active"))
+
+    def get_branch_uuid(self, name):
+        return self.names.get(name)
 
     def get_branch(self, uuid):
         return self.branches.get(uuid)
@@ -1937,7 +1940,7 @@ class Project:
         self.state.set("active", session_uuid)
         self.state.set("prefix", prefix)
 
-    def diff(self, files):
+    def active_diff_files(self, files):
         files = self.check_files(files) if files else None
         with self.do_without_undo('diff') as txn:
             session = txn.refresh_active()
@@ -1954,6 +1957,22 @@ class Project:
                 output2[name] = file_diff(name, d['old'], d['new'])
             return output2
 
+
+    def active_diff_commit(self, commit):
+        with self.do_without_undo('diff:commit') as txn:
+            session = txn.refresh_active()
+
+            files = txn.build_files(commit)
+
+            output = {}
+            for name, c in session.files.items():
+                e = files[name]
+                if e.kind == 'file' and e.addr:
+                    output[name] = dict(old=self.repo.get_file_path(e.addr), new=self.repo_to_full_path(self.prefix(),name))
+            output2 = {}
+            for name, d in output.items():
+                output2[name] = file_diff(name, d['old'], d['new'])
+            return output2
     def prepare(self, files):
         files = self.check_files(files) if files else None
         with self.do_without_undo('prepare') as txn:

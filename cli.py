@@ -32,6 +32,8 @@ ARGTYPES=[x.strip() for x in """
     str string
     scalar
     path 
+    branch
+    commit
 """.split() if x]
 #   stretch goals: rwfile jsonfile textfile
 
@@ -321,7 +323,7 @@ def parse_args(argspec, argv, environ):
 def try_parse(name, arg, argtype):
     if argtype in (None, "str", "string"):
         return arg
-    elif argtype == "path":
+    elif argtype in ("path", "branch", "commit"):
         return arg
 
     elif argtype in ("int","integer"):
