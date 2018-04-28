@@ -368,10 +368,11 @@ vex_cmd_commit = vex_cmd.group("commit")
 
 vex_prepare = vex_cmd_commit.subcommand('prepare', short="save current working copy to prepare for commit", aliases=['save'])
 @vex_prepare.run('''
+        --add?          # Run `vex add` before commiting
         --watch # Unsupported
         [file:path...] # Files to add to the commt 
 ''')
-def Prepare(file,watch):
+def Prepare(file,watch, add):
     """
         `vex prepare` is like `vex commit`, except that the next commit will inherit all of the 
         changes made.
@@ -381,6 +382,11 @@ def Prepare(file,watch):
     p = get_project()
     yield ('Preparing')
     with p.lock('prepare') as p:
+        if add:
+            for f in p.add([os.getcwd()]):
+                f = os.path.relpath(f)
+                yield "add: {}".format(f)
+
         cwd = os.getcwd()
         files = [os.path.join(cwd, f) for f in file] if file else None
         if watch:

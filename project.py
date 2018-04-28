@@ -130,147 +130,23 @@ codec = Codec()
 
 class objects:
 
-    # Entries in commits
-    @codec.register
-    class Start:
-        n = 0
-        def __init__(self, timestamp, *, root, uuid, changesets):
-            self.timestamp = timestamp
-            self.uuid = uuid
-            self.root = root
-            self.changesets = changesets
-
-        def next_n(self, kind):
-            if kind == objects.Amend:
-                return self.n
-            return self.n+1
-
-    @codec.register
-    class Fork:
-        n = 0
-        def __init__(self, timestamp, *, base, uuid, changesets):
-            self.base = base
-            self.timestamp = timestamp
-            self.uuid = uuid
-            self.changesets = changesets
-
-        def next_n(self, kind):
-            if kind == objects.Amend:
-                return self.n
-            return self.n+1
-
-    @codec.register
-    class Stop:
-        def __init__(self, n, timestamp, *, prev, uuid, changesets):
-            self.n =n
-            self.prev = prev
-            self.timestamp = timestamp
-            self.uuid = uuid
-            self.changesets = changesets
-
-    @codec.register
-    class Restart:
-        n = 0
-        def __init__(self, n, timestamp, *, prev, base, changesets):
-            self.prev = prev
-            self.base = base
-            self.timestamp = timestamp
-            self.changesets = changesets
-
-        def next_n(self, kind):
-            if kind == objects.Amend:
-                return self.n
-            return self.n+1
-
-
-    @codec.register
-    class Prepare:
-        def __init__(self, n, timestamp, *, prev, prepared, changes):
-            self.n =n
-            self.prev = prev
-            self.prepared = prepared
-            self.timestamp = timestamp
-            self.changes = changes
-
-        def next_n(self, kind):
-            if kind == objects.Amend:
-                raise VexBug('what')
-            if kind in (objects.Commit,):
-                return self.n+1
-            return self.n
-
     @codec.register
     class Commit:
-        def __init__(self, n, timestamp, *, prev, prepared, root, changesets):
-            self.n =n
-            self.prev = prev
-            self.prepared = prepared
+        Kinds = set("""
+            init prepare commit amend
+            purge truncate
+            branch rebase apply 
+        """.split())
+        def __init__(self, kind, timestamp, *, previous, parents, root, changeset):
+            self.kind = kind
             self.timestamp = timestamp
+            self.previous = previous
+            self.parents = parents
             self.root = root
-            self.changesets = changesets
-
-        def next_n(self, kind):
-            if kind in (objects.Amend, objects.Prepare):
-                return self.n
-            return self.n+1
-
-    @codec.register
-    class Amend:
-        def __init__(self, n, timestamp, *, prev, prepared, root, changesets):
-            self.n =n
-            self.prev = prev
-            self.timestamp = timestamp
-            self.prepared = prepared
-            self.root = root
-            self.changesets = changesets
-
-        def next_n(self, kind):
-            if kind in (objects.Amend, objects.Prepare):
-                return self.n
-            return self.n+1
-
-    @codec.register
-    class Revert:
-        def __init__(self, n, timestamp, *, prev, root, changesets):
-            self.n =n
-            self.prev = prev
-            self.timestamp = timestamp
-            self.root = root
-            self.changesets = changesets
-
-        def next_n(self, kind):
-            return self.n+1
+            self.changeset = changeset
 
 
-    @codec.register
-    class Apply:
-        def __init__(self, n, timestamp, *, prev, src, root, uuid, changesets):
-            self.n =n
-            self.prev = prev
-            self.src=src
-            self.timestamp = timestamp
-            self.root = root
-            self.uuid = uuid
-            self.changesets = changesets
 
-        def next_n(self, kind):
-            return self.n+1
-
-    # Apply
-    # Replay (instead of Commit)
-
-    @codec.register
-    class Purge:
-        pass
-
-    @codec.register
-    class Truncate:
-        pass
-
-
-    ###  Changelog and entries
-    # Rationale: a Commit might wrap up multiple changes into one
-    # 
     @codec.register
     class Changeset:
         def __init__(self, entries, *, author=None, message=None):
@@ -1016,6 +892,15 @@ class PhysicalTransaction:
         self.put_session(copy)
         return copy
 
+    def prepared_changeset(self, old_uuid):
+        changes = objects.Changeset(entries={})
+        old = self.get_commit(old_uuid)
+        while old and old.kind == 'prepare':
+            changes.prepend_changes(self.get_manifest(old.changeset))
+            old_uuid = old.previous
+            old = self.get_commit(old_uuid)
+        return old_uuid, old, changes
+
     def active_changeset(self, files=None):
         active = self.active()
         out = {}
@@ -1185,7 +1070,8 @@ class PhysicalTransaction:
 
                 entry = old_entries.get(name)
                 if changes and name in changes:
-                    for change in changes.pop(name):
+                    entry_changes = changes.pop(name)
+                    for change in entry_changes:
                         if isinstance(change, objects.NewFile):
                             if not isinstance(entry, objects.Dir): raise VexBug('overwrite sync')
                             entry = objects.File(change.addr, change.properties)
@@ -1208,7 +1094,7 @@ class PhysicalTransaction:
                             if entry: raise VexBug('wait, what')
                             entry = objects.Dir(None, change.properties)
                         elif isinstance(change, objects.AddFile):
-                            if entry: raise VexBug('wait, what')
+                            if entry: raise VexBug('wait, what', name)
                             entry = objects.File(change.addr, change.properties)
                         else:
                             raise VexBug('nope', change)
@@ -1267,16 +1153,10 @@ class PhysicalTransaction:
                     else:
                         raise VexBug(change)
 
-        prepared = []
-
-        old = self.get_commit(commit)
-        while old and isinstance(old, objects.Prepare):
-            prepared.append(old.changes)
-            old = self.get_commit(commit.prepared)
-
+        old_uuid, old, changes = self.prepared_changeset(commit)
         walk('/', old.root, root=True)
-        for changes in reversed(prepared):
-            extract(changes)
+
+        extract(changes)
 
         return output
 
@@ -1969,13 +1849,15 @@ class Project:
         out = []
         while commit != session.commit:
             obj = self.get_commit(commit)
-            out.append('{}: *uncommitted* {}: {}'.format(obj.n, obj.__class__.__name__, commit))
-            commit = getattr(obj, 'prev', None)
+            out.append('*: *uncommitted* {}: {}'.format(obj.kind, commit))
+            commit = obj.previous
 
+        n= 0
         while commit != None:
             obj = self.get_commit(commit)
-            out.append('{}: committed {}: {}'.format(obj.n, obj.__class__.__name__, commit))
-            commit = getattr(obj, 'prev', None)
+            out.append('{}: committed {}: {}'.format(n, obj.kind, commit))
+            n-=1
+            commit = obj.previous
         return out
 
     def status(self):
@@ -2026,7 +1908,7 @@ class Project:
 
             changeset_uuid = txn.put_manifest(changeset)
 
-            commit = objects.Start(txn.now, uuid=branch_uuid, changesets=[changeset_uuid], root=root_uuid)
+            commit = objects.Commit('init', txn.now, previous=None, changeset=changeset_uuid, root=root_uuid, parents={})
             commit_uuid = txn.put_commit(commit)
 
             branch = objects.Branch(branch_uuid, branch_name, 'active', prefix, commit_uuid, None, commit_uuid, None, [session_uuid])
@@ -2079,18 +1961,14 @@ class Project:
         with self.do('prepare') as txn:
             prepare = session.prepare
 
-            old_uuid = prepare
-            old = txn.get_commit(prepare)
-            n = old.next_n(objects.Prepare)
-            while old and isinstance(old, objects.Prepare):
-                old_uuid = old.prev
-                old = txn.get_commit(old.prev)
-
-
             txn.store_changeset_files(changeset)
             txn.update_active_from_changeset(changeset)
 
-            prepare = objects.Prepare(n, txn.now, prev=old_uuid, prepared=prepare, changes=changeset)
+            changeset.author = txn.get_state('author')
+
+            changeset_uuid = txn.put_manifest(changeset)
+            parents = {}
+            prepare = objects.Commit('prepare', txn.now, previous=prepare, parents=parents, root=None, changeset=changeset_uuid)
             prepare_uuid = txn.put_commit(prepare)
 
             txn.set_active_prepare(prepare_uuid)
@@ -2102,65 +1980,47 @@ class Project:
             session = txn.refresh_active()
             files = [txn.full_to_repo_path(filename) for filename in files] if files else None
 
-            changes = txn.active_changeset(files)
 
-            old_uuid = session.prepare
-            old = txn.get_commit(session.prepare)
-            while old and isinstance(old, objects.Prepare):
-                changes.prepend_changes(old.changes)
-                old_uuid = old.prepared
-                old = txn.get_commit(old.prepared)
+            old_uuid, old, changes = txn.prepared_changeset(session.prepare)
 
+            changes.append_changes(txn.active_changeset(files))
 
             if not changes:
                 return None
 
-        return self.commit_changeset(changes, kind=objects.Amend, command='amend', message='amended message')
+            changes.author = txn.get_state('author')
+
+        return self.commit_changeset(changes, kind='amend', command='amend')
 
     def commit_prepared(self):
-        kind = objects.Commit
-        command = 'commit'
-        with self.do_without_undo('commit') as txn:
+        with self.do_without_undo('commit:prepared') as txn:
             session = txn.active()
-            changes = objects.Changeset({})
 
-            old_uuid = session.prepare
-            old = txn.get_commit(session.prepare)
-            while old and isinstance(old, objects.Prepare):
-                changes.prepend_changes(old.changes)
-                old_uuid = old.prepared
-                old = txn.get_commit(old.prepared)
-
+            old_uuid, old, changes = txn.prepared_changeset(session.prepare)
 
             if not changes:
                 return None
 
-        return self.commit_changeset(changes, old_uuid, kind, command, "message")
+        return self.commit_changeset(changes, old_uuid, kind='commit', command='commit:prepared')
 
     def commit(self, files):
-        kind = objects.Commit
+        kind = 'commit'
         command = 'commit'
         files = self.check_files(files) if files else None
         with self.do_without_undo(command) as txn:
             session = txn.refresh_active()
             files = [txn.full_to_repo_path(filename) for filename in files] if files else None
 
-            changes = txn.active_changeset(files)
+            old_uuid, old, changes = txn.prepared_changeset(session.prepare)
 
-            old_uuid = session.prepare
-            old = txn.get_commit(session.prepare)
-            while old and isinstance(old, objects.Prepare):
-                changes.prepend_changes(old.changes)
-                old_uuid = old.prepared
-                old = txn.get_commit(old.prepared)
-
+            changes.append_changes(txn.active_changeset(files))
 
             if not changes:
                 return None
 
-        return self.commit_changeset(changes, old_uuid, kind, command, "message")
+        return self.commit_changeset(changes, old_uuid, kind, command)
 
-    def commit_changeset(self, changeset, old_uuid, kind, command, message):
+    def commit_changeset(self, changeset, old_uuid, kind, command):
         with self.do(command) as txn:
             session = txn.active()
             old = txn.get_commit(old_uuid)
@@ -2169,16 +2029,15 @@ class Project:
             if root_uuid == old.root:
                 txn.update_active_from_changeset(changeset)
                 return False
+
             txn.store_changeset_files(changeset)
             txn.update_active_from_changeset(changeset)
 
-            author = txn.get_state('author')
+            changeset.author = txn.get_state('author')
 
-            changeset = objects.Changeset(message=message, entries=changeset.entries, author=author)
             changeset_uuid = txn.put_manifest(changeset)
 
-            n = old.next_n(kind)
-            commit = kind(n=n, timestamp=txn.now, prev=old_uuid, prepared=session.prepare, root=root_uuid, changesets=[changeset_uuid])
+            commit = objects.Commit(kind, timestamp=txn.now, previous=old_uuid, parents=dict(prepared=session.prepare), root=root_uuid, changeset=changeset_uuid)
             commit_uuid = txn.put_commit(commit)
 
             txn.set_active_commit(commit_uuid)
