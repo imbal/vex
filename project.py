@@ -451,6 +451,21 @@ def file_diff(name, old, new):
     p = subprocess.run(["diff", '-u', '--label', a, '--label', b, old, new], stdout=subprocess.PIPE)
     return p.stdout
 
+
+def list_dir(dir, ignore, include):
+    output = []
+    scan = [dir]
+    while scan:
+        dir = scan.pop()
+        for f in os.listdir(dir):
+            p = os.path.join(dir, f)
+            if not match_filename(p, f, ignore, include): continue
+            if os.path.isdir(p):
+                output.append(p)
+                scan.append(p)
+            elif os.path.isfile(p):
+                output.append(p)
+    return output
 # Stores
 
 class DirStore:
@@ -892,6 +907,64 @@ class PhysicalTransaction:
         self.put_session(copy)
         return copy
 
+    def add_files_to_active(self, files, include, ignore):
+        active = self.active()
+        to_scan = set()
+        names = {}
+        dirs = {}
+        for filename in files:
+            name = self.full_to_repo_path(filename)
+            if os.path.isfile(filename):
+                names[name] = filename
+            elif os.path.isdir(filename):
+                dirs[name] = filename
+                to_scan.add(filename)
+            filename = os.path.split(filename)[0]
+            name = os.path.split(name)[0]
+            while name != '/' and name != self.VEX:
+                dirs[name] = filename
+                name = os.path.split(name)[0]
+                filename = os.path.split(filename)[0]
+
+
+        for dir in to_scan:
+            for filename in list_dir(dir, ignore, include):
+                name = self.full_to_repo_path(filename)
+                if os.path.isfile(filename):
+                    names[name] = filename
+                elif os.path.isdir(filename):
+                    dirs[name] = filename
+
+        added = set()
+        new_files = {}
+        for name, filename in dirs.items():
+            if name in active.files:
+                entry = active.files[name]
+                if entry.kind != 'dir':
+                    replace = entry.replace
+                    if replace == None and entry.kind != 'dir': replace = entry.kind
+                    new_files[name] = objects.Tracked('dir', "replaced", working=True, properties={}, replace=replace)
+                    added.add(filename)
+            else:
+                new_files[name] = objects.Tracked('dir', "added", working=True, properties={})
+                added.add(filename)
+
+        for name, filename in names.items():
+            if name in active.files:
+                entry = active.files[name]
+                if entry.kind != 'file':
+                    replace = entry.replace
+                    if replace == None and entry.kind != 'file': replace = entry.kind
+                    new_files[name] = objects.Tracked('file', "replaced", working=True, properties={}, replace=replace)
+                    added.add(filename)
+            else:
+                new_files[name] = objects.Tracked('file',"added", working=True, properties={})
+                added.add(filename)
+
+        self.update_active_files(new_files, ())
+
+        return added
+    
     def prepared_changeset(self, old_uuid):
         changes = objects.Changeset(entries={})
         old = self.get_commit(old_uuid)
@@ -1533,6 +1606,7 @@ class Project:
             filename = os.path.normpath(filename)
             if not filename.startswith(self.working_dir):
                 raise VexError("{} is outside project".format(filename))
+            if filename == self.config_dir: continue
             output.append(filename)
         return files
 
@@ -1782,23 +1856,6 @@ class Project:
         self.sessions.set(session.uuid, session)
         self.state.set('prefix', prefix)
         self.state.set('active', session.uuid)
-
-    def list_dir(self, dir, ignore, include):
-        output = []
-        scan = [dir]
-        while scan:
-            dir = scan.pop()
-            for f in os.listdir(dir):
-                p = os.path.join(dir, f)
-                if p == self.config_dir:
-                    continue
-                if not match_filename(p, f, ignore, include): continue
-                if os.path.isdir(p):
-                    output.append(p)
-                    scan.append(p)
-                elif os.path.isfile(p):
-                    output.append(p)
-        return output
 
     ###  Commands
 
@@ -2074,64 +2131,12 @@ class Project:
     def add(self, files, include=None, ignore=None):
         files = self.check_files(files)
 
-        added = set()
         with self.do('add') as txn:
             session = txn.refresh_active()
             include = include if include is not None else txn.get_setting('include')
             ignore = ignore if ignore is not None else txn.get_setting('ignore')
-            to_add = set()
-            new_files = {}
-            names = {}
-            dirs = {}
-            for filename in files:
-                name = txn.full_to_repo_path(filename)
-                if filename == self.config_dir: continue
-                if os.path.isfile(filename):
-                    names[name] = filename
-                elif os.path.isdir(filename):
-                    dirs[name] = filename
-                    to_add.add(filename)
-                filename = os.path.split(filename)[0]
-                name = os.path.split(name)[0]
-                while name != '/' and name != self.VEX:
-                    dirs[name] = filename
-                    name = os.path.split(name)[0]
-                    filename = os.path.split(filename)[0]
 
-
-            for dir in to_add:
-                for filename in self.list_dir(dir, ignore, include):
-                    name = txn.full_to_repo_path(filename)
-                    if os.path.isfile(filename):
-                        names[name] = filename
-                    elif os.path.isdir(filename):
-                        dirs[name] = filename
-
-            for name, filename in dirs.items():
-                if name in session.files:
-                    entry = session.files[name]
-                    if entry.kind != 'dir':
-                        replace = entry.replace
-                        if replace == None and entry.kind != 'dir': replace = entry.kind
-                        new_files[name] = objects.Tracked('dir', "replaced", working=True, properties={}, replace=replace)
-                        added.add(filename)
-                else:
-                    new_files[name] = objects.Tracked('dir', "added", working=True, properties={})
-                    added.add(filename)
-
-            for name, filename in names.items():
-                if name in session.files:
-                    entry = session.files[name]
-                    if entry.kind != 'file':
-                        replace = entry.replace
-                        if replace == None and entry.kind != 'file': replace = entry.kind
-                        new_files[name] = objects.Tracked('file', "replaced", working=True, properties={}, replace=replace)
-                        added.add(filename)
-                else:
-                    new_files[name] = objects.Tracked('file',"added", working=True, properties={})
-                    added.add(filename)
-
-            txn.update_active_files(new_files, ())
+            added = txn.add_files_to_active(files, include, ignore)
             return added
 
     def forget(self, files):
