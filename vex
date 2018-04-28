@@ -2,12 +2,27 @@
 import os
 import os.path
 import traceback
+import subprocess
+from contextlib import contextmanager
 
 from cli import Command, print_result
 from project import Project, VexBug, VexNoProject, VexNoHistory, VexUnclean, VexError, VexArgument
 import rson
 
 VEX = ".vex"
+
+def watcher():
+    p = subprocess.run('fswatch --version', stdout=subprocess.DEVNULL, shell=True)
+    if p.returncode: raise VexBug('fswatch is not installed')
+
+    p = subprocess.Popen('fswatch .', shell=True, stdout=subprocess.PIPE)
+    def watch_files():
+        for line in p.stdout.readlines():
+            yield line
+    try:
+        yield watch_files
+    finally:
+        p.terminate()
 
 def get_project(check=True, empty=True):
     working_dir = os.getcwd()
@@ -401,9 +416,10 @@ def Prepare(file,watch, add):
         cwd = os.getcwd()
         files = file if file else None
         if watch:
-            for file in watch_files(files):
-                p.prepare([file])
-                yield os.path.relpath(file)
+            with watcher() as files:
+                for file in files():
+                    p.prepare([file])
+                    yield os.path.relpath(file)
         else:
             p.prepare(files)
 
@@ -722,9 +738,10 @@ def Stash(watch):
         if not watch:
             p.stash()
         else:
-            for file in watch_files():
-                p.stash(files=[file])
-                print(file)
+            with watcher() as files:
+                for file in files():
+                    p.stash(files=[file])
+                    yield os.path.relpath(file)
 
 debug_status = vex_debug.subcommand('status')
 @debug_status.run()
