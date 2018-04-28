@@ -135,7 +135,7 @@ class objects:
         Kinds = set("""
             init prepare commit amend
             purge truncate
-            branch rebase apply 
+            apply 
         """.split())
         def __init__(self, kind, timestamp, *, previous, parents, root, changeset):
             self.kind = kind

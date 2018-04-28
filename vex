@@ -293,9 +293,11 @@ def Log():
 vex_cmd_diff = vex_cmd.group('diff')
 vex_diff = vex_cmd_diff.subcommand('diff', short="show the current changes to the project as a diff")
 vex_diff_file = vex_diff.subcommand('file', short='show changed files since last commit')
-@vex_diff.run('''
+argspec = '''
     [file:path...] # difference between two files
-''')
+'''
+@vex_diff.run(argspec)
+@vex_diff_file.run(argspec)
 def Diff(file):
     """
         `vex diff` shows the changes waiting to be committed for the given files
@@ -305,47 +307,6 @@ def Diff(file):
         cwd = os.getcwd()
         files = [os.path.join(cwd, f) for f in file] if file else None
         for name, diff in  p.active_diff_files(files).items():
-            yield diff
-
-vex_diff_branch = vex_diff.subcommand('branch')
-@vex_diff_branch.run('''
-        [branch] # name of branch to check, defaults to current branch
-''')
-def DiffBranch(branch):
-    """
-        `vex diff:branch` shows the changes bewtween working copy and a branch
-    """
-    p = get_project()
-    with p.lock('diff') as p:
-        if not branch:
-            branch = p.active().branch
-        else:
-            branch = p.get_branch_uuid(branch)
-
-        branch = p.get_branch(branch)
-        commit = branch.head
-
-        for name, diff in  p.active_diff_commit(commit).items():
-            yield diff
-def Diff(file):
-    """
-        `vex diff` shows the changes waiting to be committed for the given files
-    """
-    p = get_project()
-    with p.lock('diff') as p:
-        cwd = os.getcwd()
-        files = [os.path.join(cwd, f) for f in file] if file else None
-        for name, diff in  p.diff_files(files).items():
-            yield diff
-def Diff(file):
-    """
-        `vex diff` shows the changes waiting to be committed for the given files
-    """
-    p = get_project()
-    with p.lock('diff') as p:
-        cwd = os.getcwd()
-        files = [os.path.join(cwd, f) for f in file] if file else None
-        for name, diff in  p.diff_files(files).items():
             yield diff
 
 vex_cmd_files = vex_cmd.group('files')
@@ -626,6 +587,31 @@ def Swap(name):
         if not p.names.get(name):
             raise VexArgument("{} doesn't exist".format(name))
         p.swap_branch(name)
+
+
+vex_diff_branch = vex_diff.subcommand('branch')
+vex_branch_diff = vex_branch.subcommand('branch')
+argspec= ('''
+        [branch] # name of branch to check, defaults to current branch
+''')
+@vex_diff_branch.run(argspec)
+@vex_branch_diff.run(argspec)
+def DiffBranch(branch):
+    """
+        `vex diff:branch` shows the changes bewtween working copy and a branch
+    """
+    p = get_project()
+    with p.lock('diff') as p:
+        if not branch:
+            branch = p.active().branch
+        else:
+            branch = p.get_branch_uuid(branch)
+
+        branch = p.get_branch(branch)
+        commit = branch.head
+
+        for name, diff in  p.active_diff_commit(commit).items():
+            yield diff
 
 vex_switch = vex_cmd_files.subcommand('switch', short="change which directory (inside the project) is worked on")
 @vex_switch.run('[prefix]')

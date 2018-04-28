@@ -90,10 +90,10 @@ By default, `vex init name` creates a repository with a `/name` directory inside
 ### Undoing changes
 
 - `vex undo` undoes the last command that changed something
-- `vex undo --list` shows the list of commands that can be undone
+- `vex undo:list` shows the list of commands that can be undone
 - `vex undo` can be run more than once,
 - `vex redo` redoes the last undone command
-- `vex redo --list` shows the potential options, `vex redo --choice=<n>` to pick one
+- `vex redo:list` shows the potential options, `vex redo --choice=<n>` to pick one
 - `vex redo` can be run more than once, and redone more than once
 
 ```Example placeholder```
@@ -126,7 +126,9 @@ By default, `vex init name` creates a repository with a `/name` directory inside
 
 - `vex status`
 
-- `vex diff`
+- `vex diff <files>`
+
+- `vex diff:branch <branch>`
 
 ### Saving changes
 
@@ -134,7 +136,7 @@ By default, `vex init name` creates a repository with a `/name` directory inside
 
 - `vex prepare --watch` *
 
-- `vex commit`
+- `vex commit` / 'vex commit:prepared'
 
 - `vex amend` 
 
