@@ -323,8 +323,10 @@ def parse_args(argspec, argv, environ):
 def try_parse(name, arg, argtype):
     if argtype in (None, "str", "string"):
         return arg
-    elif argtype in ("path", "branch", "commit"):
+    elif argtype in ("branch", "commit"):
         return arg
+    elif argtype in ("path"):
+        return os.path.normpath(os.path.join(os.getcwd(), arg))
 
     elif argtype in ("int","integer"):
         try:

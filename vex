@@ -305,7 +305,7 @@ def Diff(file):
     p = get_project()
     with p.lock('diff') as p:
         cwd = os.getcwd()
-        files = [os.path.join(cwd, f) for f in file] if file else None
+        files = file if file else None # comes in as []
         for name, diff in  p.active_diff_files(files).items():
             yield diff
 
@@ -328,9 +328,6 @@ def Add(include, ignore, file):
     cwd = os.getcwd()
     if not file:
         files = [cwd]
-    else:
-        files = [os.path.join(cwd, f) for f in file]
-    files = [os.path.normpath(f) for f in files]
     missing = [f for f in file if not os.path.exists(f)]
     if missing:
         raise VexArgument('cannot find {}'.format(",".join(missing)))
@@ -357,8 +354,6 @@ def Forget(file):
         return
 
     cwd = os.getcwd()
-    files = [os.path.join(cwd, f) for f in file]
-    files = [os.path.normpath(f) for f in files]
     missing = [f for f in file if not os.path.exists(f)]
     if missing:
         raise VexArgument('cannot find {}'.format(",".join(missing)))
@@ -392,7 +387,7 @@ def Prepare(file,watch, add):
                 yield "add: {}".format(f)
 
         cwd = os.getcwd()
-        files = [os.path.join(cwd, f) for f in file] if file else None
+        files = file if file else None
         if watch:
             for file in watch_files(files):
                 p.prepare([file])
@@ -403,7 +398,7 @@ def Prepare(file,watch, add):
 vex_commit = vex_cmd_commit.subcommand('commit', short="save the working copy and add an entry to the project changes")
 @vex_commit.run('''
     --add?          # Run `vex add` before commiting
-    [file...]       # Commit only a few changed files
+    [file:path...]       # Commit only a few changed files
 ''')
 def Commit(add, file):
     """
@@ -418,7 +413,7 @@ def Commit(add, file):
                 yield "add: {}".format(f)
 
         cwd = os.getcwd()
-        files = [os.path.join(cwd, f) for f in file] if file else None
+        files = file if file else None
 
         changes = p.commit_active(files)
 
@@ -452,7 +447,7 @@ def CommitPrepared():
 
 vex_amend = vex_cmd_commit.subcommand('amend', short="replace the last commit with the current changes in the project")
 @vex_amend.run('''
-    [file...] # files to change
+        [file:path...] # files to change
 ''')
 def Amend(file):
     """
@@ -467,7 +462,7 @@ def Amend(file):
     yield ('Amending')
     with p.lock('amend') as p:
         cwd = os.getcwd()
-        files = [os.path.join(cwd, f) for f in file] if file else None
+        files = file if file else None
         if p.amend(files):
             yield 'Committed'
         else:
@@ -477,7 +472,7 @@ def Amend(file):
 vex_cmd_branch = vex_cmd.group('branch')
 
 vex_branch = vex_cmd_branch.subcommand('branch', short="open/create branch")
-@vex_branch.run('[name]')
+@vex_branch.run('[name:branch]')
 def Branch(name):
     """
 
@@ -511,7 +506,7 @@ def Branches():
                 yield branch.uuid
 
 vex_branch_get = vex_branch.subcommand('get', short="get branch info", aliases=["show", "info"])
-@vex_branch_get.run('[name]')
+@vex_branch_get.run('[name:branch]')
 def BranchInfo(name):
     """
 
@@ -533,7 +528,7 @@ def BranchInfo(name):
         yield branch.name
 
 vex_open = vex_branch.subcommand('open', short="open or create a branch")
-@vex_open.run('name')
+@vex_open.run('name:branch')
 def Open(name):
     """
 
@@ -543,7 +538,7 @@ def Open(name):
         p.open_branch(name, create=False)
 
 vex_new = vex_branch.subcommand('new', short="create a new branch")
-@vex_new.run('name')
+@vex_new.run('name:branch')
 def New(name):
     """
 
@@ -553,7 +548,7 @@ def New(name):
         p.new_branch(name)
 
 vex_saveas = vex_branch.subcommand('saveas', short="save session as a new branch, leaving old one alone")
-@vex_saveas.run('name')
+@vex_saveas.run('name:branch')
 def SaveAs(name):
     """
 
@@ -565,7 +560,7 @@ def SaveAs(name):
         p.save_as(name)
 
 vex_rename = vex_branch.subcommand('rename', short="rename current branch")
-@vex_rename.run('name')
+@vex_rename.run('name:branch')
 def RenameBranch(name):
     """
 
@@ -577,7 +572,7 @@ def RenameBranch(name):
         p.rename_branch(name)
 
 vex_swap = vex_branch.subcommand('swap', short="swap name with another branch")
-@vex_swap.run('name')
+@vex_swap.run('name:branch')
 def Swap(name):
     """
 
@@ -592,7 +587,7 @@ def Swap(name):
 vex_diff_branch = vex_diff.subcommand('branch')
 vex_branch_diff = vex_branch.subcommand('branch')
 argspec= ('''
-        [branch] # name of branch to check, defaults to current branch
+        [branch:branch] # name of branch to check, defaults to current branch
 ''')
 @vex_diff_branch.run(argspec)
 @vex_branch_diff.run(argspec)
@@ -683,17 +678,15 @@ props_list_cmd = props_cmd.subcommand('get', short="list properties")
 @props_list_cmd.run('file')
 def ListProps(file):
     p = get_project()
-    filename = os.path.join(os.getcwd(), file)
     with p.lock('fileprops:list') as p:
-        for key,value in p.get_fileprops(filename).items():
-            file = os.path.relpath(filename)
+        for key,value in p.get_fileprops(file).items():
+            file = os.path.relpath(file)
             yield "{}:{}:{}".format(file, key,value)
 
 props_set_cmd = props_cmd.subcommand('set', short='set property')
 @props_set_cmd.run('file name value:scalar')
 def SetProp(file, name, value):
     p = get_project()
-    filename = os.path.join(os.getcwd(), file)
     with p.lock('fileprops:list') as p:
         p.set_fileprop(filename, name, value)
 
