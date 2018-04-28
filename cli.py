@@ -591,9 +591,9 @@ class Command:
 
     # -- builder methods
 
-    def on_error(self):
+    def on_call(self):
         def _decorator(fn):
-            self.err_fn = fn
+            self.call_fn = fn
             return fn
         return _decorator
 
@@ -646,17 +646,17 @@ class Command:
 
     # -- end of builder methods
 
-    def call(self, path, argv):
+    def bind(self, path, argv):
         if path and path[0] in self.subcommands:
-            return self.subcommands[path[0]].call(path[1:], argv)
+            return self.subcommands[path[0]].bind(path[1:], argv)
         elif self.run_fn:
             if len(argv) == self.nargs:
-                return self.run_fn(**argv)
+                return lambda: self.run_fn(**argv)
             else:
                 raise Error(-1, "bad options")
         else:
             if len(argv) == 0:
-                return (self.render().manual())
+                return lambda: (self.render().manual())
             else:
                 raise Error(-1, self.render().usage())
 
@@ -692,6 +692,16 @@ class Command:
             argspec = self.argspec, 
         )
             
+
+def print_result(result):
+    if not isinstance(result, types.GeneratorType):
+        result = (result,)
+    for line in result:
+        if isinstance(line, (bytes, bytearray)):
+            sys.stdout.buffer.write(line)
+        elif line is not None:
+            print(line)
+    sys.stdout.flush()
 
 
 def main(root, argv, environ):
@@ -750,51 +760,35 @@ def main(root, argv, environ):
 
 
     try:
-        code = 0
         if action.mode == "version":
             result = obj.version()
-        elif action.mode == "call" or action.mode == "debug":
-            result =  root.call(action.path, action.argv)
+            print_result(result)
+            return 0
         elif action.mode == "help":
             result = obj.help(action.path, usage=action.argv.get('usage'))
+            print_result(result)
+            return 0
         elif action.mode == "error":
             print("error: {}".format(", ".join(action.errors)))
-            result = obj.help(action.path, usage=action.argv.get('usage'))
-            code = -1
+            print_result(obj.help(action.path, usage=action.argv.get('usage')))
+            return 0
+        elif action.mode == "call" or action.mode == "debug":
+            callback =  root.bind(action.path, action.argv)
 
-        if result is not None:
-            line = None
-            if not isinstance(result, types.GeneratorType):
-                result = (result,)
-
-            for line in result:
-                if isinstance(line, (bytes, bytearray)):
-                    sys.stdout.buffer.write(line)
-                elif line is not None:
-                    print(line)
-                sys.stdout.flush()
-            return code
+            if not root.call_fn:
+                try:
+                    result = callback()
+                    print_result(result)
+                    return 0
+                except Exception as e:
+                    if action.mode =="debug":
+                        raise
+                    result= "".join(traceback.format_exception(*sys.exc_info()))
+                    print_result(result)
+                    return -1
+            else:
+                return root.call_fn(action.mode, action.path, action.argv, callback)
     except Error as e:
         print()
         print(e.value)
         return e.exit_code
-
-    except Exception as e:
-        if action.mode =="debug":
-            raise
-        result= "".join(traceback.format_exception(*sys.exc_info()))
-        if root.err_fn:
-            result = root.err_fn(action.path, action.argv, e, result)
-
-        if not isinstance(result, types.GeneratorType):
-            result = (result,)
-        for line in result:
-            if isinstance(line, (bytes, bytearray)):
-                sys.stdout.buffer.write(line)
-            elif line is not None:
-                print(line)
-        sys.stdout.flush()
-        return -1
-
-
-

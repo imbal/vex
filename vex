@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 import os
 import os.path
+import traceback
 
-from cli import Command
+from cli import Command, print_result
 from project import Project, VexBug, VexNoProject, VexNoHistory, VexUnclean, VexError, VexArgument
 import rson
 
@@ -43,22 +44,32 @@ vex supports bash completion: run `complete -o nospace -C vex vex`
 
 """
 
-@vex_cmd.on_error()
-def Error(path, args, exception, traceback):
+@vex_cmd.on_call()
+def Call(mode, path, args, callback):
     """
         This gets called if an exception was thrown during normal operation.
     """
-    message = str(exception)
-    if path:
-        yield ("{}: {}".format(':'.join(path), message))
-    else:
-        yield ("vex: {}".format(message))
+    try:
+        result = callback()
+        if result is not None:
+            print_result(result)
+        return 0
 
-    if not isinstance(exception, VexError):
-        yield ""
-        yield ("Worse still, it's an error vex doesn't recognize yet. A python traceback follows:")
-        yield ""
-        yield (traceback)
+    except Exception as e:
+        if mode =="debug":
+            raise
+        result= "".join(traceback.format_exception(*sys.exc_info()))
+        message = str(exception)
+        vex_error = isinstance(e, VexError)
+
+    if path:
+        print("{}: {}".format(':'.join(path), message))
+    else:
+        print("vex: {}".format(message))
+
+    if not vex_error:
+        print("\nWorse still, it's an error vex doesn't recognize yet. A python traceback follows:\n")
+        print(result)
 
     p = get_project(check=False)
 
@@ -66,9 +77,10 @@ def Error(path, args, exception, traceback):
         p.rollback_new_action()
 
         if not p.clean_state():
-            yield ('This is bad: The project history is corrupt, try `vex debug:status` for more information')
+            print('This is bad: The project history is corrupt, try `vex debug:status` for more information')
         else:
-            yield ('Good news: The changes that were attempted have been undone')
+            print('Good news: The changes that were attempted have been undone')
+    return -1
 
 
 vex_init = vex_cmd.subcommand('init',short="create a new vex project")
