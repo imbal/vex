@@ -1760,11 +1760,10 @@ class Project:
             entry = session.files[name]
             if name in ("/", self.VEX): continue
             new_addr = None
-            if entry.kind == "file":
-                if entry.working is None:
-                    continue
-                path = self.repo_to_full_path(self.prefix(), name)
-                entry.refresh(path, self.addr_for_file)
+            if entry.working is None:
+                continue
+            path = self.repo_to_full_path(self.prefix(), name)
+            entry.refresh(path, self.addr_for_file)
 
             if entry.kind == 'file' and entry.state in ('added', 'replaced', 'modified'):
                 entry.stash = self.put_scratch_file(path, addr=new_addr)
