@@ -416,7 +416,7 @@ def Commit(add, file):
         cwd = os.getcwd()
         files = [os.path.join(cwd, f) for f in file] if file else None
 
-        changes = p.commit(files)
+        changes = p.commit_active(files)
 
         if changes:
             for name, entries in changes.items():

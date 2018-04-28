@@ -979,15 +979,21 @@ class PhysicalTransaction:
     def update_active_from_changeset(self, changeset):
         active = self.active()
         for name, changes in changeset.items():
-            working = active.files[name].working
+            entry = active.files.get(name)
             change = changes[-1]
 
-            if isinstance(change, objects.DeleteDir):
+            if not entry:
+                if not isinstance(change, (objects.DeleteFile, objects.DeleteDir)):
+                    raise VexBug('sync')
+            elif isinstance(change, objects.DeleteDir):
                 active.files.pop(name)
-            if isinstance(change, objects.DeleteFile):
+            elif isinstance(change, objects.DeleteFile):
                 active.files.pop(name)
             else:
-                if working:
+                mtime = None
+                mode = None
+                size = None
+                if entry.working:
                     path = self.repo_to_full_path(name)
                     stat = os.stat(path)
                     if (time.time() - stat.st_mtime) < MTIME_GRACE_SECONDS:
@@ -996,19 +1002,16 @@ class PhysicalTransaction:
                         mtime = stat.st_mtime
                     mode = stat.st_mode
                     size = stat.st_size
-                else:
-                    mtime = None
-                    mode = None
-                    size = None
+
 
                 if isinstance(change, (objects.AddFile, objects.NewFile)):
-                    active.files[name] = objects.Tracked("file", "tracked", working=working, addr=change.addr, properties=change.properties, mtime=mtime, mode=mode, size=size)
+                    active.files[name] = objects.Tracked("file", "tracked", working=entry.working, addr=change.addr, properties=change.properties, mtime=mtime, mode=mode, size=size)
                 elif isinstance(change, objects.ChangeFile):
-                    active.files[name] = objects.Tracked("file", "tracked", working=working, addr=change.addr, properties=change.properties, mtime=mtime, mode=mode, size=size)
+                    active.files[name] = objects.Tracked("file", "tracked", working=entry.working, addr=change.addr, properties=change.properties, mtime=mtime, mode=mode, size=size)
                 elif isinstance(change, (objects.AddDir, objects.NewDir)):
-                    active.files[name] = objects.Tracked("dir", "tracked",  working=working, properties=change.properties, mtime=mtime, mode=mode, size=size)
+                    active.files[name] = objects.Tracked("dir", "tracked",  working=entry.working, properties=change.properties, mtime=mtime, mode=mode, size=size)
                 elif isinstance(change, objects.ChangeDir):
-                    active.files[name] = objects.Tracked("dir", "tracked", working=working, properties=change.properties, mtime=mtime, mode=mode, size=size)
+                    active.files[name] = objects.Tracked("dir", "tracked", working=entry.working, properties=change.properties, mtime=mtime, mode=mode, size=size)
                 else:
                     raise VexBug(change)
 
@@ -1019,8 +1022,12 @@ class PhysicalTransaction:
         active = self.active()
         for name, changes in changeset.items():
             change = changes[-1]
-            entry = active.files[name]
-            if entry.kind == 'file' and entry.working:
+            entry = active.files.get(name)
+            if not entry: 
+                if not isinstance(change, (objects.DeleteFile, objects.DeleteDir)):
+                    raise VexBug('sync')
+                
+            elif entry.kind == 'file' and entry.working:
                 filename = self.repo_to_full_path(name)
                 if os.path.isfile(filename) and isinstance(change, (objects.AddFile, objects.ChangeFile, objects.NewFile)):
                     addr = self.put_file(filename)
@@ -2003,7 +2010,7 @@ class Project:
 
         return self.commit_changeset(changes, old_uuid, kind='commit', command='commit:prepared')
 
-    def commit(self, files):
+    def commit_active(self, files):
         kind = 'commit'
         command = 'commit'
         files = self.check_files(files) if files else None
