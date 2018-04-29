@@ -14,6 +14,12 @@ class BadArg(Exception):
     def action(self, path):
         return Action("error", path, {'usage':True}, errors=self.args)
 
+class Complete:
+    def __init__(self, prefix, name, argtype):
+        self.prefix = prefix
+        self.name = name
+        self.argtype = argtype
+
 class Argspec:
     def __init__(self, switches, flags, lists, positional, optional, tail, argtypes, descriptions):
         self.switches = switches
@@ -450,19 +456,14 @@ class CommandDescription:
                     return ()
 
                 argtype = self.argspec.argtypes.get(field)
-                if argtype == 'path':
-                    if text:
-                        return [p for p in os.listdir() if p.startswith(text)]
-                    else:
-                        return [p for p in os.listdir() if not p.startswith('.')]
-                # XXX: suggest
-
+                return Complete(text, field, argtype)
         return ()
 
     def complete_flag(self, prefix):
         if '=' in prefix:
-            # check to see if it's a completeable type
-            return ()
+            field, prefix = prefix.split('=', 1)
+            argtype = self.argspec.argtypes.get(field)
+            return Complete(text, field, argtype)
         elif self.argspec:
             out = []
             out.extend("--{} ".format(x) for x in self.argspec.switches if x.startswith(prefix))
@@ -612,8 +613,15 @@ class Command:
         self.argspec = None
         self.nargs = 0
         self.err_fn = None
+        self.complete_fn= None
 
     # -- builder methods
+
+    def on_complete(self):
+        def _decorator(fn):
+            self.complete_fn = fn
+            return fn
+        return _decorator
 
     def on_call(self):
         def _decorator(fn):
@@ -750,6 +758,8 @@ def main(root, argv, environ):
             result = obj.complete_path([], arg.split(':'))
             if "help".startswith(arg):
                 print("help ")
+        if isinstance(result, Complete):
+            result = root.complete_fn(result.prefix, result.name, result.argtype)
         for line in result:
             print(line)
         return 0

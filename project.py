@@ -2306,22 +2306,3 @@ class Project:
             files = [txn.full_to_repo_path(filename) for filename in files] if files else None
             self.stash_session(txn.active(), files)
 
-
-def get_project(check=True, empty=True):
-    working_dir = os.getcwd()
-    while True:
-        config_dir = os.path.join(working_dir, DOTVEX)
-        if os.path.exists(config_dir):
-            break
-        new_working_dir = os.path.split(working_dir)[0]
-        if new_working_dir == working_dir:
-            raise VexNoProject('No vex project found in {}'.format(os.getcwd()))
-        working_dir = new_working_dir
-    p = Project(config_dir, working_dir)
-    if check:
-        if empty and p.history_isempty():
-            raise VexNoHistory('Vex project exists, but `vex init` has not been run (or has been undone)')
-        elif not p.clean_state():
-            raise VexUnclean('Another change is already in progress. Try `vex debug:status`')
-    return p
-

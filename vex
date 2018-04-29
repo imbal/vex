@@ -1,4 +1,12 @@
 #!/usr/bin/env python3
+"""
+
+vex is a command line program for saving changes to a project, switching
+between different versions, and sharing those changes.
+
+vex supports bash completion: run `complete -o nospace -C vex vex`
+
+"""
 import os
 import sys
 import os.path
@@ -32,7 +40,7 @@ def watcher():
     finally:
         p.terminate()
 
-def get_project(check=True, empty=True):
+def open_project():
     working_dir = os.getcwd()
     while True:
         config_dir = os.path.join(working_dir, VEX)
@@ -40,32 +48,51 @@ def get_project(check=True, empty=True):
             break
         new_working_dir = os.path.split(working_dir)[0]
         if new_working_dir == working_dir:
-            if check:
-                raise VexNoProject('No vex project found in {}'.format(os.getcwd()))
             return None
         working_dir = new_working_dir
-    p = Project(config_dir, working_dir)
+    return Project(config_dir, working_dir)
+
+def get_project(check=True, empty=True):
+    p = open_project()
     if check:
+        if not p:
+            raise VexNoProject('no vex project found in {}'.format(os.getcwd()))
         if empty and p.history_isempty():
             raise VexNoHistory('Vex project exists, but `vex init` has not been run (or has been undone)')
         elif not p.clean_state():
             raise VexUnclean('Another change is already in progress. Try `vex debug:status`')
     return p
+    
 
 # CLI bits. Should handle environs, cwd, etc
-vex_cmd = Command('vex', 'a database for files')
+vex_cmd = Command('vex', 'a database for files', long=__doc__)
 
-vex_cmd.long = """
+@vex_cmd.on_complete()
+def Complete(prefix, field, argtype):
+    if argtype == 'path':
+        if prefix:
+            return [p for p in os.listdir() if p.startswith(prefix)]
+        else:
+            return [p for p in os.listdir() if not p.startswith('.')]
+    elif argtype in ('bool', 'boolean'):
+        return ('true', 'false')
+    elif argtype == 'branch':
+        p = open_project()
+        if p:
+            out = []
+            for name,uuid in p.list_branches():
+                if not name: continue
+                if prefix:
+                    if name.startswith(prefix):
+                        out.append(name)
+                else:
+                    out.append(name)
+            return out
 
-vex is a command line program for saving changes to a project, switching
-between different versions, and sharing those changes.
-
-vex supports bash completion: run `complete -o nospace -C vex vex`
 
 
+    return ()
 
-
-"""
 
 @vex_cmd.on_call()
 def Call(mode, path, args, callback):
