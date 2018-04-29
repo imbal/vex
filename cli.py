@@ -451,7 +451,10 @@ class CommandDescription:
 
                 argtype = self.argspec.argtypes.get(field)
                 if argtype == 'path':
-                    return os.listdir()
+                    if text:
+                        return [p for p in os.listdir() if p.startswith(text)]
+                    else:
+                        return [p for p in os.listdir() if not p.startswith('.')]
                 # XXX: suggest
 
         return ()

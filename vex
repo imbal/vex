@@ -363,6 +363,8 @@ def Add(include, ignore, file):
     cwd = os.getcwd()
     if not file:
         files = [cwd]
+    else:
+        files = file
     missing = [f for f in file if not os.path.exists(f)]
     if missing:
         raise VexArgument('cannot find {}'.format(",".join(missing)))

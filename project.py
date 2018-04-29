@@ -921,7 +921,7 @@ class PhysicalTransaction:
                 to_scan.add(filename)
             filename = os.path.split(filename)[0]
             name = os.path.split(name)[0]
-            while name != '/' and name != self.VEX:
+            while name != '/' and name != self.project.VEX:
                 dirs[name] = filename
                 name = os.path.split(name)[0]
                 filename = os.path.split(filename)[0]
