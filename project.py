@@ -137,11 +137,11 @@ class objects:
             purge truncate
             apply 
         """.split())
-        def __init__(self, kind, timestamp, *, previous, parents, root, changeset):
+        def __init__(self, kind, timestamp, *, previous, ancestors, root, changeset):
             self.kind = kind
             self.timestamp = timestamp
             self.previous = previous
-            self.parents = parents
+            self.ancestors = ancestors
             self.root = root
             self.changeset = changeset
 
@@ -1983,7 +1983,7 @@ class Project:
 
             changeset_uuid = txn.put_manifest(changeset)
 
-            commit = objects.Commit('init', txn.now, previous=None, changeset=changeset_uuid, root=root_uuid, parents={})
+            commit = objects.Commit('init', txn.now, previous=None, changeset=changeset_uuid, root=root_uuid, ancestors={})
             commit_uuid = txn.put_commit(commit)
 
             branch = objects.Branch(branch_uuid, branch_name, 'active', prefix, commit_uuid, None, commit_uuid, None, [session_uuid])
@@ -2057,8 +2057,8 @@ class Project:
             changeset.author = txn.get_state('author')
 
             changeset_uuid = txn.put_manifest(changeset)
-            parents = {}
-            prepare = objects.Commit('prepare', txn.now, previous=prepare, parents=parents, root=None, changeset=changeset_uuid)
+            ancestors = {}
+            prepare = objects.Commit('prepare', txn.now, previous=prepare, ancestors=ancestors, root=None, changeset=changeset_uuid)
             prepare_uuid = txn.put_commit(prepare)
 
             txn.set_active_prepare(prepare_uuid)
@@ -2085,7 +2085,7 @@ class Project:
 
             changeset_uuid = txn.put_manifest(changeset)
 
-            commit = objects.Commit('commit', timestamp=txn.now, previous=old_uuid, parents=dict(prepared=session.prepare), root=root_uuid, changeset=changeset_uuid)
+            commit = objects.Commit('commit', timestamp=txn.now, previous=old_uuid, ancestors=dict(prepared=session.prepare), root=root_uuid, changeset=changeset_uuid)
             commit_uuid = txn.put_commit(commit)
 
             txn.set_active_commit(commit_uuid)
@@ -2123,7 +2123,7 @@ class Project:
             changeset.author = txn.get_state('author')
             changeset_uuid = txn.put_manifest(changeset)
 
-            commit = objects.Commit(kind, timestamp=txn.now, previous=old_uuid, parents=dict(prepared=session.prepare), root=root_uuid, changeset=changeset_uuid)
+            commit = objects.Commit(kind, timestamp=txn.now, previous=old_uuid, ancestors=dict(prepared=session.prepare), root=root_uuid, changeset=changeset_uuid)
             commit_uuid = txn.put_commit(commit)
 
             txn.set_active_commit(commit_uuid)
