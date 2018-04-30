@@ -470,8 +470,9 @@ def list_dir(dir, ignore, include):
     return output
 # Stores
 
-class DirStore:
-    def __init__(self, dir):
+class FileStore:
+    def __init__(self, dir, codec):
+        self.codec = codec
         self.dir = dir
     def makedirs(self):
         os.makedirs(self.dir, exist_ok=True)
@@ -487,15 +488,16 @@ class DirStore:
         if not self.exists(name):
             return None
         with open(self.filename(name), 'rb') as fh:
-            return codec.parse(fh.read())
+            return self.codec.parse(fh.read())
     def set(self, name, value):
         with open(self.filename(name),'w+b') as fh:
-            fh.write(codec.dump(value))
+            fh.write(self.codec.dump(value))
 
 class BlobStore:
     prefix = "vex:"
-    def __init__(self, dir):
+    def __init__(self, dir, codec):
         self.dir = dir
+        self.codec = codec
 
     def hashlib(self):
         return hashlib.shake_256()
@@ -571,7 +573,7 @@ class BlobStore:
         return addr
 
     def put_obj(self, obj):
-        buf = codec.dump(obj)
+        buf = self.codec.dump(obj)
         return self.put_buf(buf)
 
     def get_file(self, addr):
@@ -579,7 +581,7 @@ class BlobStore:
 
     def get_obj(self, addr):
         with open(self.filename(addr), 'rb') as fh:
-            return codec.parse(fh.read())
+            return self.codec.parse(fh.read())
 
 
 # History: Used to track undo/redo and changes to repository state
@@ -1504,10 +1506,10 @@ class LogicalTransaction:
 class Repo:
     def __init__(self, config_dir):
         self.dir = config_dir
-        self.commits =   BlobStore(os.path.join(config_dir, 'objects', 'commits'))
-        self.manifests = BlobStore(os.path.join(config_dir, 'objects', 'manifests'))
-        self.files =     BlobStore(os.path.join(config_dir, 'objects', 'files'))
-        self.scratch =   BlobStore(os.path.join(config_dir, 'objects', 'scratch'))
+        self.commits =   BlobStore(os.path.join(config_dir, 'objects', 'commits'), codec)
+        self.manifests = BlobStore(os.path.join(config_dir, 'objects', 'manifests'), codec)
+        self.files =     BlobStore(os.path.join(config_dir, 'objects', 'files'), codec)
+        self.scratch =   BlobStore(os.path.join(config_dir, 'objects', 'scratch'), codec)
 
     def makedirs(self):
         os.makedirs(self.dir, exist_ok=True)
@@ -1578,14 +1580,14 @@ class Project:
         self.repo = Repo(config_dir)
 
 
-        self.branches =   DirStore(os.path.join(config_dir, 'branches'))
-        self.names =      DirStore(os.path.join(config_dir, 'branches', 'names'))
-        self.sessions =   DirStore(os.path.join(config_dir, 'branches', 'sessions'))
-        self.state =      DirStore(os.path.join(config_dir, 'state'))
+        self.branches =   FileStore(os.path.join(config_dir, 'branches'), codec)
+        self.names =      FileStore(os.path.join(config_dir, 'branches', 'names'), codec)
+        self.sessions =   FileStore(os.path.join(config_dir, 'branches', 'sessions'), codec)
+        self.state =      FileStore(os.path.join(config_dir, 'state'), codec)
         self.history =   History(os.path.join(config_dir, 'history'))
         self.lockfile =  LockFile(os.path.join(config_dir, 'lock'))
 
-        self.settings =  DirStore(os.path.join(config_dir, 'settings'))
+        self.settings =  FileStore(os.path.join(config_dir, 'settings'), codec)
 
     # methods, look, don't ask, they're just plain methods, ok?
 
