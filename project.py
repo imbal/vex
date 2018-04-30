@@ -934,13 +934,13 @@ class PhysicalTransaction:
 
         self.new_branches[branch.uuid] = branch
 
-    def get_name(self, name):
+    def get_branch_uuid(self, name):
         if name in self.new_names:
             return self.new_names[names]
         if self.project.names.exists(name):
             return self.project.names.get(name)
 
-    def set_name(self, name, branch):
+    def set_branch_uuid(self, name, branch):
         if name not in self.old_names:
             if self.project.names.exists(name):
                 self.old_names[name] = self.project.names.get(name)
@@ -1481,13 +1481,13 @@ class LogicalTransaction:
             self.new_session_states[uuid] = state
             self.old_session_states[uuid] = old.state
 
-    def get_name(self, name):
+    def get_branch_uuid(self, name):
         if name in self.new_names:
             return self.new_names[names]
         if self.project.names.exists(name):
             return self.project.names.get(name)
 
-    def set_name(self, name, branch):
+    def set_branch_uuid(self, name, branch):
         if name not in self.old_names:
             if self.project.names.exists(name):
                 self.old_names[name] = self.project.names.get(name)
@@ -1823,11 +1823,12 @@ class Project:
             ### XXX check old value ...?
             if old is None and not os.path.exists(path):
                 self.repo.copy_from_any(addr, path)
-            elif old and self.addr_for_file(path):
-                if os.path.exists(path):
-                    os.remove(path)
+            elif old and os.path.exists(path) and self.addr_for_file(path) == old:
+                os.remove(path)
                 if addr:
                     self.repo.copy_from_any(addr, path)
+            else:
+                sys.stderr.write("ERR: Skipping {}\n".format(path))
 
 
     # Takes Action.blobs and copies them out of the scratch directory
@@ -2100,7 +2101,7 @@ class Project:
 
             branch = objects.Branch(branch_uuid, branch_name, 'active', prefix, commit_uuid, None, commit_uuid, None, [session_uuid])
             txn.put_branch(branch)
-            txn.set_name(branch_name, branch.uuid)
+            txn.set_branch_uuid(branch_name, branch.uuid)
 
             files = txn.build_files(commit_uuid)
             for name, entry in files.items():
@@ -2298,11 +2299,11 @@ class Project:
         with self.do('branch:swap') as txn:
             active = self.active()
             me = txn.get_branch(active.branch)
-            other = txn.get_name(name)
+            other = txn.get_branch_uuid(name)
             branch = txn.get_branch(other)
             old_name = me.name
-            txn.set_name(old_name, other)
-            txn.set_name(name, me.uuid)
+            txn.set_branch_uuid(old_name, other)
+            txn.set_branch_uuid(name, me.uuid)
             branch.name = old_name
             me.name = name
             txn.put_branch(me)
@@ -2312,9 +2313,9 @@ class Project:
         with self.do('branch:rename') as txn:
             active = self.active()
             old = txn.get_branch(active.branch)
-            txn.set_name(old.name, None)
+            txn.set_branch_uuid(old.name, None)
             old.name = name
-            txn.set_name(name, old.uuid)
+            txn.set_branch_uuid(name, old.uuid)
             txn.put_branch(old)
 
     def save_as(self, name, rename=False, swap=False):
@@ -2325,7 +2326,7 @@ class Project:
             buuid = UUID()
             branch = objects.Branch(buuid, name, 'active', txn.prefix(), old.head, old.base, old.init, upstream=old.upstream, sessions=[active.uuid])
             active.branch = buuid
-            txn.set_name(name, branch.uuid)
+            txn.set_branch_uuid(name, branch.uuid)
             txn.put_session(active)
             txn.put_branch(branch)
             txn.put_branch(old)
@@ -2333,7 +2334,7 @@ class Project:
     def open_branch(self, name, branch_uuid=None, session_uuid=None, create=False):
         with self.do_without_undo('branch:open') as txn:
             # check for >1
-            branch_uuid = txn.get_name(name) if not branch_uuid else branch_uuid
+            branch_uuid = txn.get_branch_uuid(name) if not branch_uuid else branch_uuid
             if branch_uuid is None:
                 if not create:
                     raise VexArgument('{} does not exist'.format(name))
@@ -2364,7 +2365,7 @@ class Project:
 
     def new_branch(self, name, from_branch=None, from_commit=None, fork=False):
         with self.do_without_undo('branch:new') as txn:
-            if txn.get_name(name):
+            if txn.get_branch_uuid(name):
                 raise VexArgument('branch {} already exists'.format(name))
             active = self.active()
             # bug: should pick commit from branch...
@@ -2378,7 +2379,7 @@ class Project:
         with self.do_switch('branch:new {}'.format(name)) as txn:
             txn.set_branch_state(branch.uuid, "active")
             txn.switch_session(session.uuid)
-            txn.set_name(name, branch.uuid)
+            txn.set_branch_uuid(name, branch.uuid)
 
     def list_sessions(self):
         out = []
