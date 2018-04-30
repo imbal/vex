@@ -98,7 +98,7 @@ def parse_argspec(argspec):
         else:
             return arg.strip(), None
 
-    def argname(arg, desc):
+    def argname(arg, desc, argtype=None):
         if not arg:
             return arg
         if ':' in arg:
@@ -108,6 +108,8 @@ def parse_argspec(argspec):
             argtypes[name] = atype 
         else:
             name = arg
+            if argtype:
+                argtypes[name] = argtype 
         if name in argnames:
             raise Exception('duplicate arg name')
         argnames.add(name)
@@ -125,9 +127,11 @@ def parse_argspec(argspec):
         if arg.endswith('?'):
             if ':' in arg:
                 raise Exception('switches cant have types')
-            switches.append(argname(arg[2:-1], desc))
+            switches.append(argname(arg[2:-1], desc, 'boolean'))
         elif arg.endswith('...'):
             lists.append(argname(arg[2:-3], desc))
+        elif arg.endswith('='):
+            flags.append(argname(arg[2:-1], desc))
         else:
             flags.append(argname(arg[2:],desc))
 
@@ -463,7 +467,7 @@ class CommandDescription:
         if '=' in prefix:
             field, prefix = prefix.split('=', 1)
             argtype = self.argspec.argtypes.get(field)
-            return Complete(text, field, argtype)
+            return Complete(prefix, field, argtype)
         elif self.argspec:
             out = []
             out.extend("--{} ".format(x) for x in self.argspec.switches if x.startswith(prefix))

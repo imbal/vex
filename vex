@@ -75,7 +75,12 @@ def Complete(prefix, field, argtype):
         else:
             return [p for p in os.listdir() if not p.startswith('.')]
     elif argtype in ('bool', 'boolean'):
-        return ('true', 'false')
+        out = ('true','false')
+        if prefix:
+            return [p for p in out if p.startswith(prefix)]
+        else:
+            return out
+
     elif argtype == 'branch':
         p = open_project()
         if p:
@@ -655,7 +660,7 @@ def Swap(name):
 
 
 vex_diff_branch = vex_diff.subcommand('branch')
-vex_branch_diff = vex_branch.subcommand('branch')
+vex_branch_diff = vex_branch.subcommand('diff')
 argspec= ('''
         [branch:branch] # name of branch to check, defaults to current branch
 ''')
