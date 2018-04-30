@@ -40,7 +40,7 @@ def watcher():
     finally:
         p.terminate()
 
-def open_project():
+def get_project():
     working_dir = os.getcwd()
     while True:
         config_dir = os.path.join(working_dir, VEX)
@@ -52,15 +52,14 @@ def open_project():
         working_dir = new_working_dir
     return Project(config_dir, working_dir)
 
-def get_project(check=True, empty=True):
-    p = open_project()
-    if check:
-        if not p:
-            raise VexNoProject('no vex project found in {}'.format(os.getcwd()))
-        if empty and p.history_isempty():
-            raise VexNoHistory('Vex project exists, but `vex init` has not been run (or has been undone)')
-        elif not p.clean_state():
-            raise VexUnclean('Another change is already in progress. Try `vex debug:status`')
+def open_project(allow_empty=False):
+    p = get_project()
+    if not p:
+        raise VexNoProject('no vex project found in {}'.format(os.getcwd()))
+    if not allow_empty and p.history_isempty():
+        raise VexNoHistory('Vex project exists, but `vex init` has not been run (or has been undone)')
+    elif not p.clean_state():
+        raise VexUnclean('Another change is already in progress. Try `vex debug:status`')
     return p
     
 
@@ -71,11 +70,11 @@ vex_cmd = Command('vex', 'a database for files', long=__doc__)
 def Complete(prefix, field, argtype):
     if argtype == 'path':
         if prefix:
-            return [p for p in os.listdir() if p.startswith(prefix)]
+            return ["{} ".format(p) for p in os.listdir() if p.startswith(prefix)]
         else:
-            return [p for p in os.listdir() if not p.startswith('.')]
+            return ["{} ".format(p) for p in os.listdir() if not p.startswith('.')]
     elif argtype in ('bool', 'boolean'):
-        out = ('true','false')
+        out = ('true ','false ')
         if prefix:
             return [p for p in out if p.startswith(prefix)]
         else:
@@ -84,25 +83,19 @@ def Complete(prefix, field, argtype):
     elif argtype == 'branch':
         p = open_project()
         if p:
-            out = []
-            for name,uuid in p.list_branches():
-                if not name: continue
-                if prefix:
-                    if name.startswith(prefix):
-                        out.append(name)
-                else:
-                    out.append(name)
-            return out
-
-
+            out = p.list_branches()
+            if prefix:
+                return ["{} ".format(name) for name, uuid in out if name.startwith(prefix)]
+            else:
+                return ["{} ".format(name) for name, uuid in out if name]
 
     return ()
 
 
 @vex_cmd.on_call()
 def Call(mode, path, args, callback):
-    """
-        This gets called if an exception was thrown during normal operation.
+    """ calling vex foo:bar args, calls this function with 'call', ['foo', 'bar'], args, and
+        a callback that is the right function to call
     """
     try:
         result = callback()
@@ -126,7 +119,7 @@ def Call(mode, path, args, callback):
         print("\nWorse still, it's an error vex doesn't recognize yet. A python traceback follows:\n")
         print(result)
 
-    p = get_project(check=False)
+    p = open_project(check=False)
 
     if p and p.exists() and not p.clean_state():
         p.rollback_new_action()
@@ -222,7 +215,7 @@ def Undo():
         similarly `vex redo:list` shows the actions that can be redone.
     """
 
-    p = get_project()
+    p = open_project()
 
     with p.lock('undo') as p:
         action = p.undo()
@@ -242,7 +235,7 @@ def UndoList():
         similarly `vex redo:list` shows the actions that can be redone.
     """
 
-    p = get_project()
+    p = open_project()
 
     count = 0
     for entry,redos in p.list_undos():
@@ -283,7 +276,7 @@ def Redo(choice):
 
         The order of the list changes when you pick a different item to redo. 
     """
-    p = get_project(empty=False)
+    p = open_project(allow_empty=True)
 
     with p.lock('redo') as p:
         choices = p.list_redos()
@@ -304,7 +297,7 @@ def RedoList():
         `vex redo` will redo the last action undone. `vex redo:list` will show the
         list of commands to choose from.
     """
-    p = get_project(empty=False)
+    p = open_project(allow_empty=True)
 
     with p.lock('redo') as p:
         choices = p.list_redos()
@@ -325,7 +318,7 @@ def Status(all):
         `vex status` shows the state of each visible file, `vex status --all` shows the status 
         of every file in the current session/branch.
     """
-    p = get_project()
+    p = open_project()
     cwd = os.getcwd()
     with p.lock('status') as p:
         files = p.status()
@@ -351,7 +344,7 @@ def Log():
         the current branch if none given.
     """
     
-    p = get_project()
+    p = open_project()
     for entry in p.log():
         yield (entry)
         yield ""
@@ -369,7 +362,7 @@ def Diff(file):
     """
         `vex diff` shows the changes waiting to be committed for the given files
     """
-    p = get_project()
+    p = open_project()
     with p.lock('diff') as p:
         cwd = os.getcwd()
         files = file if file else None # comes in as []
@@ -400,7 +393,7 @@ def Add(include, ignore, file):
     missing = [f for f in file if not os.path.exists(f)]
     if missing:
         raise VexArgument('cannot find {}'.format(",".join(missing)))
-    p = get_project()
+    p = open_project()
     include = include if include else None
     ignore = ignore if ignore else None
     with p.lock('add') as p:
@@ -426,7 +419,7 @@ def Forget(file):
     missing = [f for f in file if not os.path.exists(f)]
     if missing:
         raise VexArgument('cannot find {}'.format(",".join(missing)))
-    p = get_project()
+    p = open_project()
     with p.lock('forget') as p:
         for f in p.forget(files):
             f = os.path.relpath(f)
@@ -447,7 +440,7 @@ def Prepare(file,watch, add):
 
         preparory commits are not applied to branches.
     """
-    p = get_project()
+    p = open_project()
     yield ('Preparing')
     with p.lock('prepare') as p:
         if add:
@@ -480,7 +473,7 @@ def Commit(add, file):
         `vex commit` saves the current state of the project.
 
     """
-    p = get_project()
+    p = open_project()
     with p.lock('commit') as p:
         if add:
             for f in p.add([os.getcwd()]):
@@ -508,7 +501,7 @@ def CommitPrepared():
         `vex commit:prepared` transforms earlier `vex prepare` into a commit
 
     """
-    p = get_project()
+    p = open_project()
     with p.lock('commit:prepared') as p:
         changes = p.commit_prepared()
         if changes:
@@ -533,7 +526,7 @@ def Amend(file):
         instead of preparing for the next.
 
     """
-    p = get_project()
+    p = open_project()
     yield ('Amending')
     with p.lock('amend') as p:
         cwd = os.getcwd()
@@ -552,7 +545,7 @@ def Branch(name):
     """
 
     """
-    p = get_project()
+    p = open_project()
     with p.lock('open') as p:
         if name:
             p.open_branch(name, create=True)
@@ -565,7 +558,7 @@ vex_branches = vex_cmd_branch.subcommand('branches', short="list branches")
 @vex_branch_list.run()
 @vex_branches.run()
 def Branches():
-    p = get_project()
+    p = open_project()
     with p.lock('branches') as p:
         branches = p.list_branches()
         active = p.active()
@@ -586,7 +579,7 @@ def BranchInfo(name):
     """
 
     """
-    p = get_project()
+    p = open_project()
     with p.lock('branch') as p:
         if not name:
             active = p.active()
@@ -608,7 +601,7 @@ def Open(name):
     """
 
     """
-    p = get_project()
+    p = open_project()
     with p.lock('open') as p:
         p.open_branch(name, create=False)
 
@@ -618,7 +611,7 @@ def New(name):
     """
 
     """
-    p = get_project()
+    p = open_project()
     with p.lock('new') as p:
         p.new_branch(name)
 
@@ -628,7 +621,7 @@ def SaveAs(name):
     """
 
     """
-    p = get_project()
+    p = open_project()
     with p.lock('saveas') as p:
         if p.names.get(name):
             raise VexArgument('{} exists'.format(name))
@@ -640,7 +633,7 @@ def RenameBranch(name):
     """
 
     """
-    p = get_project()
+    p = open_project()
     with p.lock('rename') as p:
         if p.names.get(name):
             raise VexArgument('{} exists'.format(name))
@@ -652,7 +645,7 @@ def Swap(name):
     """
 
     """
-    p = get_project()
+    p = open_project()
     with p.lock('swap') as p:
         if not p.names.get(name):
             raise VexArgument("{} doesn't exist".format(name))
@@ -670,7 +663,7 @@ def DiffBranch(branch):
     """
         `vex diff:branch` shows the changes bewtween working copy and a branch
     """
-    p = get_project()
+    p = open_project()
     with p.lock('diff') as p:
         if not branch:
             branch = p.active().branch
@@ -689,7 +682,7 @@ def Switch(prefix):
     """
 
     """
-    p = get_project()
+    p = open_project()
     if prefix:
         with p.lock('switch') as p:
             prefix = os.path.join(p.prefix(), prefix)
@@ -702,7 +695,7 @@ vex_sessions = vex_cmd_branch.subcommand('sessions',short="show all sessions for
 
 @vex_sessions.run()
 def Sessions():
-    p = get_project()
+    p = open_project()
     with p.lock('sessions') as p:
         sessions = p.list_sessions()
         active = p.active()
@@ -720,7 +713,7 @@ vex_ignore_add = vex_ignore.subcommand('add', 'add ignored files')
 @vex_ignore.run('[file...]')
 @vex_ignore_add.run('[file...]')
 def AddIgnore(file):
-    p = get_project()
+    p = open_project()
     if file:
         with p.lock('ignore:add') as p:
             old = p.settings.get('ignore')
@@ -736,7 +729,7 @@ vex_include_add = vex_include.subcommand('add', 'add include files')
 @vex_include.run('[file...]')
 @vex_include_add.run('[file...]')
 def AddInclude(file):
-    p = get_project()
+    p = open_project()
     if file:
         with p.lock('include:add') as p:
             old = p.settings.get('include')
@@ -752,7 +745,7 @@ props_list_cmd = props_cmd.subcommand('get', short="list properties")
 @props_cmd.run('file')
 @props_list_cmd.run('file')
 def ListProps(file):
-    p = get_project()
+    p = open_project()
     with p.lock('fileprops:list') as p:
         for key,value in p.get_fileprops(file).items():
             file = os.path.relpath(file)
@@ -761,7 +754,7 @@ def ListProps(file):
 props_set_cmd = props_cmd.subcommand('set', short='set property')
 @props_set_cmd.run('file name value:scalar')
 def SetProp(file, name, value):
-    p = get_project()
+    p = open_project()
     with p.lock('fileprops:list') as p:
         p.set_fileprop(filename, name, value)
 
@@ -780,7 +773,7 @@ def Debug():
 vex_stash = vex_debug.subcommand('stash', short="internal: save progress without making a commit or checkpoint to undo")
 @vex_stash.run('--watch')
 def Stash(watch):
-    p = get_project()
+    p = open_project()
     with p.lock('stash') as p:
         if not watch:
             p.stash()
@@ -793,7 +786,7 @@ def Stash(watch):
 debug_status = vex_debug.subcommand('status')
 @debug_status.run()
 def DebugStatus():
-    p = get_project(check=False)
+    p = open_project(check=False)
     with p.lock('debug:status') as p:
         yield ("Clean history", p.clean_state())
         head = p.active()
@@ -820,7 +813,7 @@ def DebugStatus():
 debug_restart = vex_debug.subcommand('restart')
 @debug_restart.run()
 def DebugRestart():
-    p = get_project(check=False)
+    p = get_project()
     with p.lock('debug:restart') as p:
         if p.clean_state():
             yield ('There is no change in progress to restart')
@@ -835,7 +828,7 @@ def DebugRestart():
 debug_rollback = vex_debug.subcommand('rollback')
 @debug_rollback.run()
 def DebugRollback():
-    p = get_project(check=False)
+    p = get_project()
     with p.lock('debug:rollback') as p:
         if p.clean_state():
             yield ('There is no change in progress to rollback')
