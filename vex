@@ -20,7 +20,9 @@ from cli import Command, print_result
 from project import Project, VexBug, VexNoProject, VexNoHistory, VexUnclean, VexError, VexArgument
 import rson
 
-VEX = ".vex"
+DEFAULT_CONFIG_DIR = ".vex"
+DEFAULT_INCLUDE = ["*"] 
+DEFAULT_IGNORE =  [".*", DEFAULT_CONFIG_DIR, ".DS_Store", "*~", "*.swp", "__*__"]
 
 @contextmanager
 def watcher():
@@ -45,7 +47,7 @@ def watcher():
 def get_project():
     working_dir = os.getcwd()
     while True:
-        config_dir = os.path.join(working_dir, VEX)
+        config_dir = os.path.join(working_dir,  DEFAULT_CONFIG_DIR)
         if os.path.exists(config_dir):
             break
         new_working_dir = os.path.split(working_dir)[0]
@@ -166,12 +168,12 @@ def Init(directory, working, config, prefix, include, ignore):
     """
 
     working_dir = working or directory or os.getcwd()
-    config_dir = config or os.path.join(working_dir, VEX)
+    config_dir = config or os.path.join(working_dir,  DEFAULT_CONFIG_DIR)
     prefix = prefix or os.path.split(working_dir)[1] or ''
     prefix = os.path.join('/', prefix)
 
-    include = include or ["*"] 
-    ignore = ignore or [".*",VEX]
+    include = include or DEFAULT_INCLUDE
+    ignore = ignore or DEFAULT_IGNORE
 
     p = Project(config_dir, working_dir)
 
