@@ -1387,9 +1387,39 @@ class PhysicalTransaction:
         changed = self.forget_files_from_active(files)
         for path, file in changed.items():
             # XXX: dirs
-            addr = self.project.put_scratch_file(file)
-            self.old_working[path] = addr
-            self.new_working[path] = None
+            if not os.path.isfile(file):
+                raise VexUnimplemented('crap')
+            if os.path.exists(file) and os.path.isfile(file):
+                addr = self.project.put_scratch_file(file)
+                self.old_working[path] = addr
+                self.new_working[path] = None
+        return changed
+
+    def restore_files_to_active(self, files):
+        active = self.active()
+        
+        old_files = self.build_files(active.prepare)
+        new_files = {}
+        changed = {}
+        for file in files:
+            path = self.full_to_repo_path(file)
+            if path not in old_files:
+                continue
+            changed[path] = file
+            if os.path.exists(file):
+                if not os.path.isfile(file):
+                    raise VexUnimplemented('crap')
+                addr = self.project.put_scratch_file(file)
+                self.old_working[path] = addr
+                self.new_working[path] = old_files[path].addr
+            else:
+                self.old_working[path] = None
+                self.new_working[path] = old_files[path].addr
+            print(self.old_working, self.new_working)
+
+            new_files[path] = old_files[path]
+            new_files[path].working = True
+        self.update_active_files(new_files, ())
         return changed
 
     def action(self):
@@ -2241,7 +2271,6 @@ class Project:
             return changed
 
     def restore(self, files):
-        raise VexUnimplemented('not yet')
         files = self.check_files(files)
 
         with self.do('restore') as txn:

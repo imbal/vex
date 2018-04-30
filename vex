@@ -115,9 +115,9 @@ def Call(mode, path, args, callback):
         vex_error = isinstance(e, VexError)
 
     if path:
-        print("{}: {}".format(':'.join(path), message))
+        print("{}: error: {}".format(':'.join(path), message))
     else:
-        print("vex: {}".format(message))
+        print("vex: error: {}".format(message))
 
     if not vex_error:
         print("\nWorse still, it's an error vex doesn't recognize yet. A python traceback follows:\n")
@@ -462,7 +462,7 @@ def Restore(file):
     with p.lock('restore') as p:
         for f in p.restore(file).values():
             f = os.path.relpath(f)
-            yield "remove: {}".format(f)
+            yield "restore: {}".format(f)
 vex_cmd_commit = vex_cmd.group("commit")
 
 vex_prepare = vex_cmd_commit.subcommand('prepare', short="save current working copy to prepare for commit", aliases=['save'])
