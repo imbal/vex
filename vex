@@ -121,7 +121,7 @@ def Call(mode, path, args, callback):
         print("\nWorse still, it's an error vex doesn't recognize yet. A python traceback follows:\n")
         print(result)
 
-    p = open_project(check=False)
+    p = get_project()
 
     if p and p.exists() and not p.clean_state():
         p.rollback_new_action()
@@ -417,15 +417,33 @@ def Forget(file):
     if not file:
         return
 
-    cwd = os.getcwd()
-    missing = [f for f in file if not os.path.exists(f)]
-    if missing:
-        raise VexArgument('cannot find {}'.format(",".join(missing)))
+    file = [f for f in file if os.path.exists(f)]
     p = open_project()
     with p.lock('forget') as p:
-        for f in p.forget(files):
+        for f in p.forget(file):
             f = os.path.relpath(f)
             yield "forget: {}".format(f)
+
+vex_remove = vex_cmd_files.subcommand('remove','remove files from the project, deleting them')
+@vex_remove.run('''
+        [file:path...] # Files to remove from working copy
+''')
+def Remove(file):
+    """
+        `vex remove` will instruct vex to stop tracking a file, and it will not appear
+        inside the next commit.
+
+        it will delete the file from the working copy.
+    """
+    if not file:
+        return
+
+    file= [f for f in file if os.path.exists(f)]
+    p = open_project()
+    with p.lock('remove') as p:
+        for f in p.remove(file):
+            f = os.path.relpath(f)
+            yield "remove: {}".format(f)
 
 vex_cmd_commit = vex_cmd.group("commit")
 

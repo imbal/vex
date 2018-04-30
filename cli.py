@@ -657,7 +657,7 @@ class Command:
     def run(self, argspec=None):
         """A decorator for setting the function to be run"""
         if self.run_fn:
-            raise Exception('bad')
+            raise Exception('double definition')
 
         #if self.subcommands:
         #    raise Exception('bad')

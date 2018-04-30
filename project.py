@@ -146,6 +146,39 @@ class objects:
             self.changeset = changeset
 
 
+    # Manfest Objects: Directories and entries
+    @codec.register
+    class Root:
+        def __init__(self, entries, properties):
+            self.entries = entries
+            self.properties = properties
+
+    @codec.register
+    class Tree:
+        def __init__(self, entries):
+            self.entries = entries
+
+    # Entries in a Tree Object
+    # properties used to indicate 'large file' , 'large dir' options, ...
+    # large dir is 'take this tree but treat it as a tree of prefixes...'
+    # large file is 'addr points to  tree but it's list of @Chunks
+
+    @codec.register
+    class Dir:
+        def __init__(self, addr,  properties):
+            self.addr = addr
+            self.properties = properties
+
+    @codec.register
+    class File:
+        def __init__(self, addr, properties):
+            self.addr = addr
+            self.properties = properties
+
+    @codec.register
+    class Chunk:
+        def __init__(self, addr):
+            self.addr = addr
 
     @codec.register
     class Changeset:
@@ -172,6 +205,8 @@ class objects:
 
         def __bool__(self):
             return bool(self.entries)
+
+    # changeset entries
 
     @codec.register
     class AddFile:
@@ -222,40 +257,6 @@ class objects:
         text = "changed directory"
         def __init__(self, addr, properties):
             self.properties = properties
-            self.addr = addr
-
-    # Manfest Objects: Directories and entries
-    @codec.register
-    class Root:
-        def __init__(self, entries, properties):
-            self.entries = entries
-            self.properties = properties
-
-    @codec.register
-    class Tree:
-        def __init__(self, entries):
-            self.entries = entries
-
-    # Entries in a Tree Object
-    # properties used to indicate 'large file' , 'large dir' options, ...
-    # large dir is 'take this tree but treat it as a tree of prefixes...'
-    # large file is 'addr points to  tree but it's list of @Chunks
-
-    @codec.register
-    class Dir:
-        def __init__(self, addr,  properties):
-            self.addr = addr
-            self.properties = properties
-
-    @codec.register
-    class File:
-        def __init__(self, addr, properties):
-            self.addr = addr
-            self.properties = properties
-
-    @codec.register
-    class Chunk:
-        def __init__(self, addr):
             self.addr = addr
 
     # End of Repository State
