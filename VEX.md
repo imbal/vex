@@ -96,8 +96,6 @@ By default, `vex init name` creates a repository with a `/name` directory inside
 - `vex redo:list` shows the potential options, `vex redo --choice=<n>` to pick one
 - `vex redo` can be run more than once, and redone more than once
 
-```Example placeholder```
-
 ### Moving around the project
 
 - `vex switch` (change repo subtree checkout)
@@ -105,183 +103,128 @@ By default, `vex init name` creates a repository with a `/name` directory inside
 ### Adding/removing files from the project
 
 - `vex add`
-
 - `vex forget` 
-
-- `vex remove` *
-
 - `vex ignore` 
-
 - `vex include`
-
+- `vex remove` *
 - `vex restore` *
+- `vex restore --pick` *
 
 ### File properties
 
+- `vex fileprops` / `vex properties`
 - `vex fileprops:set`
 
 ### Inspecting changes
 
 - `vex log`
-
 - `vex status`
-
-- `vex diff <files>`
-
+- `vex diff <file> <file...>`
 - `vex diff:branch <branch>`
 
 ### Saving changes
 
 - `vex prepare` / `vex save`
-
-- `vex prepare --watch` *
-
+- `vex prepare --watch` 
 - `vex commit` / 'vex commit:prepared'
-
-- `vex amend` 
-
-- `--pick` * 
-
+- `vex amend` *
+- `vex commit --pick` * 
 - `vex rollback` *
-
 - `vex revert` *
+- `vex squash` * (flatten a branch)
 
 ### Working on a branch
 
 - `vex branch` what branch are you on
-
 - `vex branch:new` create a new branch
-
 - `vex branch:open` open existing branch
-
 - `vex branch:saveas`  (see `git checkout -b`)
-
 - `vex branch:swap`  
-
 - `vex branch:rename` 
-
-- `vex branch:close` *
-
 - `vex branches` list all branches
+- `vex branch:close` *
 
 ### Working on an anonymous branch
 
-- `vex session` * (see all open branches/anonymous branches)
-
+- `vex session` (see all open branches/anonymous branches)
+- `vex sessions`
+- `vex session:new` *
+- `vex session:open` *
+- `vex session:detach` *
+- `vex session:attach` *
 - `vex rewind`  * (like git checkout)
 
-### Updating a branch
+### Applying changes from a branch *
 
-- `vex squash` * (flatten a branch)
+When applying changes from another branch, vex creates new commits with new timestamps
+
+- `vex apply <branch>` *
+- `vex apply:append <branch>` *
+   create a new commit for each change in the other branch, as-is
+- `vex apply:replay <branch>` *
+   create a new commit for each change in the branch, reapplying the changes
+- `vex apply --squash`  
+   create a new commit with the changes from the other branch
+- `vex apply --pick`  
+
+### Rebuilding a branch with upsteam changes *
 
 - `vex update` * (rebase, --all affecting downstream branches too) 
+- `vex update --manual` * (handle conflcts)
 
-- `vex sync` *
+### Subprojects *
 
-### Handlng conflicts
+- `vex project:init name` *
+- `vex mount <branch/remote> <path>` *
 
-- `vex update --manual` *
+### Sharing changes *
 
-### Merging work back
-
-`vex` *always* creates a linear history:
-
-- `vex apply` *
-
-   create a new commit with the changes from the other branch
-
-- `vex replay` * / `--pick`
-
-   create a new commit for each change in the branch, reapplying the changes
-
-- `vex append` *
-
-   create a new commit for each change in the other branch, as-is
-
-### Sharing changes
-
-- `vex export` *
-
+- `vex export` * 
 - `vex import` *
-
 - `vex pull` *
-
 - `vex push` *
-
+- `vex sync` * (pull, update, push)
 - `vex remotes` *
-
 - `vex remotes:add` *
+- `vex serve` *
+- `vex clone` *
 
-# Things that are not done:
-
-### Handling mistakes, purging old commits
+### Cleaning the changelog
 
 - `vex purge` *
-
-### Truncating old commits
-
 - `vex truncate` *
 
-### Subprojects
+### Project settings *
 
-- `vex subproject:init name`
+- `vex project:settings` * 
+- `vex project:authors`  *
+- `vex project:set author.name ...` *
 
-### Running a server
+### Branch Settings *
 
-- `vex serve` *
+- `vex lock <branch>` * (sets a `/.vex/settings/policy` file inside a branch
+- `vex branch:set ..` *
 
-- `/.vex/settings/authorized_keys`
-
-### Project settings
-
-- `vex settings` * 
-
-   `<working_dir>/.vex/settings/foo` mapped to a `<repo>/.vex/foo` file
-
-   used for ignore,include and others 
-
-### Author information
-
-- `vex authors` 
-
-- `vex project:set author.name ...`
-
-Note: authors are stored as uuids internally, using a hidden file in the current branch to find names.
-
-Note 2: purge commits can be used to remove old names, emails, contact information
-
-### Locking a branch
-
-Sets a `/.vex/settings/policy` file inside a branch
-
-- `vex lock <branch>`
-
-- `vex branch:set ..`
-
-### Subcommands
+### Subcommands *
 
 Store some environment variables and entry points in a settings file, and run those commands
 
-- `vex env`
-- `vex exec` 
-- `vex make`
-- `vex test`
+- `vex env` *
+- `vex exec` *
+- `vex make` *
+- `vex test` *
 
 Files in `/.vex/settings/bin/x` can be run with `vex run x`
 
 ### Scripting
 
-- `vex --rson/--json/--yaml`
-
-   note: subset of yaml
-
+- `vex --rson/--json/--yaml` * (note: subset of yaml)
 - `vex debug`
-
-- `vex debug:cat` `vex debug:ls`
+- `vex debug:cat` *
+- `vex debug:ls` *
 
 ### Versioning
 
-- `vex commit --major/--minor/--patch`
-
-- /.vex/setting/features
+- `vex commit --major/--minor/--patch`  *
+- /.vex/setting/features *
 
