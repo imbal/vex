@@ -853,6 +853,8 @@ class PhysicalTransaction:
         self.new_commits = set()
         self.new_manifests = set()
         self.new_files = set()
+        self.new_working = {}
+        self.old_working = {}
 
     def active(self):
         return self.get_session(self.active_uuid)
@@ -872,6 +874,113 @@ class PhysicalTransaction:
     def active(self):
         session_uuid = self.get_state("active")
         return self.get_session(session_uuid)
+
+    def get_file(self, addr):
+        if addr in self.new_files:
+            return self.project.get_scratch_file(addr)
+        return self.project.get_file(addr)
+
+    def put_file(self, file):
+        addr = self.project.put_scratch_file(file)
+        self.new_files.add(addr)
+        return addr
+
+    def get_manifest(self, addr):
+        if addr in self.new_manifests:
+            return self.project.get_scratch_manifest(addr)
+        return self.project.get_manifest(addr)
+
+    def put_manifest(self, obj):
+        addr = self.project.put_scratch_manifest(obj)
+        self.new_manifests.add(addr)
+        return addr
+
+    def get_commit(self, addr):
+        if addr in self.new_commits:
+            return self.project.get_scratch_commit(addr)
+        return self.project.get_commit(addr)
+
+    def put_commit(self, obj):
+        addr = self.project.put_scratch_commit(obj)
+        self.new_commits.add(addr)
+        return addr
+
+    def get_session(self, uuid):
+        if uuid in self.new_sessions:
+            return self.new_sessions[uuid]
+        return self.project.sessions.get(uuid)
+
+    def put_session(self, session):
+        if session.uuid not in self.old_sessions:
+            if self.project.sessions.exists(session.uuid):
+                self.old_sessions[session.uuid] = self.project.sessions.get(session.uuid)
+            else:
+                self.old_sessions[session.uuid] = None
+        self.new_sessions[session.uuid] = session
+
+    def get_branch(self, uuid):
+        if uuid in self.new_branches:
+            return self.new_branches[uuid]
+
+        return self.project.branches.get(uuid)
+
+    def put_branch(self, branch):
+        if branch.uuid not in self.old_branches:
+            if self.project.branches.exists(branch.uuid):
+                self.old_branches[branch.uuid] = self.project.branches.get(branch.uuid)
+            else:
+                self.old_branches[branch.uuid] = None
+
+        self.new_branches[branch.uuid] = branch
+
+    def get_name(self, name):
+        if name in self.new_names:
+            return self.new_names[names]
+        if self.project.names.exists(name):
+            return self.project.names.get(name)
+
+    def set_name(self, name, branch):
+        if name not in self.old_names:
+            if self.project.names.exists(name):
+                self.old_names[name] = self.project.names.get(name)
+            else:
+                self.old_names[name] = None
+        self.new_names[name] = branch
+
+    def get_state(self, name):
+        return self.project.state.get(name)
+
+    def set_setting(self, name, value):
+        if name not in self.old_settings:
+            if self.project.settings.exists(name):
+                self.old_settings[name] = self.project.settings.get(name)
+            else:
+                self.old_settings[name] = None
+        self.new_settings[name] = value
+
+    def get_setting(self, name):
+        if name in self.new_settings:
+            return self.new_settings[name]
+
+        return self.project.settings.get(name)
+
+    def create_branch(self, name, prefix, from_commit, from_branch, fork):
+        branch_uuid = UUID()
+        origin = self.get_branch(from_branch)
+        upstream = from_branch if not fork else None
+        b = objects.Branch(branch_uuid, name, 'created', prefix, from_commit, from_commit, origin.init, upstream, [])
+        self.put_branch(b)
+        return b
+
+    def create_session(self, branch_uuid, state, commit):
+        session_uuid = UUID()
+        b = self.get_branch(branch_uuid)
+        files = self.build_files(commit)
+        session = objects.Session(session_uuid, branch_uuid, state, b.prefix, commit, commit, files)
+        b.sessions.append(session.uuid)
+        self.put_branch(b)
+        self.put_session(session)
+        return session
 
     def update_active_files(self, files, remove):
         active = self.active()
@@ -1241,121 +1350,15 @@ class PhysicalTransaction:
 
         return output
 
-    def get_file(self, addr):
-        if addr in self.new_files:
-            return self.project.get_scratch_file(addr)
-        return self.project.get_file(addr)
-
-    def put_file(self, file):
-        addr = self.project.put_scratch_file(file)
-        self.new_files.add(addr)
-        return addr
-
-    def get_manifest(self, addr):
-        if addr in self.new_manifests:
-            return self.project.get_scratch_manifest(addr)
-        return self.project.get_manifest(addr)
-
-    def put_manifest(self, obj):
-        addr = self.project.put_scratch_manifest(obj)
-        self.new_manifests.add(addr)
-        return addr
-
-    def get_commit(self, addr):
-        if addr in self.new_commits:
-            return self.project.get_scratch_commit(addr)
-        return self.project.get_commit(addr)
-
-    def put_commit(self, obj):
-        addr = self.project.put_scratch_commit(obj)
-        self.new_commits.add(addr)
-        return addr
-
-    def get_session(self, uuid):
-        if uuid in self.new_sessions:
-            return self.new_sessions[uuid]
-        return self.project.sessions.get(uuid)
-
-    def put_session(self, session):
-        if session.uuid not in self.old_sessions:
-            if self.project.sessions.exists(session.uuid):
-                self.old_sessions[session.uuid] = self.project.sessions.get(session.uuid)
-            else:
-                self.old_sessions[session.uuid] = None
-        self.new_sessions[session.uuid] = session
-
-    def get_branch(self, uuid):
-        if uuid in self.new_branches:
-            return self.new_branches[uuid]
-
-        return self.project.branches.get(uuid)
-
-    def put_branch(self, branch):
-        if branch.uuid not in self.old_branches:
-            if self.project.branches.exists(branch.uuid):
-                self.old_branches[branch.uuid] = self.project.branches.get(branch.uuid)
-            else:
-                self.old_branches[branch.uuid] = None
-
-        self.new_branches[branch.uuid] = branch
-
-    def get_name(self, name):
-        if name in self.new_names:
-            return self.new_names[names]
-        if self.project.names.exists(name):
-            return self.project.names.get(name)
-
-    def set_name(self, name, branch):
-        if name not in self.old_names:
-            if self.project.names.exists(name):
-                self.old_names[name] = self.project.names.get(name)
-            else:
-                self.old_names[name] = None
-        self.new_names[name] = branch
-
-    def get_state(self, name):
-        return self.project.state.get(name)
-
-    def set_setting(self, name, value):
-        if name not in self.old_settings:
-            if self.project.settings.exists(name):
-                self.old_settings[name] = self.project.settings.get(name)
-            else:
-                self.old_settings[name] = None
-        self.new_settings[name] = value
-
-    def get_setting(self, name):
-        if name in self.new_settings:
-            return self.new_settings[name]
-
-        return self.project.settings.get(name)
-
-    def create_branch(self, name, prefix, from_commit, from_branch, fork):
-        branch_uuid = UUID()
-        origin = self.get_branch(from_branch)
-        upstream = from_branch if not fork else None
-        b = objects.Branch(branch_uuid, name, 'created', prefix, from_commit, from_commit, origin.init, upstream, [])
-        self.put_branch(b)
-        return b
-
-    def create_session(self, branch_uuid, state, commit):
-        session_uuid = UUID()
-        b = self.get_branch(branch_uuid)
-        files = self.build_files(commit)
-        session = objects.Session(session_uuid, branch_uuid, state, b.prefix, commit, commit, files)
-        b.sessions.append(session.uuid)
-        self.put_branch(b)
-        self.put_session(session)
-        return session
-
     def action(self):
-        if self.new_branches or self.new_names or self.new_sessions or self.new_settings:
+        if self.new_branches or self.new_names or self.new_sessions or self.new_settings or self.new_working:
             branches = dict(old=self.old_branches, new=self.new_branches)
             names = dict(old=self.old_names, new=self.new_names)
             sessions = dict(old=self.old_sessions, new=self.new_sessions)
             settings = dict(old=self.old_settings, new=self.new_settings)
+            working = dict(old=self.old_working, new=self.new_working)
 
-            changes = dict(branches=branches,names=names, sessions=sessions, settings=settings)
+            changes = dict(branches=branches,names=names, sessions=sessions, settings=settings, working=working)
         else:
             changes = {}
 
@@ -1718,6 +1721,9 @@ class Project:
             elif key == 'settings':
                 for name,value in changes['settings'][kind].items():
                     self.settings.set(name, value)
+            elif key =='working':
+                for name, value in changes['working'][kind].items():
+                    self.checkout_file(name, value)
             else:
                 raise VexBug('Project change has unknown values')
 
