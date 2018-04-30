@@ -1784,11 +1784,20 @@ class Project:
         prefix = self.prefix()
         for name, addr in changes[kind].items():
             path = self.repo_to_full_path(prefix, name)
+            if kind == 'new':
+                old = changes['old'][name]
+            elif kind == 'old':
+                old = changes['new'][name]
+            else:
+                raise VexBug('nope')
             ### XXX check old value ...?
-            if os.path.exists(path):
-                os.remove(path)
-            if addr:
+            if old is None and not os.path.exists(path):
                 self.repo.copy_from_any(addr, path)
+            elif old and self.addr_for_file(path):
+                if os.path.exists(path):
+                    os.remove(path)
+                if addr:
+                    self.repo.copy_from_any(addr, path)
 
 
     # Takes Action.blobs and copies them out of the scratch directory
