@@ -1017,64 +1017,6 @@ class PhysicalTransaction:
         self.put_session(copy)
         return copy
 
-    def add_files_to_active(self, files, include, ignore):
-        active = self.active()
-        to_scan = set()
-        names = {}
-        dirs = {}
-        for filename in files:
-            name = self.full_to_repo_path(filename)
-            if os.path.isfile(filename):
-                names[name] = filename
-            elif os.path.isdir(filename):
-                dirs[name] = filename
-                to_scan.add(filename)
-            filename = os.path.split(filename)[0]
-            name = os.path.split(name)[0]
-            while name != '/' and name != self.project.VEX:
-                dirs[name] = filename
-                name = os.path.split(name)[0]
-                filename = os.path.split(filename)[0]
-
-
-        for dir in to_scan:
-            for filename in list_dir(dir, ignore, include):
-                name = self.full_to_repo_path(filename)
-                if os.path.isfile(filename):
-                    names[name] = filename
-                elif os.path.isdir(filename):
-                    dirs[name] = filename
-
-        added = set()
-        new_files = {}
-        for name, filename in dirs.items():
-            if name in active.files:
-                entry = active.files[name]
-                if entry.kind != 'dir':
-                    replace = entry.replace
-                    if replace == None and entry.kind != 'dir': replace = entry.kind
-                    new_files[name] = objects.Tracked('dir', "replaced", working=True, properties={}, replace=replace)
-                    added.add(filename)
-            else:
-                new_files[name] = objects.Tracked('dir', "added", working=True, properties={})
-                added.add(filename)
-
-        for name, filename in names.items():
-            if name in active.files:
-                entry = active.files[name]
-                if entry.kind != 'file':
-                    replace = entry.replace
-                    if replace == None and entry.kind != 'file': replace = entry.kind
-                    new_files[name] = objects.Tracked('file', "replaced", working=True, properties={}, replace=replace)
-                    added.add(filename)
-            else:
-                new_files[name] = objects.Tracked('file',"added", working=True, properties={})
-                added.add(filename)
-
-        self.update_active_files(new_files, ())
-
-        return added
-    
     def prepared_changeset(self, old_uuid):
         changes = objects.Changeset(entries={})
         old = self.get_commit(old_uuid)
@@ -1350,6 +1292,95 @@ class PhysicalTransaction:
 
         return output
 
+    def add_files_to_active(self, files, include, ignore):
+        active = self.active()
+        to_scan = set()
+        names = {}
+        dirs = {}
+        for filename in files:
+            name = self.full_to_repo_path(filename)
+            if os.path.isfile(filename):
+                names[name] = filename
+            elif os.path.isdir(filename):
+                dirs[name] = filename
+                to_scan.add(filename)
+            filename = os.path.split(filename)[0]
+            name = os.path.split(name)[0]
+            while name != '/' and name != self.project.VEX:
+                dirs[name] = filename
+                name = os.path.split(name)[0]
+                filename = os.path.split(filename)[0]
+
+
+        for dir in to_scan:
+            for filename in list_dir(dir, ignore, include):
+                name = self.full_to_repo_path(filename)
+                if os.path.isfile(filename):
+                    names[name] = filename
+                elif os.path.isdir(filename):
+                    dirs[name] = filename
+
+        added = set()
+        new_files = {}
+        for name, filename in dirs.items():
+            if name in active.files:
+                entry = active.files[name]
+                if entry.kind != 'dir':
+                    replace = entry.replace
+                    if replace == None and entry.kind != 'dir': replace = entry.kind
+                    new_files[name] = objects.Tracked('dir', "replaced", working=True, properties={}, replace=replace)
+                    added.add(filename)
+            else:
+                new_files[name] = objects.Tracked('dir', "added", working=True, properties={})
+                added.add(filename)
+
+        for name, filename in names.items():
+            if name in active.files:
+                entry = active.files[name]
+                if entry.kind != 'file':
+                    replace = entry.replace
+                    if replace == None and entry.kind != 'file': replace = entry.kind
+                    new_files[name] = objects.Tracked('file', "replaced", working=True, properties={}, replace=replace)
+                    added.add(filename)
+            else:
+                new_files[name] = objects.Tracked('file',"added", working=True, properties={})
+                added.add(filename)
+
+        self.update_active_files(new_files, ())
+
+        return added
+
+    def forget_files(self, files):
+        session = self.active()
+        names = {}
+        dirs = []
+        changed = []
+        # XXX: forget empty directories
+        for filename in files:
+            name = self.full_to_repo_path(filename)
+            if name in session.files:
+                entry = session.files[name]
+                changed.append(filename)
+                if entry.working:
+                    names[name] = entry
+                    if entry.kind == 'dir':
+                        p = "{}/".format(name)
+                        for e in session.files:
+                            if e.startswith(p):
+                                names[e] = session.files[e]
+                                changed.append(self.repo_to_full_path(e))
+        new_files = {}
+        gone_files = set()
+
+        for name, entry in names.items():
+            if entry.state == 'added':
+                gone_files.add(name)
+            else:
+                kind = entry.replace or entry.kind
+                new_files[name] = objects.Tracked(kind, "deleted", working=True, properties={})
+
+        self.update_active_files(new_files, gone_files)
+    
     def remove_files(self, files):
         raise VexUnimplemented()
 
@@ -1720,6 +1751,7 @@ class Project:
 
     # Take Action.changes and applies them to project
     def apply_physical_changes(self, kind, changes):
+        prefix = self.prefix()
         for key in changes:
             if key == 'branches':
                 for name,value in changes['branches'][kind].items():
@@ -1734,10 +1766,15 @@ class Project:
                 for name,value in changes['settings'][kind].items():
                     self.settings.set(name, value)
             elif key =='working':
-                for name, value in changes['working'][kind].items():
-                    self.checkout_file(name, value)
+                for name, addr in changes['working'][kind].items():
+                    path = self.repo_to_full_path(prefix, name)
+                    ### XXX check old value ...?
+                    os.remove(path)
+                    if addr:
+                        self.repo.copy_from_any(addr, path)
             else:
                 raise VexBug('Project change has unknown values')
+
 
     # Takes Action.blobs and copies them out of the scratch directory
     def copy_blobs(self, blobs):
@@ -2166,35 +2203,7 @@ class Project:
 
         with self.do('forget') as txn:
             session = txn.refresh_active()
-            names = {}
-            dirs = []
-            changed = []
-            # XXX: forget empty directories
-            for filename in files:
-                name = txn.full_to_repo_path(filename)
-                if name in session.files:
-                    entry = session.files[name]
-                    changed.append(filename)
-                    if entry.working:
-                        names[name] = entry
-                        if entry.kind == 'dir':
-                            p = "{}/".format(name)
-                            for e in session.files:
-                                if e.startswith(p):
-                                    names[e] = session.files[e]
-                                    changed.append(txn.repo_to_full_path(e))
-            new_files = {}
-            gone_files = set()
-
-            for name, entry in names.items():
-                if entry.state == 'added':
-                    gone_files.add(name)
-                else:
-                    kind = entry.replace or entry.kind
-                    new_files[name] = objects.Tracked(kind, "deleted", working=True, properties={})
-
-            txn.update_active_files(new_files, gone_files)
-            return changed
+            changed = txn.forget_files_from_active(files)
 
     def remove(self, files):
         # XXX
