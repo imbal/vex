@@ -67,7 +67,7 @@ class VexNoProject(VexError): pass
 class VexNoHistory(VexError): pass
 class VexUnclean(VexError): pass
 
-class VexUnfinished(VexError): pass
+class VexUnimplemented(VexError): pass
 
 
 class LockFile:
@@ -429,7 +429,7 @@ def match_filename(path, name, ignore, include):
         if isinstance(ignore, str): ignore = ignore,
         for rule in ignore:
             if '**' in rule:
-                raise VexUnfinished()
+                raise VexUnimplemented()
             elif rule.startswith('/'):
                 if rule == path:
                     return False
@@ -440,7 +440,7 @@ def match_filename(path, name, ignore, include):
         if isinstance(include, str): include = include,
         for rule in include:
             if '**' in rule:
-                raise VexUnfinished()
+                raise VexUnimplemented()
             elif rule.startswith('/'):
                 if rule == path:
                     return True
@@ -802,7 +802,7 @@ class History:
         current = self.store.current()
         if current != old_current:
             raise VexCorrupt('History is really corrupted: Interrupted transaction did not come after current change')
-        yield obj
+        yield mode, obj
         self.store.set_next('rollback', old_current, None)
 
     @contextmanager
@@ -819,7 +819,7 @@ class History:
         current = self.store.current()
         if current != old_current:
             raise VexCorrupt('History is really corrupted: Interrupted transaction did not come after current change')
-        yield obj
+        yield mode, obj
         if mode == 'quiet':
             self.store.set_next('restart', old_current, None)
         else:
@@ -1622,7 +1622,7 @@ class Project:
 
     # ... and so are these, but, they interact with the action log
     def rollback_new_action(self):
-        with self.history.rollback_new() as action:
+        with self.history.rollback_new() as (mode, action):
             if action:
                 if isinstance(action, objects.Action):
                     self.apply_physical_changes('old', action.changes)
@@ -1634,7 +1634,7 @@ class Project:
             return action
 
     def restart_new_action(self):
-        with self.history.restart_new() as action:
+        with self.history.restart_new() as (mode, action):
             if action:
                 if isinstance(action, objects.Action):
                     self.copy_blobs(action.blobs)
@@ -2151,6 +2151,7 @@ class Project:
             names = {}
             dirs = []
             changed = []
+            # XXX: forget empty directories
             for filename in files:
                 name = txn.full_to_repo_path(filename)
                 if name in session.files:
@@ -2177,12 +2178,9 @@ class Project:
             txn.update_active_files(new_files, gone_files)
             return changed
 
-    def ignore(self, files):
-        pass
-        # not done here, but in vex.py? edits settings?
-
     def remove(self, files):
-        pass
+        # XXX
+        raise VexUnimplemented('not yet')
         # txn ugh
         # go through the files, stash em, updating status in no history
         # in history txn, create list of removed files, dirs
