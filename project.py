@@ -1350,6 +1350,9 @@ class PhysicalTransaction:
 
         return output
 
+    def remove_files(self, files):
+        raise VexUnimplemented()
+
     def action(self):
         if self.new_branches or self.new_names or self.new_sessions or self.new_settings or self.new_working:
             branches = dict(old=self.old_branches, new=self.new_branches)
@@ -1484,6 +1487,15 @@ class Repo:
         return self.files.filename(addr)
 
     def copy_from_scratch(self, addr, path):
+        return self.scratch.make_copy(addr, path)
+
+    def copy_from_file(self, addr, path):
+        return self.files.make_copy(addr, path)
+
+    def copy_from_any(self, addr, path):
+        if self.files.exists(addr):
+            return self.files.make_copy(addr, path)
+
         return self.scratch.make_copy(addr, path)
 
 class Project:
@@ -1851,7 +1863,7 @@ class Project:
                 if name not in ('/', self.VEX, prefix):
                     os.makedirs(path, exist_ok=True)
             elif entry.kind =="file":
-                self.repo.copy_from_scratch(entry.addr, path)
+                self.repo.copy_from_file(entry.addr, path)
                 if entry.properties.get('vex:executable'):
                     stat = os.stat(path)
                     os.chmod(path, stat.st_mode | 64)
