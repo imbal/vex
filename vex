@@ -420,7 +420,7 @@ def Forget(file):
     file = [f for f in file if os.path.exists(f)]
     p = open_project()
     with p.lock('forget') as p:
-        for f in p.forget(file):
+        for f in p.forget(file).values():
             f = os.path.relpath(f)
             yield "forget: {}".format(f)
 
@@ -441,10 +441,26 @@ def Remove(file):
     file= [f for f in file if os.path.exists(f)]
     p = open_project()
     with p.lock('remove') as p:
-        for f in p.remove(file):
+        for f in p.remove(file).values():
             f = os.path.relpath(f)
             yield "remove: {}".format(f)
 
+vex_restore = vex_cmd_files.subcommand('restore','restore files from the project, overwriting modifications')
+@vex_restore.run('''
+        [file:path...] # Files to restore to working copy
+''')
+def Restore(file):
+    """
+        `vex restore` will change a file back to how it was 
+    """
+    if not file:
+        return
+
+    p = open_project()
+    with p.lock('restore') as p:
+        for f in p.restore(file).values():
+            f = os.path.relpath(f)
+            yield "remove: {}".format(f)
 vex_cmd_commit = vex_cmd.group("commit")
 
 vex_prepare = vex_cmd_commit.subcommand('prepare', short="save current working copy to prepare for commit", aliases=['save'])

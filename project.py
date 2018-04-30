@@ -265,11 +265,12 @@ class objects:
 
     @codec.register
     class Action:
-        def __init__(self, time, command, changes=(), blobs=()):
+        def __init__(self, time, command, changes=(), blobs=(), working=()):
             self.time = time
             self.command = command
             self.changes = changes
             self.blobs = blobs
+            self.working = working
 
     @codec.register
     class Switch:
@@ -1350,17 +1351,17 @@ class PhysicalTransaction:
 
         return added
 
-    def forget_files(self, files):
+    def forget_files_from_active(self, files):
         session = self.active()
         names = {}
         dirs = []
-        changed = []
+        changed = {}
         # XXX: forget empty directories
         for filename in files:
             name = self.full_to_repo_path(filename)
             if name in session.files:
                 entry = session.files[name]
-                changed.append(filename)
+                changed[name]= filename
                 if entry.working:
                     names[name] = entry
                     if entry.kind == 'dir':
@@ -1368,7 +1369,7 @@ class PhysicalTransaction:
                         for e in session.files:
                             if e.startswith(p):
                                 names[e] = session.files[e]
-                                changed.append(self.repo_to_full_path(e))
+                                changed[e] = self.repo_to_full_path(e)
         new_files = {}
         gone_files = set()
 
@@ -1380,19 +1381,25 @@ class PhysicalTransaction:
                 new_files[name] = objects.Tracked(kind, "deleted", working=True, properties={})
 
         self.update_active_files(new_files, gone_files)
+        return changed 
     
-    def remove_files(self, files):
-        raise VexUnimplemented()
+    def remove_files_from_active(self, files):
+        changed = self.forget_files_from_active(files)
+        for path, file in changed.items():
+            # XXX: dirs
+            addr = self.project.put_scratch_file(file)
+            self.old_working[path] = addr
+            self.new_working[path] = None
+        return changed
 
     def action(self):
-        if self.new_branches or self.new_names or self.new_sessions or self.new_settings or self.new_working:
+        if self.new_branches or self.new_names or self.new_sessions or self.new_settings:
             branches = dict(old=self.old_branches, new=self.new_branches)
             names = dict(old=self.old_names, new=self.new_names)
             sessions = dict(old=self.old_sessions, new=self.new_sessions)
             settings = dict(old=self.old_settings, new=self.new_settings)
-            working = dict(old=self.old_working, new=self.new_working)
 
-            changes = dict(branches=branches,names=names, sessions=sessions, settings=settings, working=working)
+            changes = dict(branches=branches,names=names, sessions=sessions, settings=settings)
         else:
             changes = {}
 
@@ -1400,7 +1407,11 @@ class PhysicalTransaction:
             blobs = dict(commits=self.new_commits, manifests=self.new_manifests, files=self.new_files)
         else:
             blobs = {}
-        return objects.Action(self.now, self.command, changes, blobs)
+        if self.new_working:
+            working = dict(old=self.old_working, new=self.new_working)
+        else:
+            working = {}
+        return objects.Action(self.now, self.command, changes, blobs, working)
 
 class LogicalTransaction:
     def __init__(self, project, command):
@@ -1716,6 +1727,7 @@ class Project:
                 return
             if isinstance(action, objects.Action):
                 self.copy_blobs(action.blobs)
+                self.apply_working_changes('new', action.working)
                 self.apply_physical_changes('new', action.changes)
             else:
                 raise VexBug('action')
@@ -1765,15 +1777,18 @@ class Project:
             elif key == 'settings':
                 for name,value in changes['settings'][kind].items():
                     self.settings.set(name, value)
-            elif key =='working':
-                for name, addr in changes['working'][kind].items():
-                    path = self.repo_to_full_path(prefix, name)
-                    ### XXX check old value ...?
-                    os.remove(path)
-                    if addr:
-                        self.repo.copy_from_any(addr, path)
-            else:
-                raise VexBug('Project change has unknown values')
+
+    def apply_working_changes(self, kind, changes):
+        if not changes:
+            return
+        prefix = self.prefix()
+        for name, addr in changes[kind].items():
+            path = self.repo_to_full_path(prefix, name)
+            ### XXX check old value ...?
+            if os.path.exists(path):
+                os.remove(path)
+            if addr:
+                self.repo.copy_from_any(addr, path)
 
 
     # Takes Action.blobs and copies them out of the scratch directory
@@ -1946,6 +1961,7 @@ class Project:
                 return
             if isinstance(action, objects.Action):
                 self.apply_physical_changes('old', action.changes)
+                self.apply_working_changes('old', action.working)
             elif isinstance(action, objects.Switch):
                 self.apply_switch('old', action.prefix, action.active)
                 self.apply_logical_changes('old', action.session_states, action.branch_states, action.names)
@@ -1962,6 +1978,7 @@ class Project:
                 return
             if isinstance(action, objects.Action):
                 self.apply_physical_changes('new', action.changes)
+                self.apply_working_changes('new', action.working)
             elif isinstance(action, objects.Switch):
                 self.apply_switch('new', action.prefix, action.active)
                 self.apply_logical_changes('new', action.session_states, action.branch_states, action.names)
@@ -2204,15 +2221,24 @@ class Project:
         with self.do('forget') as txn:
             session = txn.refresh_active()
             changed = txn.forget_files_from_active(files)
+            return changed
 
     def remove(self, files):
-        # XXX
-        raise VexUnimplemented('not yet')
-        # txn ugh
-        # go through the files, stash em, updating status in no history
-        # in history txn, create list of removed files, dirs
-        # inside txn, delete/undelete,  
+        files = self.check_files(files)
 
+        with self.do('remove') as txn:
+            session = txn.refresh_active()
+            changed = txn.remove_files_from_active(files)
+            return changed
+
+    def restore(self, files):
+        raise VexUnimplemented('not yet')
+        files = self.check_files(files)
+
+        with self.do('restore') as txn:
+            session = txn.refresh_active()
+            changed = txn.restore_files_to_active(files)
+            return changed
 
     def list_branches(self):
         branches = []
