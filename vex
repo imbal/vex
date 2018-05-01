@@ -349,7 +349,7 @@ def Status(all, missing):
                 yield "{:16}\t{}{}".format(entry.state, path, ('*' if entry.stash else '') )
         yield ""
         if all or missing:
-            for f in p.missing(os.getcwd()):
+            for f in p.untracked(os.getcwd()):
                 path = os.path.relpath(f)
                 yield "{:16}\t{}".format('untracked', path)
 
@@ -477,14 +477,14 @@ def Restore(file):
         for f in p.restore(file).values():
             f = os.path.relpath(f)
             yield "restore: {}".format(f)
-vex_missing = vex_cmd_files.subcommand('missing','files in current directory but not in project')
+vex_missing = vex_cmd_files.subcommand('missing','files in current directory but not in project', aliases=['untracked'])
 @vex_missing.run('')
 def Missing():
     """
         `vex missing` shows missing files
     """
     p = open_project()
-    for f in p.missing(os.getcwd()):
+    for f in p.untracked(os.getcwd()):
             f = os.path.relpath(f)
             yield "missing: {}".format(f)
 vex_cmd_commit = vex_cmd.group("commit")
