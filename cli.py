@@ -12,7 +12,7 @@ import traceback
 
 class BadArg(Exception):
     def action(self, path):
-        return Action("error", path, {'usage':True}, errors=self.args)
+        return Action("error", path, {}, errors=self.args)
 
 class Complete:
     def __init__(self, prefix, name, argtype):
@@ -489,20 +489,20 @@ class CommandDescription:
             else:
                 if route:
                     error="unknown subcommand {} for {}".format(path[0],":".join(route))
-                    return Action("error", route, {'usage':True}, errors=(error,))
-                return Action("error", route, {'usage':True}, errors=("an unknown command: {}".format(path[0]),))
+                    return Action("error", route, {}, errors=(error,))
+                return Action("error", route, {}, errors=("an unknown command: {}".format(path[0]),))
 
             # no argspec, print usage
         elif not self.argspec:
             if argv and argv[0]:
                 if "--help" in argv:
-                    return Action("help", route, {'usage': True})
-                return Action("error", route, {'usage':True}, errors=("unknown option: {}".format(argv[0]),))
+                    return Action("usage", route, {})
+                return Action("error", route, {}, errors=("unknown option: {}".format(argv[0]),))
 
-            return Action("help", route, {'usage': False})
+            return Action("help", route, {})
         else:
             if '--help' in argv:
-                return Action("help", route, {'usage':True})
+                return Action("usage", route, {})
             try:
                 args = parse_args(self.argspec, argv, environ)
                 return Action("call", route, args)
@@ -697,11 +697,11 @@ class Command:
                 raise Error(-1, self.render().usage())
 
 
-    def main(self, name):
+    def main(self, name, *, adverbs=()):
         if name == '__main__':
             argv = sys.argv[1:]
             environ = os.environ
-            code = main(self, argv, environ)
+            code = main(self, argv, environ, adverbs=adverbs)
             sys.exit(code)
 
     def render(self):
@@ -740,7 +740,7 @@ def print_result(result):
     sys.stdout.flush()
 
 
-def main(root, argv, environ):
+def main(root, argv, environ, adverbs):
     obj = root.render()
 
     if 'COMP_LINE' in environ and 'COMP_POINT' in environ:
@@ -749,7 +749,7 @@ def main(root, argv, environ):
         tmp = prefix.lstrip().split(' ', 1)
         if len(tmp) > 1:
             path = tmp[1].split(' ')
-            if path[0] in ('help', 'debug'):
+            if path[0] in adverbs or path[0] == 'help':
                 if len(path) > 1:
                     path = path[1].split(':') 
                     result = obj.complete_arg(path, path[2:], arg)
@@ -775,21 +775,21 @@ def main(root, argv, environ):
         if argv and not argv[0].startswith('--'):
             path = argv.pop(0).strip().split(':')
         action = obj.parse_args(path, argv, environ, [])
-        action = Action("help", action.path, {'manual': True})
-    elif argv and argv[0] == "debug" and any(argv[1:]):
-        argv.pop(0)
+        action = Action("help", action.path, {})
+    elif argv and argv[0] in adverbs and any(argv[1:]):
+        mode = argv.pop(0)
         path = []
         if argv and not argv[0].startswith('--'):
             path = argv.pop(0).strip().split(':')
         action = obj.parse_args(path, argv, environ, [])
         if action.path == []:
-            action = Action(action.mode, ["debug"], action.argv)
+            action = Action(action.mode, [mode], action.argv)
         elif action.mode == "call":
-            action = Action("debug", action.path, action.argv)
+            action = Action(mode, action.path, action.argv)
     elif argv and argv[0] == '--version':
         action = Action("version", [], {})
     elif argv and argv[0] == '--help':
-        action = Action("help", [], {'usage': True})
+        action = Action("usage", [], {})
     else:
         path = []
         if argv and not argv[0].startswith('--'):
@@ -802,15 +802,19 @@ def main(root, argv, environ):
             result = obj.version()
             print_result(result)
             return 0
+        elif action.mode == "usage":
+            result = obj.help(action.path, usage=True)
+            print_result(result)
+            return 0
         elif action.mode == "help":
-            result = obj.help(action.path, usage=action.argv.get('usage'))
+            result = obj.help(action.path, usage=False)
             print_result(result)
             return 0
         elif action.mode == "error":
-            print("error: {}".format(", ".join(action.errors)))
-            print_result(obj.help(action.path, usage=action.argv.get('usage')))
-            return 0
-        elif action.mode == "call" or action.mode == "debug":
+            print("Error: {}".format(", ".join(action.errors)))
+            print_result(obj.help(action.path, usage=True))
+            return -1
+        elif action.mode == "call" or action.mode in adverbs:
             callback =  root.bind(action.path, action.argv)
 
             if not root.call_fn:
@@ -819,7 +823,7 @@ def main(root, argv, environ):
                     print_result(result)
                     return 0
                 except Exception as e:
-                    if action.mode =="debug":
+                    if action.mode == "debug":
                         raise
                     result= "".join(traceback.format_exception(*sys.exc_info()))
                     print_result(result)

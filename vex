@@ -25,6 +25,8 @@ DEFAULT_CONFIG_DIR = ".vex"
 DEFAULT_INCLUDE = ["*"] 
 DEFAULT_IGNORE =  [".*", DEFAULT_CONFIG_DIR, ".DS_Store", "*~", "*.swp", "__*__"]
 
+fake = False
+
 @contextmanager
 def watcher():
     p = subprocess.run('fswatch --version', stdout=subprocess.DEVNULL, shell=True)
@@ -55,7 +57,7 @@ def get_project():
         if new_working_dir == working_dir:
             return None
         working_dir = new_working_dir
-    return Project(config_dir, working_dir)
+    return Project(config_dir, working_dir, fake=fake)
 
 def open_project(allow_empty=False):
     p = get_project()
@@ -102,6 +104,9 @@ def Call(mode, path, args, callback):
     """ calling vex foo:bar args, calls this function with 'call', ['foo', 'bar'], args, and
         a callback that is the right function to call
     """
+    global fake # so sue me
+    if mode == 'fake':
+        fake = True
     try:
         result = callback()
         if result is not None:
@@ -127,12 +132,13 @@ def Call(mode, path, args, callback):
     p = get_project()
 
     if p and p.exists() and not p.clean_state():
-        p.rollback_new_action()
+        with p.lock('rollback') as p:
+            p.rollback_new_action()
 
-        if not p.clean_state():
-            print('This is bad: The project history is corrupt, try `vex debug:status` for more information')
-        else:
-            print('Good news: The changes that were attempted have been undone')
+            if not p.clean_state():
+                print('This is bad: The project history is corrupt, try `vex debug:status` for more information')
+            else:
+                print('Good news: The changes that were attempted have been undone')
     return -1
 
 
@@ -937,7 +943,7 @@ def DebugTest():
             p=  subprocess.run(cmd, stdout=subprocess.PIPE)
             if p.returncode:
                 sys.stdout.buffer.write(p.stdout)
-                raise Exception('error')
+                raise Exception('Error')
             print("vex {}:".format(" ".join(cmd[1:])))
             for line in p.stdout.splitlines():
                 print(">  ", line.decode('utf-8'))
@@ -991,9 +997,4 @@ def DebugTest():
 
     
 
-
-
-
-
-
-vex_cmd.main(__name__)
+vex_cmd.main(__name__, adverbs=('debug','fake'))

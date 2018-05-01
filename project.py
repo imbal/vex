@@ -24,6 +24,7 @@
             apply those changes
 """
 import os
+import sys
 import fcntl
 import time
 import sqlite3
@@ -542,9 +543,12 @@ class History:
         return out
 
     @contextmanager
-    def do_without_undo(self, action):
+    def do_without_undo(self, action, fake):
         if not self.clean_state():
             raise VexCorrupt('Project history not in a clean state.')
+        if fake:
+            yield action
+            return
         current = self.store.current()
         addr = self.store.put_entry(current, action)
         self.store.set_next('quiet', addr , current)
@@ -554,9 +558,12 @@ class History:
         self.store.set_next('do', current, current)
 
     @contextmanager
-    def do(self, obj):
+    def do(self, obj, fake):
         if not self.clean_state():
             raise VexCorrupt('Project history not in a clean state.')
+        if fake:
+            yield obj
+            return
         current = self.store.current()
 
         addr = self.store.put_entry(current, obj)
@@ -567,7 +574,7 @@ class History:
         self.store.set_current(addr)
 
     @contextmanager
-    def undo(self):
+    def undo(self, fake):
         if not self.clean_state():
             raise VexCorrupt('Project history not in a clean state.')
         current = self.store.current()
@@ -576,6 +583,10 @@ class History:
             return
 
         prev, obj = self.store.get_entry(current)
+
+        if fake:
+            yield obj
+            return
 
         redos = [current]
         redos.extend(self.store.get_redos(prev))
@@ -587,7 +598,7 @@ class History:
         self.store.set_current(prev)
 
     @contextmanager
-    def redo(self, n=0):
+    def redo(self, n, fake):
         if not self.clean_state():
             raise VexCorrupt('Project history not in a clean state.')
         current = self.store.current()
@@ -601,6 +612,10 @@ class History:
         do = redos.pop(n)
 
         prev, obj = self.store.get_entry(do)
+        if fake:
+            yield obj
+            return
+
         self.store.set_next('redo', do, current)
 
         yield obj
@@ -1392,10 +1407,11 @@ class Repo:
 
 class Project:
     VEX = "/.vex"
-    def __init__(self, config_dir, working_dir):
+    def __init__(self, config_dir, working_dir, fake):
         self.working_dir = working_dir
         self.config_dir = config_dir
         self.repo = Repo(config_dir)
+        self.fake = fake
 
 
         self.branches =   FileStore(os.path.join(config_dir, 'branches'), codec)
@@ -1565,7 +1581,7 @@ class Project:
         active = self.state.get("active")
         txn = PhysicalTransaction(self, command)
         yield txn
-        with self.history.do_without_undo(txn.action()) as action:
+        with self.history.do_without_undo(txn.action(), self.fake) as action:
             if any(action.blobs.values()):
                 raise VexBug(action.blobs)
             if action.changes:
@@ -1578,7 +1594,7 @@ class Project:
 
         txn = PhysicalTransaction(self, command)
         yield txn
-        with self.history.do(txn.action()) as action:
+        with self.history.do(txn.action(), self.fake) as action:
             if not action:
                 return
             if isinstance(action, objects.Action):
@@ -1595,7 +1611,7 @@ class Project:
 
         txn = LogicalTransaction(self, command)
         yield txn
-        with self.history.do(txn.action()) as action:
+        with self.history.do(txn.action(), self.fake) as action:
             if not action:
                 return
             if isinstance(action, objects.Switch):
@@ -1604,20 +1620,64 @@ class Project:
             else:
                 raise VexBug('action')
 
+    def undo(self):
+        with self.history.undo(self.fake) as action:
+            if not action:
+                return
+            if isinstance(action, objects.Action):
+                self.apply_physical_changes('old', action.changes)
+                self.apply_working_changes('old', action.working)
+            elif isinstance(action, objects.Switch):
+                self.apply_switch('old', action.prefix, action.active)
+                self.apply_logical_changes('old', action.session_states, action.branch_states, action.names)
+            else:
+                raise VexBug('action')
+            return action
+
+    def list_undos(self):
+        return self.history.entries()
+
+    def redo(self, choice):
+        with self.history.redo(choice, self.fake) as action:
+            if not action:
+                return
+            if isinstance(action, objects.Action):
+                self.apply_physical_changes('new', action.changes)
+                self.apply_working_changes('new', action.working)
+            elif isinstance(action, objects.Switch):
+                self.apply_switch('new', action.prefix, action.active)
+                self.apply_logical_changes('new', action.session_states, action.branch_states, action.names)
+            else:
+                raise VexBug('action')
+            return action
+
+    def list_redos(self):
+        return self.history.redo_choices()
+
     # Take Action.changes and applies them to project
     def apply_logical_changes(self, kind, session_states, branch_states, names):
         if not self._lock:
             raise VexBug('unlocked')
         for name,value in session_states[kind].items():
-            session = self.sessions.get(name)
-            session.state = value
-            self.sessions.set(name, branch)
+            if self.fake:
+                sys.stderr.write('would set session {} state to {}\n'.format(name, value))
+            else:
+                session = self.sessions.get(name)
+                session.state = value
+                self.sessions.set(name, session)
+            
         for name,value in branch_states[kind].items():
-            branch = self.branches.get(name)
-            branch.state = value
-            self.branches.set(name, branch)
+            if self.fake:
+                sys.stderr.write('would set branch {} state to {}\n'.format(name, value))
+            else:
+                branch = self.branches.get(name)
+                branch.state = value
+                self.branches.set(name, branch)
         for name,value in names[kind].items():
-            self.names.set(name, value)
+            if self.fake:
+                sys.stderr.write('would set branch name {} to {}\n'.format(name, value))
+            else:
+                self.names.set(name, value)
 
     # Take Action.changes and applies them to project
     def apply_physical_changes(self, kind, changes):
@@ -1627,16 +1687,28 @@ class Project:
         for key in changes:
             if key == 'branches':
                 for name,value in changes['branches'][kind].items():
-                    self.branches.set(name, value)
+                    if self.fake:
+                        sys.stderr.write('would set branch {} to {}\n'.format(name, value))
+                    else:
+                        self.branches.set(name, value)
             elif key == 'names':
                 for name,value in changes['names'][kind].items():
-                    self.names.set(name, value)
+                    if self.fake:
+                        sys.stderr.write('would set branch name {} to {}\n'.format(name, value))
+                    else:
+                        self.names.set(name, value)
             elif key == 'sessions':
                 for name,value in changes['sessions'][kind].items():
-                    self.sessions.set(name, value)
+                    if self.fake:
+                        sys.stderr.write('would set session {} to {}\n'.format(name, value))
+                    else:
+                        self.sessions.set(name, value)
             elif key == 'settings':
                 for name,value in changes['settings'][kind].items():
-                    self.settings.set(name, value)
+                    if self.fake:
+                        sys.stderr.write('would set {} setting to {}\n'.format(name, value))
+                    else:
+                        self.settings.set(name, value)
 
     def apply_working_changes(self, kind, changes):
         if not changes:
@@ -1651,6 +1723,10 @@ class Project:
             else:
                 raise VexBug('nope')
             ### XXX check old value ...?
+            if self.fake:
+                sys.stderr.write('would replace {} with {}\n'.format(path, addr))
+                continue
+
             if old is None and not os.path.exists(path):
                 self.repo.copy_from_any(addr, path)
             elif old and os.path.exists(path) and self.addr_for_file(path) == old:
@@ -1668,13 +1744,22 @@ class Project:
         for key in blobs:
             if key == 'commits':
                 for addr in blobs['commits']:
-                    self.repo.add_commit_from_scratch(addr)
+                    if self.fake:
+                        sys.stderr.write('would add commit {}\n'.format(addr))
+                    else:
+                        self.repo.add_commit_from_scratch(addr)
             elif key == 'manifests':
                 for addr in blobs['manifests']:
-                    self.repo.add_manifest_from_scratch(addr)
+                    if self.fake:
+                        sys.stderr.write('would add manifest {}\n'.format(addr))
+                    else:
+                        self.repo.add_manifest_from_scratch(addr)
             elif key =='files':
                 for addr in blobs['files']:
-                    self.repo.add_file_from_scratch(addr)
+                    if self.fake:
+                        sys.stderr.write('would add files {}\n'.format(addr))
+                    else:
+                        self.repo.add_file_from_scratch(addr)
             else:
                 raise VexBug('Project change has unknown values')
 
@@ -1699,6 +1784,10 @@ class Project:
             uuid = self.state.get('active')
             active_session, new_session = uuid, uuid
 
+        if self.fake:
+            sys.stderr.write('would change session from {} to {}, and prefix from {} to {}'.format(active_session, new_session, active_prefix, new_prefix))
+            return
+
         active = self.sessions.get(active_session)
         active = self.stash_session(active)
         # check after stash, as it might be same
@@ -1708,6 +1797,8 @@ class Project:
 
 
     def stash_session(self, session, files=None):
+        if not self._lock:
+            raise VexBug('unlocked')
         files = session.files if files is None else files
         for name in files:
             entry = session.files[name]
@@ -1726,6 +1817,8 @@ class Project:
         return session
 
     def clear_session(self, prefix, session):
+        if not self._lock:
+            raise VexBug('unlocked')
         if prefix != self.prefix() or session.uuid != self.state.get("active"):
             raise VexBug('no')
         dirs = set()
@@ -1766,6 +1859,8 @@ class Project:
         self.state.set('active', None)
 
     def restore_session(self, prefix, session):
+        if not self._lock:
+            raise VexBug('unlocked')
         for name in sorted(session.files, key=lambda x:x.split('/')):
             entry = session.files[name]
             if os.path.commonpath((name, prefix)) != prefix and os.path.commonpath((name, self.VEX)) != self.VEX:
@@ -1829,39 +1924,6 @@ class Project:
             tracked.set_property(name, value)
             txn.put_session(active)
 
-    def undo(self):
-        with self.history.undo() as action:
-            if not action:
-                return
-            if isinstance(action, objects.Action):
-                self.apply_physical_changes('old', action.changes)
-                self.apply_working_changes('old', action.working)
-            elif isinstance(action, objects.Switch):
-                self.apply_switch('old', action.prefix, action.active)
-                self.apply_logical_changes('old', action.session_states, action.branch_states, action.names)
-            else:
-                raise VexBug('action')
-            return action
-
-    def list_undos(self):
-        return self.history.entries()
-
-    def redo(self, choice):
-        with self.history.redo(choice) as action:
-            if not action:
-                return
-            if isinstance(action, objects.Action):
-                self.apply_physical_changes('new', action.changes)
-                self.apply_working_changes('new', action.working)
-            elif isinstance(action, objects.Switch):
-                self.apply_switch('new', action.prefix, action.active)
-                self.apply_logical_changes('new', action.session_states, action.branch_states, action.names)
-            else:
-                raise VexBug('action')
-            return action
-
-    def list_redos(self):
-        return self.history.redo_choices()
 
     def log(self):
         with self.do_without_undo('log') as txn:
