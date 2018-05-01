@@ -17,7 +17,8 @@ import tempfile
 from contextlib import contextmanager
 
 from cli import Command, print_result
-from project import Project, VexBug, VexNoProject, VexNoHistory, VexUnclean, VexError, VexArgument
+from project import Project
+from errors import VexBug, VexNoProject, VexNoHistory, VexUnclean, VexError, VexArgument
 import rson
 
 DEFAULT_CONFIG_DIR = ".vex"
@@ -187,9 +188,11 @@ def Init(directory, working, config, prefix, include, ignore):
             with p.lock('init') as p:
                 p.init(prefix, include, ignore)
     else:
-        yield ('Creating vex project in "{}"...'.format(working_dir))
-        p.init(prefix, include, ignore)
+        p.makedirs()
         p.makelock()
+        with p.lock('init') as p:
+            yield ('Creating vex project in "{}"...'.format(working_dir))
+            p.init(prefix, include, ignore)
 
 
 vex_undo = vex_cmd.subcommand('undo', short="undo the last command")

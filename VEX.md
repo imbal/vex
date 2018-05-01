@@ -55,15 +55,23 @@ These commands are implemented, but are unfinished:
 
 | vex | hg | git  |
 | --- | --- | --- |
-| `vex init`		| `hg init`		| `git init` 	|
-| `vex add`	    	| `hg add`		| `git add` 	|
-| `vex forget`		| `hg forget`	| `git remove --cached (-r)` 	|
-| `vex status`		| `hg status`	| `git status` 	|
-| `vex commit`		| `hg commit`	| `git commit -a` 	|
-| `vex log`	    	| `hg log`		| `git log` 	|
-| `vex branch:new`         | `hg bookmark` | `git branch, checkout`|
-| `vex branch:open`        | `hg bookmark` | `git checkout`|
-| `vex branch:saveas`      | `hg bookmark` | `git checkout -b`|
+| `vex init`		| `hg init`		    | `git init` 	|
+| `vex add`	    	| `hg add`	    	| `git add` 	|
+| `vex forget`		| `hg forget`   	| `git remove --cached (-r)` 	|
+| `vex remove`		| `hg remove`   	| `git remove (-r)` 	|
+| `vex restore`		| `hg revert`   	| `git reset -- <file>` `git checkout -- <file>` |
+| `vex status`		| `hg status`	    | `git status` 	|
+| `vex commit`		| `hg commit`   	| `git commit -a` 	|
+| `vex log`	    	| `hg log`		    | `git log --first-parent` 	|
+| `vex branch:new`  | `hg bookmark -i`, `hg update -r` | `git branch`, `git checkout`|
+| `vex branch:open`                 | `hg update -r <name>` | `git checkout` |
+| `vex branch:saveas`               | `hg bookmark <name>` | `git checkout -b`|
+| `vex branch:rename`               | `hg bookmark --rename` | `git branch`|
+| `vex branch:swap`                 | ... | ... |
+| `vex branches` / `branch:list`    | `hg bookmark` | `git branch --list` |
+| `vex diff`	                	| `hg diff`	    | `git diff` / `git diff --cached` 	|
+| `vex diff:branch`         		| `hg diff`   	| `git diff @{upstream}` 	|
+
 | ...			    | ...			| ...		|
 | `vex undo`		| `hg rollback` for commits	| check stackoverflow 	|
 | `vex redo`		|              	            | 	|
@@ -106,8 +114,8 @@ By default, `vex init name` creates a repository with a `/name` directory inside
 - `vex forget` 
 - `vex ignore` 
 - `vex include`
-- `vex remove` *
-- `vex restore` *
+- `vex remove` 
+- `vex restore` 
 - `vex restore --pick` *
 
 ### File properties
