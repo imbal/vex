@@ -1422,7 +1422,7 @@ class Project:
         self.lockfile =  LockFile(os.path.join(config_dir, 'lock'))
         self._lock = None
 
-        self.settings =  FileStore(os.path.join(config_dir, 'settings'), codec)
+        self.settings =  FileStore(os.path.join(config_dir, 'settings'), codec, rawkeys=['message'])
 
     # methods, look, don't ask, they're just plain methods, ok?
 
@@ -2066,6 +2066,7 @@ class Project:
             txn.update_active_from_changeset(changeset)
 
             changeset.author = txn.get_state('author')
+            changeset.message = txn.get_setting('message')
 
             changeset_uuid = txn.put_manifest(changeset)
             ancestors = {}
@@ -2093,6 +2094,7 @@ class Project:
             txn.update_active_from_changeset(changeset)
 
             changeset.author = txn.get_state('author')
+            changeset.message = txn.get_setting('message')
 
             changeset_uuid = txn.put_manifest(changeset)
 
@@ -2100,6 +2102,7 @@ class Project:
             commit_uuid = txn.put_commit(commit)
 
             txn.set_active_commit(commit_uuid)
+            txn.set_setting('message', '')
 
             return changeset
     
@@ -2132,13 +2135,14 @@ class Project:
             txn.update_active_from_changeset(changeset)
 
             changeset.author = txn.get_state('author')
+            changeset.message = txn.get_setting('message')
             changeset_uuid = txn.put_manifest(changeset)
 
             commit = objects.Commit(kind, timestamp=txn.now, previous=old_uuid, ancestors=dict(prepared=session.prepare), root=root_uuid, changeset=changeset_uuid)
             commit_uuid = txn.put_commit(commit)
 
             txn.set_active_commit(commit_uuid)
-
+            txn.set_setting('message', '')
 
             return changeset
 

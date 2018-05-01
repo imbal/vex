@@ -56,9 +56,11 @@ def list_dir(dir, ignore, include):
 # Stores
 
 class FileStore:
-    def __init__(self, dir, codec):
+    def __init__(self, dir, codec, rawkeys=()):
         self.codec = codec
         self.dir = dir
+        self.rawkeys = rawkeys
+
     def makedirs(self):
         os.makedirs(self.dir, exist_ok=True)
     def filename(self, name):
@@ -71,12 +73,27 @@ class FileStore:
         return os.path.exists(self.filename(addr))
     def get(self, name):
         if not self.exists(name):
+            if name in self.rawkeys:
+                return ""
             return None
         with open(self.filename(name), 'rb') as fh:
-            return self.codec.parse(fh.read())
+            return self.parse(name, fh.read())
     def set(self, name, value):
         with open(self.filename(name),'w+b') as fh:
-            fh.write(self.codec.dump(value))
+            fh.write(self.dump(name, value))
+    def parse(self, name, value):
+        if name in self.rawkeys:
+            return value.decode('utf-8')
+        else:
+            return self.codec.parse(value)
+    def dump(self, name, value):
+        if name in self.rawkeys:
+            if value:
+                return value.encode('utf-8')
+            else:
+                return b""
+        else:
+            return self.codec.dump(value)
 
 class BlobStore:
     prefix = "vex:"

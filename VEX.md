@@ -73,6 +73,9 @@ These commands are implemented, but are unfinished:
 | `vex diff:branch`         		| `hg diff`   	| `git diff @{upstream}` 	|
 
 | ...			    | ...			| ...		|
+| `vex message:edit` | ... | ... |
+| `vex message:get` | ... | ... |
+
 | `vex undo`		| `hg rollback` for commits	| check stackoverflow 	|
 | `vex redo`		|              	            | 	|
 | `vex switch`		| no subtree checkouts		| no subtree checkouts	|
@@ -135,6 +138,7 @@ By default, `vex init name` creates a repository with a `/name` directory inside
 - `vex prepare` / `vex save`
 - `vex prepare --watch` 
 - `vex commit` / 'vex commit:prepared'
+- `vex message`/ `vex message:edit`
 - `vex amend` *
 - `vex commit --pick` * 
 - `vex rollback` *

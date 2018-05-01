@@ -584,6 +584,39 @@ def Amend(file):
             yield 'Nothing to commit'
         # check that session() and branch()
 
+vex_message = vex_cmd_commit.subcommand('message', short="edit commit message")
+vex_message_edit = vex_message.subcommand('edit', short='edit commit message')
+@vex_message.run('--editor')
+@vex_message_edit.run('--editor')
+def EditMessage(editor):
+    if editor == None:
+        editor = os.environ.get('EDITOR')
+    if editor == None:
+        editor = os.environ.get('VISUAL')
+    p = open_project()
+    file = p.settings.filename('message')
+    if editor == None:
+        path = os.path.relpath(file)
+        raise VexArgument('with what editor?, you can open ./{} directly too'.format(path))
+    os.execvp(editor, [editor, file])
+
+
+vex_message_get = vex_message.subcommand('get', 'get commit message')
+@vex_message_get.run('')
+def GetMessage():
+    p = open_project()
+    if p.settings.exists('message'):
+        yield p.settings.get('message')
+
+vex_message_set = vex_message.subcommand('set', 'set commit message')
+@vex_message_set.run('message')
+def SetMessage(message):
+    p = open_project()
+    with p.lock('message:set') as p:
+        p.settings.set('message', message)
+        yield "set"
+
+
 vex_cmd_branch = vex_cmd.group('branch')
 
 vex_branch = vex_cmd_branch.subcommand('branch', short="open/create branch")
