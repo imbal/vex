@@ -1128,7 +1128,7 @@ class PhysicalTransaction:
 
         return output
 
-    def add_files_to_active(self, files, include, ignore):
+    def find_new_files(self, files, include, ignore):
         active = self.active()
         to_scan = set()
         names = {}
@@ -1147,7 +1147,6 @@ class PhysicalTransaction:
                 name = os.path.split(name)[0]
                 filename = os.path.split(filename)[0]
 
-
         for dir in to_scan:
             for filename in list_dir(dir, ignore, include):
                 name = self.full_to_repo_path(filename)
@@ -1155,7 +1154,12 @@ class PhysicalTransaction:
                     names[name] = filename
                 elif os.path.isdir(filename):
                     dirs[name] = filename
+        return dirs, names
 
+    def add_files_to_active(self, files, include, ignore):
+        dirs, names = self.find_new_files(files, include, ignore)
+
+        active = self.active()
         added = set()
         new_files = {}
         for name, filename in dirs.items():

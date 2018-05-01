@@ -182,7 +182,7 @@ def Init(directory, working, config, prefix, include, ignore):
     include = include or DEFAULT_INCLUDE
     ignore = ignore or DEFAULT_IGNORE
 
-    p = Project(config_dir, working_dir)
+    p = Project(config_dir, working_dir, fake)
 
     if p.exists() and not p.clean_state():
         yield ('This vex project is unwell. Try `vex debug:status`')
