@@ -77,28 +77,29 @@ vex_cmd = Command('vex', 'a database for files', long=__doc__)
 
 @vex_cmd.on_complete()
 def Complete(prefix, field, argtype):
+    out = []
     if argtype == 'path':
         if prefix:
-            return ["{} ".format(p) for p in os.listdir() if p.startswith(prefix)]
+            out.extend("{} ".format(p) for p in os.listdir() if p.startswith(prefix))
         else:
-            return ["{} ".format(p) for p in os.listdir() if not p.startswith('.')]
+            out.extend("{} ".format(p) for p in os.listdir() if not p.startswith('.'))
     elif argtype in ('bool', 'boolean'):
-        out = ('true ','false ')
+        vals = ('true ','false ')
         if prefix:
-            return [p for p in out if p.startswith(prefix)]
+            out.extend(p for p in vals if p.startswith(prefix))
         else:
-            return out
+            out.extend(vals)
 
     elif argtype == 'branch':
         p = open_project()
         if p:
-            out = p.list_branches()
+            vals = p.list_branches()
             if prefix:
-                return ["{} ".format(name) for name, uuid in out if name.startwith(prefix)]
+                out.extend("{} ".format(name) for name, uuid in out if name.startwith(prefix))
             else:
-                return ["{} ".format(name) for name, uuid in out if name]
+                out.extend("{} ".format(name) for name, uuid in out if name)
 
-    return ()
+    return out
 
 
 @vex_cmd.on_call()
@@ -370,8 +371,7 @@ def Log():
         yield ""
 
 
-vex_cmd_diff = vex_cmd.group('diff')
-vex_diff = vex_cmd_diff.subcommand('diff', short="show the current changes to the project as a diff")
+vex_diff = vex_cmd.subcommand('diff', short="show the current changes to the project as a diff")
 vex_diff_file = vex_diff.subcommand('file', short='show changed files since last commit')
 argspec = '''
     [file:path...] # difference between two files
@@ -629,6 +629,12 @@ def GetMessage():
     if p.settings.exists('message'):
         yield p.settings.get('message')
 
+vex_message_filename = vex_message.subcommand('filename', 'commit message filename', aliases=['path'])
+@vex_message_filename.run('')
+def MessageFilename():
+    p = open_project()
+    yield p.settings.filename('message')
+
 vex_message_set = vex_message.subcommand('set', 'set commit message')
 @vex_message_set.run('message')
 def SetMessage(message):
@@ -637,6 +643,43 @@ def SetMessage(message):
         p.settings.set('message', message)
         yield "set"
 
+vex_commit_apply = vex_commit.subcommand('apply', 'apply changes from other branch to current session')
+@vex_commit_apply.run('branch')
+def Apply(branch):
+    p = open_project()
+    with p.lock('apply') as p:
+        if not p.names.exists(branch):
+            raise VexArgument('{} doesn\'t exist'.format(branch))
+        p.apply_changes_from_branch(branch)
+
+vex_commit_append = vex_commit.subcommand('append', 'append changes from other branch to current session')
+@vex_commit_append.run('branch')
+def Append(branch):
+    p = open_project()
+    with p.lock('append') as p:
+        if not p.names.exists(branch):
+            raise VexArgument('{} doesn\'t exist'.format(branch))
+        p.append_changes_from_branch(branch)
+
+vex_commit_replay = vex_commit.subcommand('replay', 'replay changes from other branch to current session')
+@vex_commit_replay.run('branch')
+def Replay(branch):
+    p = open_project()
+    with p.lock('replay') as p:
+        if not p.names.exists(branch):
+            raise VexArgument('{} doesn\'t exist'.format(branch))
+        p.replay_changes_from_branch(branch)
+
+vex_commit_squash = vex_commit.subcommand('squash', 'flatten commits into one')
+
+vex_rollback = vex_cmd_commit.subcommand('rollback', 'take older version and re-commit it')
+
+vex_revert = vex_cmd_commit.subcommand('revert','new commit without changes made in an old version')
+
+vex_rewind = vex_cmd_commit.subcommand('rewind','rewind session to earlier change')
+vex_update = vex_cmd_commit.subcommand('update','update branch to start from new upstream head')
+
+# Rollback, Revert, Squash, Update,
 
 vex_cmd_branch = vex_cmd.group('branch')
 
@@ -862,35 +905,6 @@ def SetProp(file, name, value):
         p.set_fileprop(filename, name, value)
 
 
-vex_cmd_apply = vex_cmd.group('apply')
-vex_apply = vex_cmd_apply.subcommand('apply', 'apply changes from other branch to current session')
-@vex_apply.run('branch')
-def Apply(branch):
-    p = open_project()
-    with p.lock('apply') as p:
-        if not p.names.exists(branch):
-            raise VexArgument('{} doesn\'t exist'.format(branch))
-        p.apply_changes_from_branch(branch)
-
-vex_append = vex_cmd_apply.subcommand('append', 'append changes from other branch to current session')
-@vex_append.run('branch')
-def Append(branch):
-    p = open_project()
-    with p.lock('append') as p:
-        if not p.names.exists(branch):
-            raise VexArgument('{} doesn\'t exist'.format(branch))
-        p.append_changes_from_branch(branch)
-
-vex_replay = vex_cmd_apply.subcommand('replay', 'replay changes from other branch to current session')
-@vex_replay.run('branch')
-def Replay(branch):
-    p = open_project()
-    with p.lock('replay') as p:
-        if not p.names.exists(branch):
-            raise VexArgument('{} doesn\'t exist'.format(branch))
-        p.replay_changes_from_branch(branch)
-
-# Rollback, Revert, Squash, Update,
 
 vex_cmd_debug = vex_cmd.group('debug')
 vex_debug = vex_cmd_debug.subcommand('debug', 'internal: run a command without capturing exceptions, or repairing errors')
@@ -973,7 +987,7 @@ def DebugRollback():
             yield ('Project has recovered')
         else:
             yield ('Oh dear')
-vex_cmd_git = vex_cmd.group('git')
+vex_cmd_git = vex_cmd.group('_git')
 git_cmd = vex_cmd_git.subcommand('git', short="interact with a git repository")
 
 git_init_cmd = git_cmd.subcommand('init', short='create a new git project')
@@ -1056,7 +1070,7 @@ def DebugTest():
         vex.commit()
 
         vex.undo()
-        vex.prepare()
+        vex.commit.prepare()
         vex.commit.prepared()
 
         vex.undo()

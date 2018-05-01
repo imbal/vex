@@ -550,7 +550,7 @@ class CommandDescription:
             elif text.startswith('-'):
                 return self.complete_flag(text[1:])
             elif self.argspec:
-                n = len([p for p in prefix if p])
+                n = len([p for p in prefix if p and not p.startswith('--')])
                 field = None
                 if n < len(self.argspec.positional):
                     for i, name in enumerate(self.argspec.positional):
@@ -581,6 +581,9 @@ class CommandDescription:
             out.extend("--{} ".format(x) for x in self.argspec.switches if x.startswith(prefix))
             out.extend("--{}=".format(x) for x in self.argspec.flags if x.startswith(prefix))
             out.extend("--{}=".format(x) for x in self.argspec.lists if x.startswith(prefix))
+            out.extend("--{}=".format(x) for x in self.argspec.positional if x.startswith(prefix))
+            out.extend("--{}=".format(x) for x in self.argspec.optional if x.startswith(prefix))
+            out.extend("--{}=".format(x) for x in (self.argspec.tail,) if x.startswith(prefix))
             return out
         else:
             return ()
@@ -651,6 +654,7 @@ class CommandDescription:
             output.append("Commands:") 
             for group, subcommands in self.groups.items():
                 for name in subcommands:
+                    if name.startswith((" ", "_",)): continue
                     cmd = self.subcommands[name]
                     output.append("  {.name:10}  {}".format(cmd, cmd.short or ""))
                 output.append("")
