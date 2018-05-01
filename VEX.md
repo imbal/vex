@@ -71,11 +71,9 @@ These commands are implemented, but are unfinished:
 | `vex branches` / `branch:list`    | `hg bookmark` | `git branch --list` |
 | `vex diff`	                	| `hg diff`	    | `git diff` / `git diff --cached` 	|
 | `vex diff:branch`         		| `hg diff`   	| `git diff @{upstream}` 	|
-
 | ...			    | ...			| ...		|
 | `vex message:edit` | ... | ... |
 | `vex message:get` | ... | ... |
-
 | `vex undo`		| `hg rollback` for commits	| check stackoverflow 	|
 | `vex redo`		|              	            | 	|
 | `vex switch`		| no subtree checkouts		| no subtree checkouts	|
