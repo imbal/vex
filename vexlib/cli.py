@@ -1,3 +1,111 @@
+""" abandon all faith all ye who enter here
+
+A program consists of `cli.Commands()`, chained together, used to 
+decorate functions to dispatch:
+
+```
+cmd = cli.Command('florb','florb the morps')
+@cmd.run("one [two] [three...]")
+def cmd_run(one, two, three):
+    print([one, two, three])
+```
+
+gives this output:
+
+```
+$ florb one 
+["one", None, []]
+
+$ florb one two three four
+["one", "two", ["three", "four]]
+```
+
+If needed, these options can be passed *entirely* as flags: 
+
+```
+$ florb --one=one --two=two --three=three --three=four
+["one", "two", ["three", "four]]
+```
+
+## Subcommands
+
+`Command` can be nested, giving a `cmd one <args>` `cmd two <args>` like interface:
+``` 
+root = cli.Command('example', 'my program')
+
+subcommand = cli.subcommand('one', 'example subcommand')
+
+@subcommand.run(...)
+def subcommand_run(...):
+    ...
+```
+
+`cmd help one` `cmd one --help`, `cmd help two` `cmd two --help` will print out the manual and usage for `one` and `two` respectively.
+
+The parameter to `run()`, is called an argspec.
+
+## Argspec
+
+An argspec is a string that describes how to turn CLI arguments into a dictionary of name, value pairs. For example:
+
+- "x y z" given "1 2 3" gives {"x":1, "y":2, "z":3}
+- "[x...]" given "a b c" gives {"x":["a","b","c"]}
+
+This is used to call the function underneath, so every value in the function must be present in the argspec. When no argspec is provided, `textfree86` defaults to a string of argument names, i.e `foo(x,y,z)` gets `"x y z"`. 
+
+The dictionary passed will contain a value for every name in the argspec. An argspec resembles a usage string, albeit with a standard formatting for flags or other command line options:
+
+- `--name?` describes a switch, which defaults to `False`, but when present, is set to `True`, additionally, `--name=true` and `--name=false` both work.
+
+- `--name` describes a normal flag, which defaults to `None`, and on the CLI `--name=value` sets it.
+
+- `--name...` describes a list flag, which defaults to `[]`, and on the CLI `--name=value` appends to it
+
+- `name` describes a positional argument. It must come after any flags and before any optional positional arguments.
+
+- `[name]` describes an optional positional argument. If one arg is given for two optional positional args, like `[x] [y]`, then the values are assigned left to right.
+
+- `[name...]` describes a tail positonal argument. It defaults to `[]`, and all remaining arguments are appended to it.
+
+A short argspec has four parts, `<flags> <positional> [<optional positional>]* [<tail positional>...]`
+
+### Long Argspec
+
+Passing a multi-line string allows you to pass in short descriptions of the arguments, using `# ...` at the end of each line.
+
+```
+demo = cli.Command('demo', 'cli example programs')
+@demo.run('''
+    --switch?       # a demo switch
+    --value:str     # pass with --value=...
+    --bucket:int... # a list of numbers
+    pos1            # positional
+    [opt1]          # optional 1
+    [opt2]          # optional 2
+    [tail...]       # tail arg
+''')
+def run(switch, value, bucket, pos1, opt1, opt2, tail):
+    """a demo command that shows all the types of options"""
+    return [switch, value, bucket, pos1, opt1, opt2, tail]
+```
+
+### Argument Types
+
+A field can contain a parsing instruction, `x:string` or `x:int`
+
+- `int`, `integer`
+- `float`, `num`, `number`
+- `str`, `string`
+- `bool`, `boolean` (accepts 'true', 'false')
+
+Example `arg1:str arg2:int` describes a progrm that would accept `foo 123` as input, passing `{'arg1': 'foo', 'arg2': 123}` to the function.
+
+A scalar field tries to convert the argument to an integer or floating point number, losslessly, and if successful, uses that.
+
+The default is 'string'
+
+"""
+
 import io
 import os
 import sys

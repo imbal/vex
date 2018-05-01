@@ -1,3 +1,6 @@
+"""
+    hooray for exceptions
+"""
 class VexError(Exception): pass
 
 # Should not happen: bad state reached internally

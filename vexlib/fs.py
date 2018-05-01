@@ -1,3 +1,16 @@
+"""
+
+    - filename matching to gitignore style globs
+
+    - listing directories recursively using said patterns
+
+    - blob store (content addressable thingy)
+
+    - file store (read write objects to named files, using rson to ser/deser)
+    
+    - shelling out to diff
+
+"""
 import fnmatch
 import hashlib
 import subprocess
