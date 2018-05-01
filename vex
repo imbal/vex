@@ -710,6 +710,8 @@ def NewBranch(name):
     """
     p = open_project()
     with p.lock('new') as p:
+        if p.names.exists(name):
+            raise VexArgument('{} exists'.format(name))
         p.new_branch(name)
 
 vex_saveas = vex_branch.subcommand('saveas', short="save session as a new branch, leaving old one alone")
@@ -854,6 +856,37 @@ def SetProp(file, name, value):
     p = open_project()
     with p.lock('fileprops:list') as p:
         p.set_fileprop(filename, name, value)
+
+
+vex_cmd_apply = vex_cmd.group('apply')
+vex_apply = vex_cmd_apply.subcommand('apply', 'apply changes from other branch to current session')
+@vex_apply.run('branch')
+def Apply(branch):
+    p = open_project()
+    with p.lock('apply') as p:
+        if not p.names.exists(branch):
+            raise VexArgument('{} doesn\'t exist'.format(branch))
+        p.apply_changes_from_branch(branch)
+
+vex_append = vex_cmd_apply.subcommand('append', 'append changes from other branch to current session')
+@vex_append.run('branch')
+def Append(branch):
+    p = open_project()
+    with p.lock('append') as p:
+        if not p.names.exists(branch):
+            raise VexArgument('{} doesn\'t exist'.format(branch))
+        p.append_changes_from_branch(branch)
+
+vex_replay = vex_cmd_apply.subcommand('replay', 'replay changes from other branch to current session')
+@vex_replay.run('branch')
+def Replay(branch):
+    p = open_project()
+    with p.lock('replay') as p:
+        if not p.names.exists(branch):
+            raise VexArgument('{} doesn\'t exist'.format(branch))
+        p.replay_changes_from_branch(branch)
+
+# Squash, Update
 
 vex_cmd_debug = vex_cmd.group('debug')
 vex_debug = vex_cmd_debug.subcommand('debug', 'internal: run a command without capturing exceptions, or repairing errors')

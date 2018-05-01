@@ -2314,6 +2314,8 @@ class Project:
             out.append(self.get_session(session))
         return out
 
+    def apply_changes_from_branch(self, name):
+        raise VexUnimplemented('no')
 
     # debug:stash
     def stash(self, files=None):
