@@ -577,7 +577,7 @@ def CommitPrepared():
             yield 'commit: Nothing to commit'
 
 
-vex_amend = vex_cmd_commit.subcommand('amend', short="replace the last commit with the current changes in the project")
+vex_amend = vex_commit.subcommand('amend', short="replace the last commit with the current changes in the project")
 @vex_amend.run('''
         [file:path...] # files to change
 ''')

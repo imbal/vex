@@ -2314,9 +2314,25 @@ class Project:
             out.append(self.get_session(session))
         return out
 
+    def append_changes_from_branch(self, name):
+        raise VexUnimplemented('no')
+        # switch to a new session
+        # with txn
+        #   get other branch, check it's based on current prepare
+        #   for each commit, create a new commit pointing to the last
+        #   copying across change, root, adding ancestors ('original', )
+        # on error, switch out to old session
+        # on success, merge changes in from old session
+        
     def apply_changes_from_branch(self, name):
         raise VexUnimplemented('no')
+        # switch to a new session
+        # create an inbox of commits, files, patches
+        #   process inbox
+        # on error, switch out to old session
 
+    def replay_changes_from_branch(self, name):
+        raise VexUnimplemented('no')
     # debug:stash
     def stash(self, files=None):
         files = self.check_files(files) if files is not None else None
