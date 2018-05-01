@@ -9,8 +9,6 @@
 
     - objects
         commits, changelogs, things written to and from disk
-    - stores
-        things to store the objects on disk
     - history
         a transactional-ish log of items 
     - transaction
@@ -47,6 +45,8 @@ def NOW(): return datetime.now(timezone.utc)
 # if too close to current time, may miss any current modificatons
 
 MTIME_GRACE_SECONDS = 0.5
+
+# But on FAT32, this should be > 3 seconds, and on nanotimes, 1^-9
 
 
 class LockFile:
@@ -1404,6 +1404,7 @@ class Project:
         self.state =      FileStore(os.path.join(config_dir, 'state'), codec)
         self.history =   History(os.path.join(config_dir, 'history'))
         self.lockfile =  LockFile(os.path.join(config_dir, 'lock'))
+        self._lock = None
 
         self.settings =  FileStore(os.path.join(config_dir, 'settings'), codec)
 
@@ -1427,8 +1428,13 @@ class Project:
 
     @contextmanager
     def lock(self, command):
-        with self.lockfile(command):
-            yield self
+        """ a process wide lock, ok?"""
+        with self.lockfile(command) as locked:
+            self._lock = locked
+            try:
+                yield self
+            finally:
+                self._lock = None
 
     def exists(self):
         return os.path.exists(self.config_dir)
@@ -1600,6 +1606,8 @@ class Project:
 
     # Take Action.changes and applies them to project
     def apply_logical_changes(self, kind, session_states, branch_states, names):
+        if not self._lock:
+            raise VexBug('unlocked')
         for name,value in session_states[kind].items():
             session = self.sessions.get(name)
             session.state = value
@@ -1613,6 +1621,8 @@ class Project:
 
     # Take Action.changes and applies them to project
     def apply_physical_changes(self, kind, changes):
+        if not self._lock:
+            raise VexBug('unlocked')
         prefix = self.prefix()
         for key in changes:
             if key == 'branches':
@@ -1653,6 +1663,8 @@ class Project:
 
     # Takes Action.blobs and copies them out of the scratch directory
     def copy_blobs(self, blobs):
+        if not self._lock:
+            raise VexBug('unlocked')
         for key in blobs:
             if key == 'commits':
                 for addr in blobs['commits']:
@@ -1667,6 +1679,8 @@ class Project:
                 raise VexBug('Project change has unknown values')
 
     def apply_switch(self, kind, prefix, session):
+        if not self._lock:
+            raise VexBug('unlocked')
         if prefix:
             active_prefix = self.prefix()
             new_prefix = prefix[kind]
@@ -1882,12 +1896,14 @@ class Project:
             txn.switch_prefix(new_prefix)
 
     def init(self, prefix, include, ignore):
-        self.makedirs()
+        if not self._lock:
+            raise VexBug('unlocked')
         if not self.history_isempty():
             raise VexNoHistory('cant reinit')
         if not prefix.startswith('/'):
             raise VexArgument('crap prefix')
         with self.do_without_undo('init') as txn:
+            # so addr for file is easy, ugh
             txn.set_setting('ignore', ignore)
             txn.set_setting('include', include)
 
