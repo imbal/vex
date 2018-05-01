@@ -491,7 +491,38 @@ def Missing():
             yield "missing: {}".format(f)
 vex_cmd_commit = vex_cmd.group("commit")
 
-vex_prepare = vex_cmd_commit.subcommand('prepare', short="save current working copy to prepare for commit", aliases=['save'])
+vex_commit = vex_cmd_commit.subcommand('commit', short="save the working copy and add an entry to the project changes")
+@vex_commit.run('''
+    --add?          # Run `vex add` before commiting
+    [file:path...]       # Commit only a few changed files
+''')
+def Commit(add, file):
+    """
+        `vex commit` saves the current state of the project.
+
+    """
+    p = open_project()
+    with p.lock('commit') as p:
+        if add:
+            for f in p.add([os.getcwd()]):
+                f = os.path.relpath(f)
+                yield "add: {}".format(f)
+
+        cwd = os.getcwd()
+        files = file if file else None
+
+        changes = p.commit_active(files)
+
+        if changes:
+            for name, entries in changes.items():
+                entries = [entry.text for entry in entries]
+                name = os.path.relpath(name, p.prefix())
+                yield "commit: {}, {}".format(', '.join(entries), name)
+
+        else:
+            yield 'commit: Nothing to commit'
+
+vex_prepare = vex_commit.subcommand('prepare', short="save current working copy to prepare for commit", aliases=['save'])
 @vex_prepare.run('''
         --add?          # Run `vex add` before commiting
         --watch?         # Unsupported
@@ -526,37 +557,6 @@ def Prepare(file,watch, add):
                             yield os.path.relpath(file)
         else:
             p.prepare(files)
-
-vex_commit = vex_cmd_commit.subcommand('commit', short="save the working copy and add an entry to the project changes")
-@vex_commit.run('''
-    --add?          # Run `vex add` before commiting
-    [file:path...]       # Commit only a few changed files
-''')
-def Commit(add, file):
-    """
-        `vex commit` saves the current state of the project.
-
-    """
-    p = open_project()
-    with p.lock('commit') as p:
-        if add:
-            for f in p.add([os.getcwd()]):
-                f = os.path.relpath(f)
-                yield "add: {}".format(f)
-
-        cwd = os.getcwd()
-        files = file if file else None
-
-        changes = p.commit_active(files)
-
-        if changes:
-            for name, entries in changes.items():
-                entries = [entry.text for entry in entries]
-                name = os.path.relpath(name, p.prefix())
-                yield "commit: {}, {}".format(', '.join(entries), name)
-
-        else:
-            yield 'commit: Nothing to commit'
 
 vex_commit_prepared = vex_commit.subcommand('prepared', short="commit prepared files")
 @vex_commit_prepared.run()
