@@ -85,7 +85,7 @@ demo = cli.Command('demo', 'cli example programs')
     [tail...]       # tail arg
 ''')
 def run(switch, value, bucket, pos1, opt1, opt2, tail):
-    """a demo command that shows all the types of options"""
+    '''a demo command that shows all the types of options'''
     return [switch, value, bucket, pos1, opt1, opt2, tail]
 ```
 

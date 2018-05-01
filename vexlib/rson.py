@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""
+r"""
 # RSON: Restructured Object Notation
 
 RSON is JSON, with a little bit of sugar: Comments, Commas, and Tags.
