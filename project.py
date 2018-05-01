@@ -1135,25 +1135,34 @@ class PhysicalTransaction:
         dirs = {}
         for filename in files:
             name = self.full_to_repo_path(filename)
+            entry = active.files.get(name)
             if os.path.isfile(filename):
-                names[name] = filename
+                if not entry or entry.kind != 'file': 
+                    names[name] = filename
             elif os.path.isdir(filename):
-                dirs[name] = filename
+                if not entry or entry.kind != 'dir': 
+                    dirs[name] = filename
                 to_scan.add(filename)
             filename = os.path.split(filename)[0]
             name = os.path.split(name)[0]
             while name != '/' and name != self.project.VEX:
+                entry = active.files.get(name)
+                if entry and entry.kind != 'dir': 
+                    break
                 dirs[name] = filename
                 name = os.path.split(name)[0]
                 filename = os.path.split(filename)[0]
 
         for dir in to_scan:
-            for filename in list_dir(dir, ignore, include):
+            for filename in list_dir(dir, ignore, include): # recursive
                 name = self.full_to_repo_path(filename)
+                entry = active.files.get(name)
                 if os.path.isfile(filename):
-                    names[name] = filename
+                    if not entry or entry.kind != 'file': 
+                        names[name] = filename
                 elif os.path.isdir(filename):
-                    dirs[name] = filename
+                    if not entry or entry.kind != 'dir': 
+                        dirs[name] = filename
         return dirs, names
 
     def add_files_to_active(self, files, include, ignore):
@@ -2149,6 +2158,16 @@ class Project:
             txn.set_setting('message', '')
 
             return changeset
+
+    def missing(self, file):
+        files = self.check_files((file,))
+        with self.do_without_undo('missing') as txn:
+            session = txn.active()
+            include = txn.get_setting('include')
+            ignore = txn.get_setting('ignore')
+
+            dirs, files = txn.find_new_files(files, include, ignore)
+            return files.values()
 
     def add(self, files, include=None, ignore=None):
         files = self.check_files(files)

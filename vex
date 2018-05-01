@@ -325,8 +325,9 @@ def RedoList():
 vex_status = vex_cmd.subcommand('status', short="list the files being tracked by vex")
 @vex_status.run('''
     --all?      # Show all files inside the repo, even ones outside working copy
+    --missing?  # Show untracked files
 ''')
-def Status(all):
+def Status(all, missing):
     """
         `vex status` shows the state of each visible file, `vex status --all` shows the status 
         of every file in the current session/branch.
@@ -337,17 +338,21 @@ def Status(all):
         files = p.status()
         for reponame in sorted(files, key=lambda p:p.split(':')):
             entry = files[reponame]
+            path = os.path.relpath(reponame, p.prefix())
             if entry.working is None:
                 if all:
-                    yield "hidden:{:9}\t{} ".format(entry.state, reponame)
+                    yield "hidden:{:9}\t{} ".format(entry.state, path)
             elif reponame.startswith('/.vex/') or reponame == '/.vex':
-                path = os.path.relpath(reponame, '/.vex')
                 if all:
                     yield "{}:{:8}\t{}".format('setting', entry.state, path)
             else:
-                path = os.path.relpath(reponame, p.prefix())
                 yield "{:16}\t{}{}".format(entry.state, path, ('*' if entry.stash else '') )
         yield ""
+        if all or missing:
+            for f in p.missing(os.getcwd()):
+                path = os.path.relpath(f)
+                yield "{:16}\t{}".format('untracked', path)
+
 
 vex_log = vex_cmd.subcommand('log', aliases=['changelog'], short="list changes to project")
 @vex_log.run()
@@ -472,6 +477,16 @@ def Restore(file):
         for f in p.restore(file).values():
             f = os.path.relpath(f)
             yield "restore: {}".format(f)
+vex_missing = vex_cmd_files.subcommand('missing','files in current directory but not in project')
+@vex_missing.run('')
+def Missing():
+    """
+        `vex missing` shows missing files
+    """
+    p = open_project()
+    for f in p.missing(os.getcwd()):
+            f = os.path.relpath(f)
+            yield "missing: {}".format(f)
 vex_cmd_commit = vex_cmd.group("commit")
 
 vex_prepare = vex_cmd_commit.subcommand('prepare', short="save current working copy to prepare for commit", aliases=['save'])
