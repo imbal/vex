@@ -16,10 +16,12 @@ import tempfile
 
 from contextlib import contextmanager
 
-from cli import Command, print_result
-from project import Project
-from errors import VexBug, VexNoProject, VexNoHistory, VexUnclean, VexError, VexArgument
-import rson
+sys.path.append(os.path.split(os.path.abspath(__file__))[0])
+
+
+from vexlib.cli import Command, print_result
+from vexlib.project import Project
+from vexlib.errors import VexBug, VexNoProject, VexNoHistory, VexUnclean, VexError, VexArgument
 
 DEFAULT_CONFIG_DIR = ".vex"
 DEFAULT_INCLUDE = ["*"] 
