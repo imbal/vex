@@ -643,6 +643,48 @@ def SetMessage(message):
         p.settings.set('message', message)
         yield "set"
 
+vex_template = vex_message.subcommand('template', short="edit commit template")
+vex_template_edit = vex_template.subcommand('edit', short='edit commit template')
+@vex_template.run('--editor')
+@vex_template_edit.run('--editor')
+def EditTemplate(editor):
+    p = open_project()
+    with p.lock('editor') as p:
+        if not editor and p.state.exists('editor'):
+            editor = p.state.get('editor')
+        if not editor:
+            editor = os.environ.get('EDITOR')
+        if not editor:
+            editor = os.environ.get('VISUAL')
+        file = p.settings.filename('template')
+        if not editor:
+            path = os.path.relpath(file)
+            raise VexArgument('with what editor?, you can open ./{} directly too'.format(path))
+        p.state.set('editor', editor)
+    os.execvp(editor, [editor, file])
+
+
+vex_template_get = vex_template.subcommand('get', 'get commit template')
+@vex_template_get.run('')
+def GetTemplate():
+    p = open_project()
+    if p.settings.exists('template'):
+        yield p.settings.get('template')
+
+vex_template_filename = vex_template.subcommand('filename', 'commit template filename', aliases=['path'])
+@vex_template_filename.run('')
+def TemplateFilename():
+    p = open_project()
+    yield p.settings.filename('template')
+
+vex_template_set = vex_template.subcommand('set', 'set commit template')
+@vex_template_set.run('template')
+def SetTemplate(template):
+    p = open_project()
+    with p.lock('template:set') as p:
+        p.settings.set('template', template)
+        yield "set"
+
 vex_commit_apply = vex_commit.subcommand('apply', 'apply changes from other branch to current session')
 @vex_commit_apply.run('branch')
 def Apply(branch):

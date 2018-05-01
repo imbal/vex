@@ -161,6 +161,12 @@ class objects:
             self.addr = addr
 
     @codec.register
+    class Ignored:
+        def __init__(self):
+            pass
+
+
+    @codec.register
     class Changeset:
         def __init__(self, entries, *, author=None, message=None):
             self.author = author
@@ -187,6 +193,11 @@ class objects:
             return bool(self.entries)
 
     # changeset entries
+    @codec.register
+    class IgnorePath:
+        text = "ignored path"
+        def __init__(self):
+            pass
 
     @codec.register
     class AddFile:
@@ -950,6 +961,8 @@ class PhysicalTransaction:
                 active.files.pop(name)
             elif isinstance(change, objects.DeleteFile):
                 active.files.pop(name)
+            elif isinstance(change, objects.IgnorePath):
+                pass
             else:
                 mtime = None
                 mode = None
@@ -1040,7 +1053,9 @@ class PhysicalTransaction:
                 if changes and name in changes:
                     entry_changes = changes.pop(name)
                     for change in entry_changes:
-                        if isinstance(change, objects.NewFile):
+                        if isinstance(change, objects.IgnorePath):
+                            entry = objects.Ignored()
+                        elif isinstance(change, objects.NewFile):
                             if not isinstance(entry, objects.Dir): raise VexBug('overwrite sync')
                             entry = objects.File(change.addr, change.properties)
                         elif isinstance(change, objects.NewDir):
@@ -1074,7 +1089,7 @@ class PhysicalTransaction:
                         changed = True
                         entry = objects.Dir(new_addr, entry.properties)
 
-                if entry and not isinstance(entry, (objects.File, objects.Dir)):
+                if entry and not isinstance(entry, (objects.File, objects.Dir, objects.Ignored)):
                     raise VexBug('nope')
 
                 if entry is not None:
@@ -1108,6 +1123,8 @@ class PhysicalTransaction:
                         walk(path, entry.addr)
                 elif isinstance(entry, objects.File):
                     output[path] = objects.Tracked('file', 'tracked', addr=entry.addr, properties=entry.properties)
+                elif isinstance(entry, objects.Ignored):
+                    output[path] = objects.Tracked('ignore', 'tracked', properties={})
 
         def extract(changes):
             for path, changes in changes.items():
@@ -1118,6 +1135,8 @@ class PhysicalTransaction:
                         output[name] = objects.Tracked("dir", "tracked", properties=change.properties)
                     elif isinstance(change, (objects.DeleteDir, objects.DeleteFile)):
                         output.pop(name)
+                    elif isinstance(entry, objects.IgnorePath):
+                        output[path] = objects.Tracked('ignore', 'tracked', properties={})
                     else:
                         raise VexBug(change)
 
@@ -1435,7 +1454,7 @@ class Project:
         self.lockfile =  LockFile(os.path.join(config_dir, 'lock'))
         self._lock = None
 
-        self.settings =  FileStore(os.path.join(config_dir, 'settings'), codec, rawkeys=['message'])
+        self.settings =  FileStore(os.path.join(config_dir, 'settings'), codec, rawkeys=['message', 'template'])
 
     # methods, look, don't ask, they're just plain methods, ok?
 
@@ -1981,6 +2000,8 @@ class Project:
             # so addr for file is easy, ugh
             txn.set_setting('ignore', ignore)
             txn.set_setting('include', include)
+            txn.set_setting('message', '')
+            txn.set_setting('template', '')
 
         with self.do('init') as txn:
             author_uuid = UUID() 
@@ -1992,12 +2013,15 @@ class Project:
 
             ignore_addr = txn.put_file(txn.repo_to_full_path('/.vex/ignore'))
             include_addr = txn.put_file(txn.repo_to_full_path('/.vex/include'))
+            template_addr = txn.put_file(txn.repo_to_full_path('/.vex/template'))
             
             changes = {
                     '/' : [ objects.AddDir(properties={}) ] ,
                     self.VEX : [ objects.AddDir(properties={}) ],
                     os.path.join(self.VEX, 'ignore'): [ objects.AddFile(addr=ignore_addr, properties={}) ],
                     os.path.join(self.VEX, 'include'): [ objects.AddFile(addr=include_addr, properties={}) ],
+                    os.path.join(self.VEX, 'template'): [ objects.AddFile(addr=template_addr, properties={}) ],
+                    os.path.join(self.VEX, 'message'): [ objects.IgnorePath() ],
             }
             if prefix != '/':
                 changes[prefix] = [ objects.AddDir(properties={})]
@@ -2115,7 +2139,7 @@ class Project:
             commit_uuid = txn.put_commit(commit)
 
             txn.set_active_commit(commit_uuid)
-            txn.set_setting('message', '')
+            txn.set_setting('message', txn.get_setting('template'))
 
             return changeset
     
@@ -2155,13 +2179,13 @@ class Project:
             commit_uuid = txn.put_commit(commit)
 
             txn.set_active_commit(commit_uuid)
-            txn.set_setting('message', '')
+            txn.set_setting('message', txn.get_setting('template'))
 
             return changeset
 
-    def missing(self, file):
+    def untracked(self, file):
         files = self.check_files((file,))
-        with self.do_without_undo('missing') as txn:
+        with self.do_without_undo('untracked') as txn:
             session = txn.active()
             include = txn.get_setting('include')
             ignore = txn.get_setting('ignore')
