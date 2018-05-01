@@ -712,14 +712,14 @@ def Replay(branch):
             raise VexArgument('{} doesn\'t exist'.format(branch))
         p.replay_changes_from_branch(branch)
 
-vex_commit_squash = vex_commit.subcommand('squash', 'flatten commits into one')
+vex_commit_squash = vex_commit.subcommand('squash', '* flatten commits into one')
 
-vex_rollback = vex_cmd_commit.subcommand('rollback', 'take older version and re-commit it')
+vex_rollback = vex_cmd_commit.subcommand('rollback', '* take older version and re-commit it')
 
-vex_revert = vex_cmd_commit.subcommand('revert','new commit without changes made in an old version')
+vex_revert = vex_cmd_commit.subcommand('revert','* new commit without changes made in an old version')
 
-vex_rewind = vex_cmd_commit.subcommand('rewind','rewind session to earlier change')
-vex_update = vex_cmd_commit.subcommand('update','update branch to start from new upstream head')
+vex_rewind = vex_cmd_commit.subcommand('rewind','* rewind session to earlier change')
+vex_update = vex_cmd_commit.subcommand('update','* update branch to start from new upstream head')
 
 # Rollback, Revert, Squash, Update,
 
@@ -864,7 +864,7 @@ def DiffBranch(branch):
         for name, diff in  p.active_diff_commit(commit).items():
             yield diff
 
-vex_switch = vex_cmd_files.subcommand('switch', short="change which directory (inside the project) is worked on")
+vex_switch = vex_cmd.subcommand('switch', short="change which directory (inside the project) is worked on")
 @vex_switch.run('[prefix]')
 def Switch(prefix):
     """
@@ -1030,21 +1030,21 @@ def DebugRollback():
         else:
             yield ('Oh dear')
 vex_cmd_git = vex_cmd.group('_git')
-git_cmd = vex_cmd_git.subcommand('git', short="interact with a git repository")
+git_cmd = vex_cmd_git.subcommand('git', short="* interact with a git repository")
 
-git_init_cmd = git_cmd.subcommand('init', short='create a new git project')
+git_init_cmd = git_cmd.subcommand('init', short='* create a new git project')
 @git_init_cmd.run('--name --email directory')
 def GitInit(name, email, directory):
     pass
     # call Init with new settings
 
 
-git_set_cmd = git_cmd.subcommand('set', short='set git options')
+git_set_cmd = git_cmd.subcommand('set', short='* set git options')
 @git_set_cmd.run('--number? --string? --boolean? name value')
 def GitSet(number, string, boolean, name, value):
     pass
 
-git_get_cmd = git_cmd.subcommand('get', short='get git options')
+git_get_cmd = git_cmd.subcommand('get', short='* get git options')
 @git_get_cmd.run('name')
 def GitGet(name):
     pass
