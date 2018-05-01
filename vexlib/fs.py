@@ -8,7 +8,7 @@ import shutil
 
 # Filename patterns
 
-from errors import *
+from .errors import *
 
 def match_filename(path, name, ignore, include):
     if ignore:

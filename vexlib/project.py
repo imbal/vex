@@ -35,9 +35,9 @@ from datetime import datetime, timezone
 from uuid import uuid4
 from contextlib import contextmanager
 
-import rson
-from errors import *
-from fs import FileStore, BlobStore, file_diff, match_filename, list_dir
+from . import rson
+from .errors import *
+from .fs import FileStore, BlobStore, file_diff, match_filename, list_dir
 
 def UUID(): return str(uuid4())
 def NOW(): return datetime.now(timezone.utc)
