@@ -21,7 +21,7 @@ sys.path.append(os.path.split(os.path.abspath(__file__))[0])
 
 from vexlib.cli import Command, print_result
 from vexlib.project import Project
-from vexlib.errors import VexBug, VexNoProject, VexNoHistory, VexUnclean, VexError, VexArgument
+from vexlib.errors import VexBug, VexNoProject, VexNoHistory, VexUnclean, VexError, VexArgument, VexUnimplemented
 
 DEFAULT_CONFIG_DIR = ".vex"
 DEFAULT_INCLUDE = ["*"] 
@@ -121,6 +121,7 @@ def Call(mode, path, args, callback):
             raise
         result= "".join(traceback.format_exception(*sys.exc_info()))
         message = str(e)
+        if not message: message = e.__class__.__name__
         vex_error = isinstance(e, VexError)
 
     if path:
@@ -491,6 +492,11 @@ def Missing():
             yield "missing: {}".format(f)
 vex_cmd_commit = vex_cmd.group("commit")
 
+vex_id = vex_cmd_commit.subcommand('id', short='what was the last change')
+@vex_id.run()
+def Id():
+    raise VexUnimplemented()
+
 vex_commit = vex_cmd_commit.subcommand('commit', short="save the working copy and add an entry to the project changes")
 @vex_commit.run('''
     --add?          # Run `vex add` before commiting
@@ -713,13 +719,29 @@ def Replay(branch):
         p.replay_changes_from_branch(branch)
 
 vex_commit_squash = vex_commit.subcommand('squash', '* flatten commits into one')
+@vex_commit_squash.run()
+def Squash():
+    raise VexUnimplemented()
 
 vex_rollback = vex_cmd_commit.subcommand('rollback', '* take older version and re-commit it')
+@vex_rollback.run()
+def Rollback():
+    raise VexUnimplemented()
 
 vex_revert = vex_cmd_commit.subcommand('revert','* new commit without changes made in an old version')
+@vex_revert.run()
+def Revert():
+    raise VexUnimplemented()
 
 vex_rewind = vex_cmd_commit.subcommand('rewind','* rewind session to earlier change')
+@vex_rewind.run()
+def Rewind():
+    raise VexUnimplemented()
+
 vex_update = vex_cmd_commit.subcommand('update','* update branch to start from new upstream head')
+@vex_update.run()
+def Update():
+    raise VexUnimplemented()
 
 # Rollback, Revert, Squash, Update,
 
