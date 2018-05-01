@@ -29,7 +29,7 @@ Imagine `hg`, except:
 - Branches automatically stash and unstash.
 - Branches can have multiple heads `hg heads` is roughly `vex sessions`.
 - `log` always shows the changes in the order they were applied, not written
-- Instead of rewriting history, rebasing creates a new merge commit, and then replays the changes atop. 
+- `vex update` does a rebase without destroying history
 - Subtree checkouts, subversion-like fileprops.
 
 Imagine `svn`, except:
@@ -81,6 +81,44 @@ These commands are implemented, but are unfinished:
 | `vex switch`		| no subtree checkouts		| no subtree checkouts	|
 
 
+## `vex`
+
+Every vex command looks like this: 
+
+`vex <path:to:command> <--arguments> <--arguments=value> <value> ...`
+
+`vex help <command>` will show the manual, and `vex <command> --help` shows usage.
+
+Commands can be one or more names seperated by `:`, like `vex commit` or `vex undo:list`
+
+Argument can take the following form:
+
+- Boolean: `--name`, `--name=true`, `--name=false`
+
+- Single value `--name=...`
+
+- Multiple values `--name=... --name=...`
+
+- Positional `vex command <value>`
+
+- There are no single letter flags like, `-x`. 
+
+Aside: Single letter flags are the work of the devil, mystery meat configuration at best. `vex` strives to avoid needing them, exposing new subcommands instead.
+
+Use `complete -o nospace -C vex vex` to set up tab completion in bash. Command names (including subcommands), argument names, and some argument values can be tab completed.
+
+## Debugging
+
+If `vex` crashes with a known exception, it will not print the stack trace by default. Additionally, after a crash, `vex` will try to roll back any unfinished changes.
+
+use `vex debug <command>` to always print the stack trace, but this will leave the repo in a broken state. use `vex debug:rollback` to rollback manually.
+
+note: some things just break things, sorry.
+
+use `vex fake <command>` to not break things and see what would be changed*
+
+* sort-of, the stash might get changed but nothing else should
+* and some commands rely on previous changes soooo
 ## Workflows
 
 ### Creating a project
@@ -116,7 +154,7 @@ By default, `vex init name` creates a repository with a `/name` directory inside
 - `vex add`
 - `vex forget` 
 - `vex ignore` 
-- `vex include`
+{- `vex include`
 - `vex remove` 
 - `vex restore` 
 - `vex restore --pick` *
@@ -135,15 +173,15 @@ By default, `vex init name` creates a repository with a `/name` directory inside
 
 ### Saving changes
 
-- `vex prepare` / `vex save`
-- `vex prepare --watch` 
-- `vex commit` / 'vex commit:prepared'
-- `vex message`/ `vex message:edit`
-- `vex amend` *
+- `vex message` edit message
+- `vex message:get` print message
+- `vex commit <files>`
+- `vex commit:prepare` / 'vex commit:prepared'
+- `vex commit:amend` *
 - `vex commit --pick` * 
-- `vex rollback` *
-- `vex revert` *
-- `vex squash` * (flatten a branch)
+- `vex commit:rollback` *
+- `vex commit:revert` *
+- `vex commit:squash` * (flatten a branch)
 
 ### Working on a branch
 
@@ -170,15 +208,15 @@ By default, `vex init name` creates a repository with a `/name` directory inside
 
 When applying changes from another branch, vex creates new commits with new timestamps
 
-- `vex apply <branch>` *
-- `vex apply:append <branch>` *
+- `vex commit:apply <branch>` *
+- `vex commit:append <branch>` *
    create a new commit for each change in the other branch, as-is
-- `vex apply:replay <branch>` *
+- `vex commit:replay <branch>` *
    create a new commit for each change in the branch, reapplying the changes
-- `vex apply --squash`  
+- `vex commit:apply --squash` *
    create a new commit with the changes from the other branch
-- `vex apply --pick`  
-
+- `vex commit:apply --pick`  *
+{
 ### Rebuilding a branch with upsteam changes *
 
 - `vex update` * (rebase, --all affecting downstream branches too) 
@@ -214,7 +252,7 @@ When applying changes from another branch, vex creates new commits with new time
 
 ### Branch Settings *
 
-- `vex lock <branch>` * (sets a `/.vex/settings/policy` file inside a branch
+- `vex baranch:lock <branch>` * (sets a `/.vex/settings/policy` file inside a branch with a `{branch-name: policy } ` entry
 - `vex branch:set ..` *
 
 ### Subcommands *
@@ -222,11 +260,11 @@ When applying changes from another branch, vex creates new commits with new time
 Store some environment variables and entry points in a settings file, and run those commands
 
 - `vex env` *
-- `vex exec` *
-- `vex make` *
-- `vex test` *
+- `vex exec` / `vex run` *
+- `vex exec:make` *
+- `vex exec:test` *
 
-Files in `/.vex/settings/bin/x` can be run with `vex run x`
+The directory `/.vex/settings/bin/` inside working copy is tracked, and added to the `PATH`
 
 ### Scripting
 
@@ -239,4 +277,24 @@ Files in `/.vex/settings/bin/x` can be run with `vex run x`
 
 - `vex commit --major/--minor/--patch`  *
 - /.vex/setting/features *
+
+
+### Internals
+
+- a content addressable store 
+- a json-like format with tagged values
+- a transactional layer
+- the project layer
+- the cli layer
+
+a project has sessions, one of which is active, which points to a branch, both the session and branch point to commits, commits point to each other, directory root and changelog entries. 
+
+the file `vex` defines the commands and entry points, and sends `argv` etc to `cli.py`, which then calls into a `@cmd.on_call()` function, which runs, prints, and wraps error handling.
+
+inside `project.py`, there is a `Project` method with `commit` `add` esque methods, which inside open a transaction, make changes, then exit
+
+the transaction objects come in two flavours, physical and logical. the physical one stores entire snapshots of before, after, but the logical one stores the arguments to commands to run for undo/redo
+
+the reason is undoing/redoing something like changing a branch can't be done with concrete snapshots, and has to stash/unstash files so can't really revert the old / new sessions.
+
 
