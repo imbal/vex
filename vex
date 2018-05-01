@@ -606,15 +606,19 @@ vex_message_edit = vex_message.subcommand('edit', short='edit commit message')
 @vex_message.run('--editor')
 @vex_message_edit.run('--editor')
 def EditMessage(editor):
-    if editor == None:
-        editor = os.environ.get('EDITOR')
-    if editor == None:
-        editor = os.environ.get('VISUAL')
     p = open_project()
-    file = p.settings.filename('message')
-    if editor == None:
-        path = os.path.relpath(file)
-        raise VexArgument('with what editor?, you can open ./{} directly too'.format(path))
+    with p.lock('editor') as p:
+        if not editor and p.state.exists('editor'):
+            editor = p.state.get('editor')
+        if not editor:
+            editor = os.environ.get('EDITOR')
+        if not editor:
+            editor = os.environ.get('VISUAL')
+        file = p.settings.filename('message')
+        if not editor:
+            path = os.path.relpath(file)
+            raise VexArgument('with what editor?, you can open ./{} directly too'.format(path))
+        p.state.set('editor', editor)
     os.execvp(editor, [editor, file])
 
 
@@ -886,7 +890,7 @@ def Replay(branch):
             raise VexArgument('{} doesn\'t exist'.format(branch))
         p.replay_changes_from_branch(branch)
 
-# Squash, Update
+# Rollback, Revert, Squash, Update,
 
 vex_cmd_debug = vex_cmd.group('debug')
 vex_debug = vex_cmd_debug.subcommand('debug', 'internal: run a command without capturing exceptions, or repairing errors')
