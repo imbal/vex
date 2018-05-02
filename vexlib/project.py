@@ -1228,7 +1228,6 @@ class PhysicalTransaction:
         names = {}
         dirs = []
         changed = {}
-        # XXX: forget empty directories
         for filename in files:
             name = self.full_to_repo_path(filename)
             if name in session.files:
@@ -1274,11 +1273,14 @@ class PhysicalTransaction:
         old_files = self.build_files(active.prepare)
         new_files = {}
         changed = {}
-        for file in files:
-            path = self.full_to_repo_path(file)
+        paths = [self.full_to_repo_path(file) for file in files]
+        
+        while paths:
+            path = paths.pop()
             if path not in old_files:
                 continue
             entry = old_files[path]
+            file = self.repo_to_full_path(path)
             if entry.kind == 'file': 
                 if os.path.exists(file):
                     if not os.path.isfile(file):
@@ -1290,6 +1292,12 @@ class PhysicalTransaction:
                     self.old_working[path] = None
                     self.new_working[path] = old_files[path].addr
             elif entry.kind =='dir':
+                p = "{}/".format(path)
+                for name in old_files:
+                    print(p, name)
+                    if name.startswith(p):
+                        paths.append(name)
+
                 if os.path.exists(file):
                     continue
                 else:
