@@ -9,6 +9,7 @@ vex supports bash completion: run `complete -o nospace -C vex vex`
 """
 import os
 import sys
+import types
 import os.path
 import traceback
 import subprocess
@@ -19,7 +20,7 @@ from contextlib import contextmanager
 sys.path.append(os.path.split(os.path.abspath(__file__))[0])
 
 
-from vexlib.cli import Command, print_result
+from vexlib.cli import Command
 from vexlib.project import Project
 from vexlib.errors import VexBug, VexNoProject, VexNoHistory, VexUnclean, VexError, VexArgument, VexUnimplemented
 
@@ -112,8 +113,25 @@ def Call(mode, path, args, callback):
         fake = True
     try:
         result = callback()
-        if result is not None:
-            print_result(result)
+        if sys.stderr.isatty() and sys.stdout.isatty():
+            env = {}
+            env.update(os.environ)
+            env["LESS"] = "FRX"
+            env["LV"] = "-c"
+            p = subprocess.Popen('less', env=env, stdin=subprocess.PIPE, encoding='utf8')
+
+            if isinstance(result, types.GeneratorType):
+                for line in result:
+                    print(line, file=p.stdin)
+            else:
+                print(result, file=p.stdin)
+            p.stdin.close()
+            p.wait()
+        elif isinstance(result, types.GeneratorType):
+            for line in result:
+                print(line)
+        else:
+            print(result)
         return 0
 
     except Exception as e:

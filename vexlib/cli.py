@@ -841,17 +841,6 @@ class Command:
         )
             
 
-def print_result(result):
-    if not isinstance(result, types.GeneratorType):
-        result = (result,)
-    for line in result:
-        if isinstance(line, (bytes, bytearray)):
-            sys.stdout.buffer.write(line)
-        elif line is not None:
-            print(line)
-    sys.stdout.flush()
-
-
 def main(root, argv, environ, adverbs):
     obj = root.render()
 
@@ -910,38 +899,41 @@ def main(root, argv, environ, adverbs):
 
 
     try:
-        if action.mode == "version":
+        if action.mode == "error":
+            print("Error: {}".format(", ".join(action.errors)))
+            print(obj.help(action.path, usage=True))
+            return -1
+        elif action.mode == "version":
             result = obj.version()
-            print_result(result)
-            return 0
+            callback = lambda:result
         elif action.mode == "usage":
             result = obj.help(action.path, usage=True)
-            print_result(result)
-            return 0
+            callback = lambda:result
         elif action.mode == "help":
             result = obj.help(action.path, usage=False)
-            print_result(result)
-            return 0
-        elif action.mode == "error":
-            print("Error: {}".format(", ".join(action.errors)))
-            print_result(obj.help(action.path, usage=True))
-            return -1
+            callback = lambda:result
         elif action.mode == "call" or action.mode in adverbs:
             callback =  root.bind(action.path, action.argv)
+        else:
+            raise Error('what')
 
-            if not root.call_fn:
-                try:
-                    result = callback()
-                    print_result(result)
-                    return 0
-                except Exception as e:
-                    if action.mode == "debug":
-                        raise
-                    result= "".join(traceback.format_exception(*sys.exc_info()))
-                    print_result(result)
-                    return -1
-            else:
-                return root.call_fn(action.mode, action.path, action.argv, callback)
+        if not root.call_fn:
+            try:
+                result = callback()
+                if isinstance(result, types.GeneratorType):
+                    for line in result:
+                        print(line)
+                else:
+                    print(result)
+                return 0
+            except Exception as e:
+                if action.mode == "debug":
+                    raise
+                result= "".join(traceback.format_exception(*sys.exc_info()))
+                print(result)
+                return -1
+        else:
+            return root.call_fn(action.mode, action.path, action.argv, callback)
     except Error as e:
         print()
         print(e.value)
