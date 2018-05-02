@@ -122,15 +122,17 @@ def Call(mode, path, args, callback):
 
             if isinstance(result, types.GeneratorType):
                 for line in result:
-                    print(line, file=p.stdin)
-            else:
+                    if line is not None:
+                        print(line, file=p.stdin)
+            elif result is not None:
                 print(result, file=p.stdin)
             p.stdin.close()
             p.wait()
         elif isinstance(result, types.GeneratorType):
             for line in result:
-                print(line)
-        else:
+                if line is not None:
+                    print(line)
+        elif result is not None:
             print(result)
         return 0
 
@@ -854,6 +856,7 @@ def SaveAsBranch(name):
         if p.names.get(name):
             raise VexArgument('{} exists'.format(name))
         p.save_as(name)
+        return name
 
 vex_rename = vex_branch.subcommand('rename', short="rename current branch")
 @vex_rename.run('name:branch')
@@ -911,9 +914,11 @@ def Switch(prefix):
 
     """
     p = open_project()
+    if os.getcwd() != p.working_dir:
+        raise VexArgument("it's best if you don't call this while in a subdirectory")
     if prefix:
         with p.lock('switch') as p:
-            prefix = os.path.join(p.prefix(), prefix)
+            prefix = os.path.normpath(os.path.join(p.prefix(), prefix))
             p.switch(prefix)
     else:
         yield p.prefix()
@@ -1000,18 +1005,6 @@ def Debug():
     """
     yield ('Use vex debug <cmd> to run <cmd>, or use `vex debug:status`')
 
-vex_stash = vex_debug.subcommand('stash', short="internal: save progress without making a commit or checkpoint to undo")
-@vex_stash.run('--watch')
-def Stash(watch):
-    p = open_project()
-    with p.lock('stash') as p:
-        if not watch:
-            p.stash()
-        else:
-            with watcher() as files:
-                for file in files():
-                    p.stash(files=[file])
-                    yield os.path.relpath(file)
 
 debug_status = vex_debug.subcommand('status')
 @debug_status.run()
