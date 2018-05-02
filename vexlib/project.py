@@ -1252,13 +1252,14 @@ class PhysicalTransaction:
     
     def remove_files_from_active(self, files):
         changed = self.forget_files_from_active(files)
-        for path, file in changed.items():
-            # XXX: dirs
-            if not os.path.isfile(file):
-                raise VexUnimplemented('crap')
-            if os.path.exists(file) and os.path.isfile(file):
+        for path in sorted(changed, reverse=True, key= lambda x:x.split("/")):
+            file = changed[path]
+            if os.path.isfile(file):
                 addr = self.project.put_scratch_file(file)
                 self.old_working[path] = addr
+                self.new_working[path] = None
+            elif os.path.isdir(file):
+                self.old_working[path] = "dir"
                 self.new_working[path] = None
         return changed
 
@@ -1272,20 +1273,28 @@ class PhysicalTransaction:
             path = self.full_to_repo_path(file)
             if path not in old_files:
                 continue
-            changed[path] = file
-            if os.path.exists(file):
-                if not os.path.isfile(file):
-                    raise VexUnimplemented('crap')
-                addr = self.project.put_scratch_file(file)
-                self.old_working[path] = addr
-                self.new_working[path] = old_files[path].addr
-            else:
-                self.old_working[path] = None
-                self.new_working[path] = old_files[path].addr
-            print(self.old_working, self.new_working)
+            entry = old_files[path]
+            if entry.kind == 'file' or entry.kind =='stash': 
+                if os.path.exists(file):
+                    if not os.path.isfile(file):
+                        continue
+                    addr = self.project.put_scratch_file(file)
+                    self.old_working[path] = addr
+                    self.new_working[path] = old_files[path].addr
+                else:
+                    self.old_working[path] = None
+                    self.new_working[path] = old_files[path].addr
+            elif entry.kind =='dir':
+                if os.path.exists(file):
+                    continue
+                else:
+                    self.old_working[path] = None
+                    self.new_working[path] = "dir"
 
-            new_files[path] = old_files[path]
+            new_files[path] = entry
             new_files[path].working = True
+            changed[path] = file
+
         self.update_active_files(new_files, ())
         return changed
 
@@ -1746,7 +1755,9 @@ class Project:
         if not changes:
             return
         prefix = self.prefix()
-        for name, addr in changes[kind].items():
+        dirs = set()
+        for name in sorted(changes[kind], key=lambda x: x.split('/')):
+            addr = changes[kind][name]
             path = self.repo_to_full_path(prefix, name)
             if kind == 'new':
                 old = changes['old'][name]
@@ -1754,19 +1765,26 @@ class Project:
                 old = changes['new'][name]
             else:
                 raise VexBug('nope')
-            ### XXX check old value ...?
             if self.fake:
                 sys.stderr.write('would replace {} with {}\n'.format(path, addr))
                 continue
 
             if old is None and not os.path.exists(path):
-                self.repo.copy_from_any(addr, path)
-            elif old and os.path.exists(path) and self.addr_for_file(path) == old:
+                if addr == "dir":
+                    os.mkdir(path)
+                else:
+                    self.repo.copy_from_any(addr, path)
+            elif old and os.path.isfile(path) and self.addr_for_file(path) == old:
                 os.remove(path)
                 if addr:
                     self.repo.copy_from_any(addr, path)
+            elif old == "dir" and os.path.isdir(path):
+                if addr is None:
+                    dirs.add(path)
             else:
                 sys.stderr.write("ERR: Skipping {}\n".format(path))
+        for name in sorted(dirs, reverse=True, key=lambda x: x.split('/')):
+            os.rmdir(name)
 
 
     # Takes Action.blobs and copies them out of the scratch directory
@@ -1902,7 +1920,6 @@ class Project:
                 entry.size = None
                 continue
             else:
-                entry.working = True
                 entry.mtime = None
                 entry.size = None
                 entry.mode = None
@@ -1932,6 +1949,7 @@ class Project:
             else:
                 raise VexBug('kind')
             # if fail to extract, change to 'missing'
+            entry.working = True
 
         session.prefix = prefix
         self.sessions.set(session.uuid, session)
