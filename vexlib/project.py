@@ -1931,6 +1931,8 @@ class Project:
                 pass
             else:
                 raise VexBug('kind')
+            # if fail to extract, change to 'missing'
+
         session.prefix = prefix
         self.sessions.set(session.uuid, session)
         self.state.set('prefix', prefix)
@@ -1988,6 +1990,7 @@ class Project:
             raise VexArgument('bad prefix')
         with self.do_switch('switch') as txn:
             txn.switch_prefix(new_prefix)
+        # XXX: check switch succeeded
 
     def init(self, prefix, include, ignore):
         if not self._lock:
