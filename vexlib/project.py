@@ -308,7 +308,7 @@ class objects:
 
     @codec.register
     class Tracked:
-        Kinds = set(('dir', 'file', 'ignore', 'stash'))
+        Kinds = set(('dir', 'file', 'ignore'))
         States = set(('tracked', 'replaced', 'added', 'modified', 'deleted'))
         Unchanged = set(('tracked'))
         Changed = set(('added', 'modified', 'deleted', 'replaced'))
@@ -928,19 +928,6 @@ class PhysicalTransaction:
                     pass
                 else:
                     raise VexBug('state {}'.format(entry.state))
-            elif entry.kind == 'stash':
-                if entry.state == "added":
-                    addr = entry.stash
-                    out[repo_name]=objects.AddFile(addr, properties=entry.properties)
-                elif entry.state == "replaced":
-                    addr = entry.stash
-                    out[repo_name]=objects.NewFile(addr, properties=entry.properties)
-                elif entry.state == "modified":
-                    addr = entry.stash
-                    if addr != entry.addr:
-                        out[repo_name]=objects.ChangeFile(addr, properties=entry.properties)
-                else:
-                    raise VexBug('state {}'.format(entry.state))
             elif entry.kind == 'ignore':
                 pass
             else:
@@ -1001,14 +988,17 @@ class PhysicalTransaction:
                 if not isinstance(change, (objects.DeleteFile, objects.DeleteDir)):
                     raise VexBug('sync')
                 
-            elif entry.kind == 'file' and entry.working:
-                filename = self.repo_to_full_path(name)
-                if os.path.isfile(filename) and isinstance(change, (objects.AddFile, objects.ChangeFile, objects.NewFile)):
-                    addr = self.put_file(filename)
-                    if addr != change.addr:
-                        raise VexCorrupt('Sync')
-            elif entry.kind == 'stash':
-                self.new_files.add(entry.stash)
+            elif entry.kind == 'file':
+                if entry.working:
+                    filename = self.repo_to_full_path(name)
+                    if os.path.isfile(filename) and isinstance(change, (objects.AddFile, objects.ChangeFile, objects.NewFile)):
+                        addr = self.put_file(filename)
+                        if addr != change.addr:
+                            raise VexCorrupt('Sync')
+                elif entry.stash:
+                    self.new_files.add(entry.stash)
+                else:
+                    raise VexBug('sync')
 
 
     def new_root_with_changeset(self, old, changeset):
@@ -1274,7 +1264,7 @@ class PhysicalTransaction:
             if path not in old_files:
                 continue
             entry = old_files[path]
-            if entry.kind == 'file' or entry.kind =='stash': 
+            if entry.kind == 'file': 
                 if os.path.exists(file):
                     if not os.path.isfile(file):
                         continue
@@ -1290,6 +1280,10 @@ class PhysicalTransaction:
                 else:
                     self.old_working[path] = None
                     self.new_working[path] = "dir"
+            elif entry.kind == "ignore":
+                pass
+            else:
+                raise VexBug('kind')
 
             new_files[path] = entry
             new_files[path].working = True
@@ -1839,32 +1833,11 @@ class Project:
             return
 
         active = self.sessions.get(active_session)
-        active = self.stash_session(active)
+        self.clear_session(active_prefix, active)
         # check after stash, as it might be same
         new = self.sessions.get(new_session)
-        self.clear_session(active_prefix, active)
         self.restore_session(new_prefix, new)
 
-
-    def stash_session(self, session, files=None):
-        if not self._lock:
-            raise VexBug('unlocked')
-        files = session.files if files is None else files
-        for name in files:
-            entry = session.files[name]
-            if name in ("/", self.VEX): continue
-            new_addr = None
-            if entry.working is None:
-                continue
-            path = self.repo_to_full_path(self.prefix(), name)
-            entry.refresh(path, self.addr_for_file)
-
-            if entry.kind == 'file' and entry.state in ('added', 'replaced', 'modified'):
-                entry.stash = self.put_scratch_file(path, addr=new_addr)
-                entry.kind = 'stash'
-
-        self.sessions.set(session.uuid, session)
-        return session
 
     def clear_session(self, prefix, session):
         if not self._lock:
@@ -1873,24 +1846,38 @@ class Project:
             raise VexBug('no')
         dirs = set()
         for name, entry in session.files.items():
-            if entry.kind == "ignore":
-                continue
-            if not entry.working:
-                continue
+            if not entry.working:       continue
+            if entry.kind == 'ignore':  continue
             path = self.repo_to_full_path(prefix, name)
-            if entry.kind == "file" or entry.kind == "stash":
+            entry.refresh(path, self.addr_for_file)
+
+
+            if entry.kind in ('file',):
                 if os.path.commonpath((path, self.working_dir)) != self.working_dir:
                     raise VexBug('file outside of working dir inside tracked')
+                if entry.kind == 'deleted':
+                    continue
                 if not os.path.isfile(path):
                     raise VexBug('sync')
+                if entry.state in ('added', 'replaced', 'modified'):
+                    entry.stash = self.put_scratch_file(path)
+                elif entry.state in ('tracked'):
+                    pass
+                else:
+                    raise VexBug('state')
+
                 os.remove(path)
             elif entry.kind == "dir":
                 if os.path.commonpath((path, self.working_dir)) != self.working_dir:
                     raise VexBug('file outside of working dir inside tracked')
-                if name not in ("/", self.VEX, prefix):
+                if entry.kind == 'deleted':
+                    continue
+                if not os.path.isdir(path):
+                    raise VexBug('sync')
+                if name in ("/", self.VEX): 
+                    continue
+                if entry.state in ('added', 'replaced', 'modified', 'tracked'):
                     dirs.add(path)
-            elif entry.kind == "stash":
-                pass
             else:
                 raise VexBug('no')
             entry.working = None
@@ -1907,6 +1894,7 @@ class Project:
                 os.rmdir(dir)
         self.state.set('prefix', None)
         self.state.set('active', None)
+        self.sessions.set(session.uuid, session)
 
     def restore_session(self, prefix, session):
         if not self._lock:
@@ -1929,7 +1917,18 @@ class Project:
 
             path = self.repo_to_full_path(prefix, name)
 
-            if entry.kind =='dir':
+            if entry.kind == "ignore":
+                pass
+            elif entry.state == "deleted":
+                pass
+            elif entry.stash:
+                if entry.kind != 'file': raise VexBug('state')
+                self.repo.copy_from_scratch(entry.stash, path)
+                entry.stash = None
+                if entry.properties.get('vex:executable'):
+                    stat = os.stat(path)
+                    os.chmod(path, stat.st_mode | 64)
+            elif entry.kind =='dir':
                 if name not in ('/', self.VEX, prefix):
                     os.makedirs(path, exist_ok=True)
             elif entry.kind =="file":
@@ -1937,15 +1936,6 @@ class Project:
                 if entry.properties.get('vex:executable'):
                     stat = os.stat(path)
                     os.chmod(path, stat.st_mode | 64)
-            elif entry.kind == "stash":
-                self.repo.copy_from_scratch(entry.stash, path)
-                entry.kind = "file"
-                entry.stash = None
-                if entry.properties.get('vex:executable'):
-                    stat = os.stat(path)
-                    os.chmod(path, stat.st_mode | 64)
-            elif entry.kind == "ignore":
-                pass
             else:
                 raise VexBug('kind')
             # if fail to extract, change to 'missing'
@@ -2378,10 +2368,3 @@ class Project:
 
     def replay_changes_from_branch(self, name):
         raise VexUnimplemented('no')
-    # debug:stash
-    def stash(self, files=None):
-        files = self.check_files(files) if files is not None else None
-        with self.do_without_undo('debug:stash') as txn:
-            files = [txn.full_to_repo_path(filename) for filename in files] if files else None
-            self.stash_session(txn.active(), files)
-
