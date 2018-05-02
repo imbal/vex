@@ -265,7 +265,7 @@ class objects:
 
     @codec.register
     class Switch:
-        def __init__(self, time, command, prefix, active, session_states, branch_states, names):
+        def __init__(self, time, command, prefix, active, session_states, branch_states, names, states):
             self.time = time
             self.command = command
             self.prefix = prefix
@@ -273,6 +273,7 @@ class objects:
             self.session_states = session_states
             self.branch_states = branch_states 
             self.names = names
+            self.states = states
 
     # Working copy state
 
@@ -295,7 +296,7 @@ class objects:
     @codec.register
     class Session:
         States = set(('attached', 'detached', 'manual', 'update')) 
-        def __init__(self,uuid, branch, state, prefix, prepare, commit, files):
+        def __init__(self,uuid, branch, state, prefix, prepare, commit, files, message):
             if not (uuid and branch and prepare and commit): raise Exception('no')
             if state not in self.States: raise Exception('no')
             self.uuid = uuid
@@ -305,6 +306,7 @@ class objects:
             self.commit = commit
             self.files = files
             self.state = state
+            self.message = message
 
     @codec.register
     class Tracked:
@@ -836,7 +838,7 @@ class PhysicalTransaction:
         session_uuid = UUID()
         b = self.get_branch(branch_uuid)
         files = self.build_files(commit)
-        session = objects.Session(session_uuid, branch_uuid, state, b.prefix, commit, commit, files)
+        session = objects.Session(session_uuid, branch_uuid, state, b.prefix, commit, commit, files, message="")
         b.sessions.append(session.uuid)
         self.put_branch(b)
         self.put_session(session)
@@ -1381,11 +1383,26 @@ class LogicalTransaction:
                 self.old_names[name] = None
         self.new_names[name] = branch
 
+    def set_state(self, name, value):
+        if name not in self.old_states:
+            if self.project.state.exists(name):
+                self.old_states[name] = self.project.state.get(name)
+            else:
+                self.old_states[name] = None
+        self.new_states[name] = value
+
+    def get_state(self, name):
+        if name in self.new_states:
+            return self.new_states[name]
+
+        return self.project.state.get(name)
+
     def action(self):
         branches = dict(old=self.old_branch_states, new=self.new_branch_states)
         sessions = dict(old=self.old_session_states, new=self.new_session_states)
         names = dict(old=self.old_names, new=self.new_names)
-        return objects.Switch(self.now, self.command, self.prefix, self.active_session, sessions, branches, names)
+        states = dict(old=self.old_states, new=self.new_states)
+        return objects.Switch(self.now, self.command, self.prefix, self.active_session, sessions, branches, names, states)
 
 class Repo:
     def __init__(self, config_dir):
@@ -1667,7 +1684,7 @@ class Project:
                 return
             if isinstance(action, objects.Switch):
                 self.apply_switch('new', action.prefix, action.active)
-                self.apply_logical_changes('new', action.session_states, action.branch_states, action.names)
+                self.apply_logical_changes('new', action.session_states, action.branch_states, action.names, action.states)
             else:
                 raise VexBug('action')
 
@@ -1680,7 +1697,7 @@ class Project:
                 self.apply_working_changes('old', action.working)
             elif isinstance(action, objects.Switch):
                 self.apply_switch('old', action.prefix, action.active)
-                self.apply_logical_changes('old', action.session_states, action.branch_states, action.names)
+                self.apply_logical_changes('old', action.session_states, action.branch_states, action.names, action.states)
             else:
                 raise VexBug('action')
             return action
@@ -1697,7 +1714,7 @@ class Project:
                 self.apply_working_changes('new', action.working)
             elif isinstance(action, objects.Switch):
                 self.apply_switch('new', action.prefix, action.active)
-                self.apply_logical_changes('new', action.session_states, action.branch_states, action.names)
+                self.apply_logical_changes('new', action.session_states, action.branch_states, action.names, action.states)
             else:
                 raise VexBug('action')
             return action
@@ -1706,7 +1723,7 @@ class Project:
         return self.history.redo_choices()
 
     # Take Action.changes and applies them to project
-    def apply_logical_changes(self, kind, session_states, branch_states, names):
+    def apply_logical_changes(self, kind, session_states, branch_states, names, states):
         if not self._lock:
             raise VexBug('unlocked')
         for name,value in session_states[kind].items():
@@ -1729,6 +1746,11 @@ class Project:
                 sys.stderr.write('would set branch name {} to {}\n'.format(name, value))
             else:
                 self.names.set(name, value)
+        for name,value in states[kind].items():
+            if self.fake:
+                sys.stderr.write('would set state {} to {}\n'.format(name, value))
+            else:
+                self.state.set(name, value)
 
     # Take Action.changes and applies them to project
     def apply_physical_changes(self, kind, changes):
@@ -1918,6 +1940,8 @@ class Project:
                 os.rmdir(dir)
         self.state.set('prefix', None)
         self.state.set('active', None)
+        session.message = self.state.get('message')
+        self.state.set('message', None)
         self.sessions.set(session.uuid, session)
 
     def restore_session(self, prefix, session):
@@ -1969,6 +1993,7 @@ class Project:
         self.sessions.set(session.uuid, session)
         self.state.set('prefix', prefix)
         self.state.set('active', session.uuid)
+        self.state.set('message', session.message)
 
 
     ###  Commands
@@ -2079,7 +2104,7 @@ class Project:
                 else:
                     entry.working = None
 
-            session = objects.Session(session_uuid, branch_uuid, 'attached', prefix, commit_uuid, commit_uuid, files) 
+            session = objects.Session(session_uuid, branch_uuid, 'attached', prefix, commit_uuid, commit_uuid, files, message="") 
             txn.put_session(session)
 
             txn.set_state("author", author_uuid)
