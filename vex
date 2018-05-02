@@ -640,7 +640,7 @@ def EditMessage(editor):
             editor = os.environ.get('EDITOR')
         if not editor:
             editor = os.environ.get('VISUAL')
-        file = p.settings.filename('message')
+        file = p.state.filename('message')
         if not editor:
             path = os.path.relpath(file)
             raise VexArgument('with what editor?, you can open ./{} directly too'.format(path))
@@ -652,21 +652,21 @@ vex_message_get = vex_message.subcommand('get', 'get commit message')
 @vex_message_get.run('')
 def GetMessage():
     p = open_project()
-    if p.settings.exists('message'):
-        yield p.settings.get('message')
+    if p.state.exists('message'):
+        yield p.state.get('message')
 
 vex_message_filename = vex_message.subcommand('filename', 'commit message filename', aliases=['path'])
 @vex_message_filename.run('')
 def MessageFilename():
     p = open_project()
-    yield p.settings.filename('message')
+    yield p.state.filename('message')
 
 vex_message_set = vex_message.subcommand('set', 'set commit message')
 @vex_message_set.run('message')
 def SetMessage(message):
     p = open_project()
     with p.lock('message:set') as p:
-        p.settings.set('message', message)
+        p.state.set('message', message)
         yield "set"
 
 vex_template = vex_message.subcommand('template', short="edit commit template")
@@ -1122,7 +1122,7 @@ def DebugTest():
                 raise Exception('Error')
             print("vex {}:".format(" ".join(cmd[1:])))
             for line in p.stdout.splitlines():
-                print(">  ", line.decode('utf-8'))
+                result(">  ", line.decode('utf-8'))
 
     vex = Vex(os.path.abspath(__file__))
 

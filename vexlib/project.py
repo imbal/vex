@@ -702,6 +702,8 @@ class PhysicalTransaction:
         self.new_files = set()
         self.new_working = {}
         self.old_working = {}
+        self.old_states = {}
+        self.new_states = {}
 
     def active(self):
         return self.get_session(self.active_uuid)
@@ -794,7 +796,18 @@ class PhysicalTransaction:
                 self.old_names[name] = None
         self.new_names[name] = branch
 
+    def set_state(self, name, value):
+        if name not in self.old_states:
+            if self.project.state.exists(name):
+                self.old_states[name] = self.project.state.get(name)
+            else:
+                self.old_states[name] = None
+        self.new_states[name] = value
+
     def get_state(self, name):
+        if name in self.new_states:
+            return self.new_states[name]
+
         return self.project.state.get(name)
 
     def set_setting(self, name, value):
@@ -1293,13 +1306,14 @@ class PhysicalTransaction:
         return changed
 
     def action(self):
-        if self.new_branches or self.new_names or self.new_sessions or self.new_settings:
+        if self.new_branches or self.new_names or self.new_sessions or self.new_settings or self.new_states:
             branches = dict(old=self.old_branches, new=self.new_branches)
             names = dict(old=self.old_names, new=self.new_names)
             sessions = dict(old=self.old_sessions, new=self.new_sessions)
             settings = dict(old=self.old_settings, new=self.new_settings)
+            states = dict(old=self.old_states, new=self.new_states)
 
-            changes = dict(branches=branches,names=names, sessions=sessions, settings=settings)
+            changes = dict(branches=branches,names=names, sessions=sessions, settings=settings, states=states)
         else:
             changes = {}
 
@@ -1325,6 +1339,8 @@ class LogicalTransaction:
         self.new_session_states = {}
         self.old_names = {}
         self.new_names = {}
+        self.old_states = {}
+        self.new_states = {}
         self.now = NOW()
 
     def switch_prefix(self, new_prefix):
@@ -1452,12 +1468,12 @@ class Project:
         self.branches =   FileStore(os.path.join(config_dir, 'branches'), codec)
         self.names =      FileStore(os.path.join(config_dir, 'branches', 'names'), codec)
         self.sessions =   FileStore(os.path.join(config_dir, 'branches', 'sessions'), codec)
-        self.state =      FileStore(os.path.join(config_dir, 'state'), codec)
+        self.state =      FileStore(os.path.join(config_dir, 'state'), codec, rawkeys=['message'])
         self.history =   History(os.path.join(config_dir, 'history'))
         self.lockfile =  LockFile(os.path.join(config_dir, 'lock'))
         self._lock = None
 
-        self.settings =  FileStore(os.path.join(config_dir, 'settings'), codec, rawkeys=['message', 'template'])
+        self.settings =  FileStore(os.path.join(config_dir, 'settings'), codec, rawkeys=['template'])
 
     # methods, look, don't ask, they're just plain methods, ok?
 
@@ -1744,6 +1760,14 @@ class Project:
                         sys.stderr.write('would set {} setting to {}\n'.format(name, value))
                     else:
                         self.settings.set(name, value)
+            elif key == 'states':
+                for name,value in changes['states'][kind].items():
+                    if self.fake:
+                        sys.stderr.write('would set {} state to {}\n'.format(name, value))
+                    else:
+                        self.state.set(name, value)
+            else:
+                raise VexBug(key)
 
     def apply_working_changes(self, kind, changes):
         if not changes:
@@ -2011,8 +2035,8 @@ class Project:
             # so addr for file is easy, ugh
             txn.set_setting('ignore', ignore)
             txn.set_setting('include', include)
-            txn.set_setting('message', '')
             txn.set_setting('template', '')
+            txn.set_state('message', '')
 
         with self.do('init') as txn:
             author_uuid = UUID() 
@@ -2032,7 +2056,6 @@ class Project:
                     os.path.join(self.VEX, 'ignore'): [ objects.AddFile(addr=ignore_addr, properties={}) ],
                     os.path.join(self.VEX, 'include'): [ objects.AddFile(addr=include_addr, properties={}) ],
                     os.path.join(self.VEX, 'template'): [ objects.AddFile(addr=template_addr, properties={}) ],
-                    os.path.join(self.VEX, 'message'): [ objects.IgnorePath() ],
             }
             if prefix != '/':
                 changes[prefix] = [ objects.AddDir(properties={})]
@@ -2059,10 +2082,9 @@ class Project:
             session = objects.Session(session_uuid, branch_uuid, 'attached', prefix, commit_uuid, commit_uuid, files) 
             txn.put_session(session)
 
-
-        self.state.set("author", author_uuid)
-        self.state.set("active", session_uuid)
-        self.state.set("prefix", prefix)
+            txn.set_state("author", author_uuid)
+            txn.set_state("active", session_uuid)
+            txn.set_state("prefix", prefix)
 
     def active_diff_files(self, files):
         files = self.check_files(files) if files else None
@@ -2114,7 +2136,7 @@ class Project:
             txn.update_active_from_changeset(changeset)
 
             changeset.author = txn.get_state('author')
-            changeset.message = txn.get_setting('message')
+            changeset.message = txn.get_state('message')
 
             changeset_uuid = txn.put_manifest(changeset)
             ancestors = {}
@@ -2142,7 +2164,7 @@ class Project:
             txn.update_active_from_changeset(changeset)
 
             changeset.author = txn.get_state('author')
-            changeset.message = txn.get_setting('message')
+            changeset.message = txn.get_state('message')
 
             changeset_uuid = txn.put_manifest(changeset)
 
@@ -2150,7 +2172,7 @@ class Project:
             commit_uuid = txn.put_commit(commit)
 
             txn.set_active_commit(commit_uuid)
-            txn.set_setting('message', txn.get_setting('template'))
+            txn.set_state('message', txn.get_setting('template'))
 
             return changeset
     
@@ -2183,14 +2205,14 @@ class Project:
             txn.update_active_from_changeset(changeset)
 
             changeset.author = txn.get_state('author')
-            changeset.message = txn.get_setting('message')
+            changeset.message = txn.get_state('message')
             changeset_uuid = txn.put_manifest(changeset)
 
             commit = objects.Commit(kind, timestamp=txn.now, previous=old_uuid, ancestors=dict(prepared=session.prepare), root=root_uuid, changeset=changeset_uuid)
             commit_uuid = txn.put_commit(commit)
 
             txn.set_active_commit(commit_uuid)
-            txn.set_setting('message', txn.get_setting('template'))
+            txn.set_state('message', txn.get_setting('template'))
 
             return changeset
 
