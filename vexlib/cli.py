@@ -297,12 +297,24 @@ def parse_argspec(argspec):
             descriptions = descriptions,
     )
 
+def parse_err(error, pos, argv):
+    message = ["{}, at argument #{}:".format(error, pos)]
+    if pos-3 >0:
+            message.append(" ... {} args before".format(pos-3))
+    for i, a in enumerate(argv[pos-3:pos+3],pos-3):
+        if i == pos:
+            message.append(">>> {}".format(a))
+        else:
+            message.append("  > {}".format(a))
+    if pos+3 < len(argv)-1:
+            message.append(" ... {} args after".format(pos-3))
+    message = "\n".join(message)
+    return BadArg(message)
 
 def parse_args(argspec, argv, environ):
     options = []
     flags = {}
     args = {}
-    file_handles = {}
 
     for pos, arg in enumerate(argv):
         if arg.startswith('--'):
@@ -312,9 +324,9 @@ def parse_args(argspec, argv, environ):
                 key, value = arg[2:], None
             if key not in flags:
                 flags[key] = []
-            flags[key].append(value)
+            flags[key].append((pos,value))
         else:
-            options.append(arg)
+            options.append((pos,arg))
 
     for name in argspec.switches:
         args[name] = False
@@ -324,14 +336,16 @@ def parse_args(argspec, argv, environ):
         values = flags.pop(name)
 
         if not values: 
-            raise BadArg("value given for switch flag {}".format(name))
+            raise parse_err("value given for switch flag {}".format(name), pos, argv)
         if len(values) > 1:
-            raise BadArg("duplicate switch flag for: {}".format(name, ", ".join(repr(v) for v in values)))
+            raise parse_err("duplicate switch flag for: {}".format(name, ", ".join(repr(v) for v in values)), pos, argv)
 
-        if values[0] is None:
+        pos, value = values[0]
+
+        if value is None:
             args[name] = True
         else:
-            args[name] = try_parse(name, values[0], "boolean")
+            args[name] = try_parse(name, value, "boolean", pos, argv)
 
     for name in argspec.flags:
         args[name] = None
@@ -340,11 +354,12 @@ def parse_args(argspec, argv, environ):
 
         values = flags.pop(name)
         if not values or values[0] is None:
-            raise BadArg("missing value for option flag {}".format(name))
+            raise parse_err("missing value for option flag {}".format(name), pos, argv)
         if len(values) > 1:
-            raise BadArg("duplicate option flag for: {}".format(name, ", ".join(repr(v) for v in values)))
+            raise parse_err("duplicate option flag for: {}".format(name, ", ".join(repr(v) for v in values)), pos, argv)
 
-        args[name] = try_parse(name, value, argspec.argtypes.get(name))
+        pos, value = values[0]
+        args[name] = try_parse(name, value, argspec.argtypes.get(name), pos, argv)
 
     for name in argspec.lists:
         args[name] = []
@@ -353,10 +368,10 @@ def parse_args(argspec, argv, environ):
 
         values = flags.pop(name)
         if not values or None in values:
-            raise BadArg("missing value for list flag {}".format(name))
+            raise parse_err("missing value for list flag {}".format(name), pos, argv)
 
-        for value in values:
-            args[name].append(try_parse(name, value, argspec.argtypes.get(name)))
+        for pos, value in values:
+            args[name].append(try_parse(name, value, argspec.argtypes.get(name), pos, argv))
 
     named_args = False
     if flags:
@@ -375,73 +390,78 @@ def parse_args(argspec, argv, environ):
         for name in argspec.positional:
             args[name] = None
             if name not in flags:
-                raise BadArg("missing named option: {}".format(name))
+                raise parse_err("missing named option: {}".format(name), pos, argv)
 
             values = flags.pop(name)
             if not values or values[0] is None:
-                raise BadArg("missing value for named option {}".format(name))
+                raise parse_err("missing value for named option {}".format(name), pos, argv)
             if len(values) > 1:
-                raise BadArg("duplicate named option for: {}".format(name, ", ".join(repr(v) for v in values)))
+                raise parse_err("duplicate named option for: {}".format(name, ", ".join(repr(v) for v in values)), pos, argv)
 
-            args[name] = try_parse(name, value, argspec.argtypes.get(name))
+            pos, value = values[0]
+            args[name] = try_parse(name, value, argspec.argtypes.get(name), pos, argv)
 
         for name in argspec.optional:
             args[name] = None
             if name not in flags:
                 continue
 
-            values = flags.pop(name)
+            pos, values = flags.pop(name)
             if not values or values[0] is None:
-                raise BadArg("missing value for named option {}".format(name))
+                raise parse_err("missing value for named option {}".format(name), pos, argv)
             if len(values) > 1:
-                raise BadArg("duplicate named option for: {}".format(name, ", ".join(repr(v) for v in values)))
+                raise parse_err("duplicate named option for: {}".format(name, ", ".join(repr(v) for v in values)), pos, argv)
 
-            args[name] = try_parse(value, argspec.argtypes.get(name))
+            pos, value = values[0]
+            args[name] = try_parse(name, value, argspec.argtypes.get(name), pos, argv)
 
         name = argspec.tail
         if name and name in flags:
             args[name] = []
 
-            values = flags.pop(name)
+            pos, values = flags.pop(name)
             if not values or None in values:
-                raise BadArg("missing value for named option  {}".format(name))
+                raise parse_err("missing value for named option  {}".format(name), pos, argv)
 
-            for v in values:
-                args[name].append(try_parse(name, value, argspec.argtypes.get(name)))
+            for pos, value in values:
+                args[name].append(try_parse(name, value, argspec.argtypes.get(name), pos, argv))
     else:
         if flags:
-            raise BadArg("unknown option flags: --{}".format("".join(flags)))
+            raise parse_err("unknown option flags: --{}".format("".join(flags)), pos, argv)
 
         if argspec.positional:
             for name in argspec.positional:
                 if not options: 
-                    raise BadArg("missing option: {}".format(name))
+                    raise parse_err("missing option: {}".format(name), pos, argv)
+                pos, value= options.pop(0)
 
-                args[name] = try_parse(name, options.pop(0),argspec.argtypes.get(name))
+                args[name] = try_parse(name, value, argspec.argtypes.get(name), pos, argv)
 
         if argspec.optional:
             for name in argspec.optional:
                 if not options: 
                     args[name] = None
                 else:
-                    args[name] = try_parse(name, options.pop(0), argspec.argtypes.get(name))
+                    pos, value= options.pop(0)
+                    args[name] = try_parse(name, value, argspec.argtypes.get(name), pos, argv)
 
         if argspec.tail:
             tail = []
             name = argspec.tail
             tailtype = argspec.argtypes.get(name)
             while options:
-                tail.append(try_parse(name, options.pop(0), tailtype))
+                pos, value= options.pop(0)
+                tail.append(try_parse(name, value, tailtype, pos, argv))
 
             args[name] = tail
 
     if options and named_args:
-        raise BadArg("unnamed options given {!r}".format(" ".join(options)))
+        raise parse_err("unnamed options given {!r}".format(" ".join(options)), pos, argv)
     if options:
-        raise BadArg("unrecognised option: {!r}".format(" ".join(options)))
+        raise parse_err("unrecognised option: {!r}".format(" ".join(options)), pos, argv)
     return args
 
-def try_parse(name, arg, argtype):
+def try_parse(name, arg, argtype, pos, argv):
     if argtype in (None, "str", "string"):
         return arg
     elif argtype in ("branch", "commit"):
@@ -455,7 +475,7 @@ def try_parse(name, arg, argtype):
             if str(i) == arg: return i
         except:
             pass
-        raise BadArg('{} expects an integer, got {}'.format(name, arg))
+        raise parse_err('{} expects an integer, got {}'.format(name, arg), pos, argv)
 
     elif argtype in ("float","num", "number"):
         try:
@@ -463,13 +483,13 @@ def try_parse(name, arg, argtype):
             if str(i) == arg: return i
         except:
             pass
-        raise BadArg('{} expects an floating-point number, got {}'.format(name, arg))
+        raise parse_err('{} expects an floating-point number, got {}'.format(name, arg), pos, argv)
     elif argtype in ("bool", "boolean"):
         if arg == "true":
             return True
         elif arg == "false":
             return False
-        raise BadArg('{} expects either true or false, got {}'.format(name, arg))
+        raise parse_err('{} expects either true or false, got {}'.format(name, arg), pos, argv)
     elif argtype == "scalar":
         try:
             i = int(arg)
@@ -483,7 +503,7 @@ def try_parse(name, arg, argtype):
             pass
         return arg
     else:
-        raise BadArg("Don't know how to parse option {}, of unknown type {}".format(name, argtype))
+        raise parse_err("Don't know how to parse option {}, of unknown type {}".format(name, argtype), pos, argv)
 
 class CommandDescription:
     def __init__(self, prefix, name, subcommands, subaliases, groups, short, long, argspec):

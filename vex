@@ -1198,6 +1198,20 @@ debug_soak = vex_debug.subcommand('soak', short="soak test")
 def DebugSoak():
     pass
 
+debug_argparse = vex_debug.subcommand('args')
+@debug_argparse.run('''
+    --switch?       # a demo switch
+    --value:str     # pass with --value=...
+    --bucket:int... # a list of numbers
+    pos1            # positional
+    [opt1]          # optional 1
+    [opt2]          # optional 2
+    [tail...]       # tail arg
+''')
+def run(switch, value, bucket, pos1, opt1, opt2, tail):
+    """a demo command that shows all the types of options"""
+    return [switch, value, bucket, pos1, opt1, opt2, tail]
+
 
 
 vex_cmd.main(__name__, adverbs=('debug','fake'))
