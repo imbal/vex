@@ -2421,6 +2421,40 @@ class Project:
         return out
 
     def append_changes_from_branch(self, name):
+        with self.do('commit:append') as txn:
+            branch_uuid = txn.get_branch_uuid(name)
+            branch = txn.get_branch(branch_uuid)
+
+            active = self.active()
+            active_branch_uuid = active.branch
+            active_branch = txn.get_branch(active_branch_uuid)
+
+            if (active.prepare != branch.base):
+                raise VexError('branch {} is based off a different commit')
+
+            commits = []
+            commit = branch.head
+            while commit != branch.base:
+                obj = txn.get_commit(commit)
+                # XXX prepare, amend
+                commits.append((commit, obj))
+                commit = obj.previous
+            
+            commits.reverse()
+            commit_uuid = active.prepare
+            changeset = objects.Changeset({})
+            for uuid, commit in commits:
+                new_commit = objects.Commit(commit.kind, timestamp=txn.now, previous=commit_uuid, ancestors=dict(applied=uuid), root=commit.root, changeset=commit.changeset)
+                changeset.append_changes(txn.get_manifest(commit.changeset))
+
+                commit_uuid = txn.put_commit(commit)
+
+            txn.set_active_commit(commit_uuid)
+            txn.set_state('message', txn.get_setting('template'))
+
+            return changeset
+
+
         raise VexUnimplemented('no')
         # switch to a new session
         # with txn

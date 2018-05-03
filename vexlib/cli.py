@@ -530,7 +530,8 @@ class CommandDescription:
             output = []
             prefix = route[-1]
             if self.subcommands:
-                output.append("{}:".format(prefix))
+                for name in self.groups[None]:
+                    output.append("{}:{}".format(prefix, name))
                 if self.argspec:
                     output.append("{} ".format(prefix))
             else:

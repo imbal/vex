@@ -99,9 +99,9 @@ def Complete(prefix, field, argtype):
         if p:
             vals = p.list_branches()
             if prefix:
-                out.extend("{} ".format(name) for name, uuid in out if name.startwith(prefix))
+                out.extend("{} ".format(name) for name, uuid in vals if name.startwith(prefix))
             else:
-                out.extend("{} ".format(name) for name, uuid in out if name)
+                out.extend("{} ".format(name) for name, uuid in vals if name)
 
     return out
 
@@ -634,10 +634,15 @@ def Amend(file):
 
 vex_message = vex_cmd_commit.subcommand('message', short="edit commit message")
 vex_message_edit = vex_message.subcommand('edit', short='edit commit message')
-@vex_message.run('--editor')
-@vex_message_edit.run('--editor')
-def EditMessage(editor):
+@vex_message.run('--editor [message]')
+@vex_message_edit.run('--editor [message]')
+def EditMessage(editor, message):
     p = open_project()
+    if message:
+        with p.lock('message:set') as p:
+            p.state.set('message', message)
+            return "set"
+
     with p.lock('editor') as p:
         if not editor and p.state.exists('editor'):
             editor = p.state.get('editor')
@@ -717,7 +722,7 @@ def SetTemplate(template):
         yield "set"
 
 vex_commit_apply = vex_commit.subcommand('apply', 'apply changes from other branch to current session')
-@vex_commit_apply.run('branch')
+@vex_commit_apply.run('branch:branch')
 def Apply(branch):
     p = open_project()
     with p.lock('apply') as p:
@@ -726,16 +731,25 @@ def Apply(branch):
         p.apply_changes_from_branch(branch)
 
 vex_commit_append = vex_commit.subcommand('append', 'append changes from other branch to current session')
-@vex_commit_append.run('branch')
+@vex_commit_append.run('branch:branch')
 def Append(branch):
     p = open_project()
     with p.lock('append') as p:
         if not p.names.exists(branch):
             raise VexArgument('{} doesn\'t exist'.format(branch))
-        p.append_changes_from_branch(branch)
+        changes = p.append_changes_from_branch(branch)
+
+        if changes:
+            for name, entries in changes.items():
+                entries = [entry.text for entry in entries]
+                name = os.path.relpath(name, p.prefix())
+                yield "append: {}, {}".format(', '.join(entries), name)
+
+        else:
+            yield 'append: nothing to commit'
 
 vex_commit_replay = vex_commit.subcommand('replay', 'replay changes from other branch to current session')
-@vex_commit_replay.run('branch')
+@vex_commit_replay.run('branch:branch')
 def Replay(branch):
     p = open_project()
     with p.lock('replay') as p:
@@ -748,12 +762,12 @@ vex_commit_squash = vex_commit.subcommand('squash', '* flatten commits into one'
 def Squash():
     raise VexUnimplemented()
 
-vex_rollback = vex_cmd_commit.subcommand('rollback', '* take older version and re-commit it')
+vex_rollback = vex_commit.subcommand('rollback', '* take older version and re-commit it')
 @vex_rollback.run()
 def Rollback():
     raise VexUnimplemented()
 
-vex_revert = vex_cmd_commit.subcommand('revert','* new commit without changes made in an old version')
+vex_revert = vex_commit.subcommand('revert','* new commit without changes made in an old version')
 @vex_revert.run()
 def Revert():
     raise VexUnimplemented()
