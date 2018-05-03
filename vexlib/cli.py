@@ -122,6 +122,9 @@ class BadArg(Exception):
     def action(self, path):
         return Action("error", path, {}, errors=self.args)
 
+class BadDefinition(Exception):
+    pass
+
 class Complete:
     def __init__(self, prefix, name, argtype):
         self.prefix = prefix
@@ -193,7 +196,7 @@ def parse_argspec(argspec):
         args = [line for line in argspec.split('\n') if line]
     else:
         if argspec.count('#') > 0:
-            raise Exception('badargspec')
+            raise BadDefinition('BUG: comment in single line argspec')
         args = [x for x in argspec.split()]
 
     argtypes = {}
@@ -212,14 +215,14 @@ def parse_argspec(argspec):
         if ':' in arg:
             name, atype = arg.split(':')
             if atype not in ARGTYPES:
-                raise BadArg("option {} has unrecognized type {}".format(name, atype))
+                raise BadDefinition("BUG: option {} has unrecognized type {}".format(name, atype))
             argtypes[name] = atype 
         else:
             name = arg
             if argtype:
                 argtypes[name] = argtype 
         if name in argnames:
-            raise Exception('duplicate arg name')
+            raise BadDefinition('BUG: duplicate arg name {}'.format(name))
         argnames.add(name)
         if desc:
             descriptions[name] = desc
@@ -234,7 +237,7 @@ def parse_argspec(argspec):
             args.pop(0)
         if arg.endswith('?'):
             if ':' in arg:
-                raise Exception('switches cant have types')
+                raise BadDefinition('BUG: boolean switches cant have types: {!r}'.format(arg))
             switches.append(argname(arg[2:-1], desc, 'boolean'))
         elif arg.endswith('...'):
             lists.append(argname(arg[2:-3], desc))
@@ -245,7 +248,7 @@ def parse_argspec(argspec):
 
     while args: # positional
         arg, desc = argdesc(args[0])
-        if arg.startswith('--'): raise Exception('badarg')
+        if arg.startswith('--'): raise BadDefinition('positional arguments must come after flags')
 
         if arg.endswith(('...]', ']', '...')) : 
             break
@@ -256,30 +259,30 @@ def parse_argspec(argspec):
 
     if args and args[0].endswith('...'):
         arg, desc = argdesc(args.pop(0))
-        if arg.startswith('--'): raise Exception('badarg')
-        if arg.startswith('['): raise Exception('badarg')
+        if arg.startswith('--'): raise BadDefinition('flags must come before positional args')
+        if arg.startswith('['): raise BadDefinition('badarg')
         tail = argname(arg[:-3], desc)
     elif args:
         while args: # optional
             arg, desc = argdesc(args[0])
-            if arg.startswith('--'): raise Exception('badarg')
+            if arg.startswith('--'): raise BadDefinition('badarg')
             if arg.endswith('...]'): 
                 break
             else:
                 args.pop(0)
-            if not (arg.startswith('[') and arg.endswith(']')): raise Exception('badarg')
+            if not (arg.startswith('[') and arg.endswith(']')): raise BadDefinition('badarg')
 
             optional.append(argname(arg[1:-1], desc))
 
         if args: # tail
             arg, desc = argdesc(args.pop(0))
-            if arg.startswith('--'): raise Exception('badarg')
-            if not arg.startswith('['): raise Exception('badarg')
-            if not arg.endswith('...]'): raise Exception('badarg')
+            if arg.startswith('--'): raise BadDefinition('badarg')
+            if not arg.startswith('['): raise BadDefinition('badarg')
+            if not arg.endswith('...]'): raise BadDefinition('badarg')
             tail = argname(arg[1:-4], desc)
 
     if args:
-        raise Exception('bad argspec')
+        raise BadDefinition('bad argspec')
     
     # check names are valid identifiers
 
@@ -301,7 +304,7 @@ def parse_args(argspec, argv, environ):
     args = {}
     file_handles = {}
 
-    for arg in argv:
+    for pos, arg in enumerate(argv):
         if arg.startswith('--'):
             if '=' in arg:
                 key, value = arg[2:].split('=',1)
@@ -754,10 +757,10 @@ class Command:
         #if self.argspec:
         #    raise Exception('bad')
         if name in self.subaliases or name in self.subcommands:
-            raise Exception('bad')
+            raise BadDefinition('Duplicate {}'.format(name))
         for a in aliases:
             if a in self.subaliases or a in self.subcommands:
-                raise Exception('bad')
+                raise BadDefinition('Duplicate {}'.format(a))
         cmd = Command(name, short)
         for a in aliases:
             self.subaliases[a] = name
@@ -770,10 +773,10 @@ class Command:
     def run(self, argspec=None):
         """A decorator for setting the function to be run"""
         if self.run_fn:
-            raise Exception('double definition')
+            raise BadDefinition('double definition')
 
         #if self.subcommands:
-        #    raise Exception('bad')
+        #    raise BadDefinition('bad')
 
         if argspec is not None:
             self.nargs, self.argspec = parse_argspec(argspec)
@@ -788,7 +791,7 @@ class Command:
                 self.nargs, self.argspec = parse_argspec(" ".join(args))
             else:
                 if self.nargs != len(args):
-                    raise Exception('bad option definition')
+                    raise BadDefinition('bad option definition')
 
             return fn
         return decorator

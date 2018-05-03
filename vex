@@ -1103,47 +1103,47 @@ git_get_cmd = git_cmd.subcommand('get', short='* get git options')
 def GitGet(name):
     pass
 
+def shell(args):
+    print('shell:', args)
+    p= subprocess.run(args, stdout=subprocess.PIPE, shell=True)
+    if p.returncode:
+        sys.stdout.write(p.stdout)
+        raise Exception('error')
+    return p.stdout
+
+class Vex:
+    def __init__(self, path, command=()):
+        self.path = path
+        self.command = command
+
+    def __getattr__(self, name):
+        return self.__class__(self.path, self.command+(name,))
+
+    def __call__(self, *args, **kwargs):
+        cmd = []
+        cmd.append(self.path)
+        if self.command:
+            cmd.append(":".join(self.command))
+        for name, value in kwargs.items():
+            if isinstance(value, (list, tuple)):
+                for v in value:
+                    cmd.append("--{}={}".format(name, v))
+            else:
+                cmd.append("--{}={}".format(name, value))
+        for value in args:
+            cmd.append(value)
+
+        p=  subprocess.run(cmd, stdout=subprocess.PIPE)
+        if p.returncode:
+            sys.stdout.buffer.write(p.stdout)
+            raise Exception('Error')
+        print("vex {}:".format(" ".join(cmd[1:])))
+        for line in p.stdout.splitlines():
+            print(">  ", line.decode('utf-8'))
 
 debug_test = vex_debug.subcommand('test', short="self test")
 @debug_test.run()
 def DebugTest():
-    def shell(args):
-        print('shell:', args)
-        p= subprocess.run(args, stdout=subprocess.PIPE, shell=True)
-        if p.returncode:
-            sys.stdout.write(p.stdout)
-            raise Exception('error')
-        return p.stdout
-
-    class Vex:
-        def __init__(self, path, command=()):
-            self.path = path
-            self.command = command
-
-        def __getattr__(self, name):
-            return self.__class__(self.path, self.command+(name,))
-
-        def __call__(self, *args, **kwargs):
-            cmd = []
-            cmd.append(self.path)
-            if self.command:
-                cmd.append(":".join(self.command))
-            for name, value in kwargs.items():
-                if isinstance(value, (list, tuple)):
-                    for v in value:
-                        cmd.append("--{}={}".format(name, v))
-                else:
-                    cmd.append("--{}={}".format(name, value))
-            for value in args:
-                cmd.append(value)
-
-            p=  subprocess.run(cmd, stdout=subprocess.PIPE)
-            if p.returncode:
-                sys.stdout.buffer.write(p.stdout)
-                raise Exception('Error')
-            print("vex {}:".format(" ".join(cmd[1:])))
-            for line in p.stdout.splitlines():
-                print(">  ", line.decode('utf-8'))
 
     vex = Vex(os.path.abspath(__file__))
 
@@ -1193,5 +1193,11 @@ def DebugTest():
         vex.status()
 
     
+debug_soak = vex_debug.subcommand('soak', short="soak test")
+@debug_soak.run()
+def DebugSoak():
+    pass
+
+
 
 vex_cmd.main(__name__, adverbs=('debug','fake'))
