@@ -2038,7 +2038,7 @@ class Project:
                 changes = self.get_manifest(obj.changeset)
                 if changes:
                     message = changes.message
-            out.append(' 0 {} 0x{}: {}'.format(obj.kind, commit[4:10], message))
+            out.append(' 0 {} 0x{} {}: {}'.format(rson.format_datetime(obj.timestamp),commit[4:10], obj.kind, message))
             commit = obj.previous
 
         n= -1
@@ -2049,7 +2049,7 @@ class Project:
                 changes = self.get_manifest(obj.changeset)
                 if changes:
                     message = changes.message
-            out.append('{} {} 0x{}: {}'.format(n, obj.kind, commit[4:10], message))
+            out.append('{} {} 0x{} {}: {}'.format(n, rson.format_datetime(obj.timestamp),commit[4:10],  obj.kind, message))
             n-=1
             commit = obj.previous
             
@@ -2450,20 +2450,12 @@ class Project:
                 commit_uuid = txn.put_commit(commit)
 
             txn.set_active_commit(commit_uuid)
-            txn.set_state('message', txn.get_setting('template'))
 
             return changeset
 
-
+    def replay_changes_from_branch(self, name):
         raise VexUnimplemented('no')
-        # switch to a new session
-        # with txn
-        #   get other branch, check it's based on current prepare
-        #   for each commit, create a new commit pointing to the last
-        #   copying across change, root, adding ancestors ('original', )
-        # on error, switch out to old session
-        # on success, merge changes in from old session
-        
+
     def apply_changes_from_branch(self, name):
         raise VexUnimplemented('no')
         # switch to a new session
@@ -2471,5 +2463,3 @@ class Project:
         #   process inbox
         # on error, switch out to old session
 
-    def replay_changes_from_branch(self, name):
-        raise VexUnimplemented('no')

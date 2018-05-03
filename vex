@@ -99,7 +99,7 @@ def Complete(prefix, field, argtype):
         if p:
             vals = p.list_branches()
             if prefix:
-                out.extend("{} ".format(name) for name, uuid in vals if name.startwith(prefix))
+                out.extend("{} ".format(name) for name, uuid in vals if name and name.startswith(prefix))
             else:
                 out.extend("{} ".format(name) for name, uuid in vals if name)
 
@@ -1143,7 +1143,7 @@ def DebugTest():
                 raise Exception('Error')
             print("vex {}:".format(" ".join(cmd[1:])))
             for line in p.stdout.splitlines():
-                result(">  ", line.decode('utf-8'))
+                print(">  ", line.decode('utf-8'))
 
     vex = Vex(os.path.abspath(__file__))
 
