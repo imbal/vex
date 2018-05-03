@@ -583,7 +583,7 @@ class CommandDescription:
             out.extend("--{}=".format(x) for x in self.argspec.lists if x.startswith(prefix))
             out.extend("--{}=".format(x) for x in self.argspec.positional if x.startswith(prefix))
             out.extend("--{}=".format(x) for x in self.argspec.optional if x.startswith(prefix))
-            out.extend("--{}=".format(x) for x in (self.argspec.tail,) if x.startswith(prefix))
+            out.extend("--{}=".format(x) for x in (self.argspec.tail,) if x and x.startswith(prefix))
             return out
         else:
             return ()
@@ -728,7 +728,7 @@ class Command:
         self.aliases=aliases
         self.argspec = None
         self.nargs = 0
-        self.err_fn = None
+        self.call_fn = None
         self.complete_fn= None
 
     # -- builder methods
@@ -808,6 +808,13 @@ class Command:
             else:
                 raise Error(-1, self.render().usage())
 
+    def handler(self, path):
+        handler = None
+        if path and path[0] in self.subcommands:
+            handler = self.subcommands[path[0]].handler(path[1:])
+        if not handler:
+            handler = self.call_fn
+        return handler
 
     def main(self, name, *, adverbs=()):
         if name == '__main__':
@@ -917,7 +924,8 @@ def main(root, argv, environ, adverbs):
         else:
             raise Error('what')
 
-        if not root.call_fn:
+        handler = root.handler(action.path)
+        if not handler:
             try:
                 result = callback()
                 if isinstance(result, types.GeneratorType):
@@ -933,7 +941,7 @@ def main(root, argv, environ, adverbs):
                 print(result)
                 return -1
         else:
-            return root.call_fn(action.mode, action.path, action.argv, callback)
+            return handler(action.mode, action.path, action.argv, callback)
     except Error as e:
         print()
         print(e.value)

@@ -48,7 +48,7 @@ def match_filename(path, name, ignore, include):
 def file_diff(name, old, new):
     # XXX Pass properties
     a,b = os.path.join('./a',name[1:]), os.path.join('./b', name[1:])
-    p = subprocess.run(["diff", '-u', '--label', a, '--label', b, old, new], stdout=subprocess.PIPE)
+    p = subprocess.run(["diff", '-u', '--label', a, '--label', b, old, new], stdout=subprocess.PIPE, encoding='utf8')
     return p.stdout
 
 

@@ -17,6 +17,9 @@ import tempfile
 
 from contextlib import contextmanager
 
+if sys.version_info.major < 3 or (sys.version_info.minor < 6)  or (sys.version_info.minor == 6  and sys.implementation.name != 'cpython'):
+    print('Minimum Python 3.7 (or CPython 3.6')
+    sys.exit(-1)
 sys.path.append(os.path.split(os.path.abspath(__file__))[0])
 
 
@@ -379,15 +382,17 @@ def Status(all, missing):
 
 
 vex_log = vex_cmd.subcommand('log', aliases=['changelog'], short="list changes to project")
-@vex_log.run()
-def Log():
+@vex_log.run('''
+        --all? # Show all changes
+''')
+def Log(all):
     """
         `vex changelog` or `vex log` shows the list of commits inside a branch, using 
         the current branch if none given.
     """
     
     p = open_project()
-    for entry in p.log():
+    for entry in p.log(all=all):
         yield (entry)
         yield ""
 
@@ -898,11 +903,13 @@ def DiffBranch(branch):
     with p.lock('diff') as p:
         if not branch:
             branch = p.active().branch
+            branch = p.get_branch(branch)
+            commit = branch.base
         else:
             branch = p.get_branch_uuid(branch)
+            branch = p.get_branch(branch)
+            commit = branch.head
 
-        branch = p.get_branch(branch)
-        commit = branch.head
 
         for name, diff in  p.active_diff_commit(commit).items():
             yield diff

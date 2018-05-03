@@ -1294,7 +1294,6 @@ class PhysicalTransaction:
             elif entry.kind =='dir':
                 p = "{}/".format(path)
                 for name in old_files:
-                    print(p, name)
                     if name.startswith(p):
                         paths.append(name)
 
@@ -2024,23 +2023,36 @@ class Project:
             txn.put_session(active)
 
 
-    def log(self):
+    def log(self, all=False):
         with self.do_without_undo('log') as txn:
             session = txn.active()
+
+        branch = self.get_branch(session.branch)
 
         commit = session.prepare
         out = []
         while commit != session.commit:
             obj = self.get_commit(commit)
-            out.append('*: *uncommitted* {}: {}'.format(obj.kind, commit))
+            message = ""
+            if obj.changeset:
+                changes = self.get_manifest(obj.changeset)
+                if changes:
+                    message = changes.message
+            out.append(' 0 {} 0x{}: {}'.format(obj.kind, commit[4:10], message))
             commit = obj.previous
 
-        n= 0
-        while commit != None:
+        n= -1
+        while commit and (all or commit != branch.base):
             obj = self.get_commit(commit)
-            out.append('{}: committed {}: {}'.format(n, obj.kind, commit))
+            message = ""
+            if obj.changeset:
+                changes = self.get_manifest(obj.changeset)
+                if changes:
+                    message = changes.message
+            out.append('{} {} 0x{}: {}'.format(n, obj.kind, commit[4:10], message))
             n-=1
             commit = obj.previous
+            
         return out
 
     def status(self):
@@ -2133,7 +2145,9 @@ class Project:
                     output[name] = dict(old=self.repo.get_file_path(e.addr), new=self.repo_to_full_path(self.prefix(),name))
             output2 = {}
             for name, d in output.items():
-                output2[name] = file_diff(name, d['old'], d['new'])
+                df= file_diff(name, d['old'], d['new'])
+                if df: 
+                    output2[name] = df
             return output2
 
 
@@ -2150,7 +2164,9 @@ class Project:
                     output[name] = dict(old=self.repo.get_file_path(e.addr), new=self.repo_to_full_path(self.prefix(),name))
             output2 = {}
             for name, d in output.items():
-                output2[name] = file_diff(name, d['old'], d['new'])
+                df = file_diff(name, d['old'], d['new'])
+                if df:
+                    output2[name] = df
             return output2
     def prepare(self, files):
         files = self.check_files(files) if files else None
@@ -2339,7 +2355,7 @@ class Project:
             old = txn.get_branch(active.branch)
             old.sessions.remove(active.uuid)
             buuid = UUID()
-            branch = objects.Branch(buuid, name, 'active', txn.prefix(), old.head, old.base, old.init, upstream=old.upstream, sessions=[active.uuid])
+            branch = objects.Branch(buuid, name, 'active', txn.prefix(), old.head, old.head, old.init, upstream=old, sessions=[active.uuid])
             active.branch = buuid
             txn.set_branch_uuid(name, branch.uuid)
             txn.put_session(active)
