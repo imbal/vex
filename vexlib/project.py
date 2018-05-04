@@ -295,8 +295,8 @@ class objects:
 
     @codec.register
     class Session:
-        States = set(('attached', 'detached', 'manual', 'update')) 
-        def __init__(self,uuid, branch, state, prefix, prepare, commit, files, message):
+        States = set(('attached', 'detached'))
+        def __init__(self,uuid, branch, state, prefix, prepare, commit, files, message, activity ):
             if not (uuid and branch and prepare and commit): raise Exception('no')
             if state not in self.States: raise Exception('no')
             self.uuid = uuid
@@ -307,7 +307,23 @@ class objects:
             self.files = files
             self.state = state
             self.message = message
+            self.activity = activity
 
+    @codec.register
+    class RestoreSession:
+        def __init__(self, commit, patchsets):
+            self.commit = commit
+            self.patchsets = patchsets
+
+    @codec.register
+    class PatchSet:
+        def __init__(self, current, applied, pending):
+            self.current = current
+            self.applied = applied
+            self.pending = pending
+
+    # This is in Session.files {"repo path": Tracked () }
+    #
     @codec.register
     class Tracked:
         Kinds = set(('dir', 'file', 'ignore'))
@@ -686,6 +702,10 @@ class History:
             out.append(obj)
         return out
 
+class Cancel(Exception):
+    pass
+
+
 class PhysicalTransaction:
     def __init__(self, project, command):
         self.project = project
@@ -709,6 +729,9 @@ class PhysicalTransaction:
 
     def active(self):
         return self.get_session(self.active_uuid)
+
+    def cancel(self):
+        raise Cancel()
 
     def prefix(self):
         return self.get_state("prefix")
@@ -838,7 +861,7 @@ class PhysicalTransaction:
         session_uuid = UUID()
         b = self.get_branch(branch_uuid)
         files = self.build_files(commit)
-        session = objects.Session(session_uuid, branch_uuid, state, b.prefix, commit, commit, files, message="")
+        session = objects.Session(session_uuid, branch_uuid, state, b.prefix, commit, commit, files, message="", activity=None)
         b.sessions.append(session.uuid)
         self.put_branch(b)
         self.put_session(session)
@@ -1655,7 +1678,10 @@ class Project:
     def do_without_undo(self, command):
         active = self.state.get("active")
         txn = PhysicalTransaction(self, command)
-        yield txn
+        try:
+            yield txn
+        except Cancel as e:
+            return
         with self.history.do_without_undo(txn.action(), self.fake) as action:
             if any(action.blobs.values()):
                 raise VexBug(action.blobs)
@@ -1668,7 +1694,10 @@ class Project:
             raise VexCorrupt('Project history not in a clean state.')
 
         txn = PhysicalTransaction(self, command)
-        yield txn
+        try:
+            yield txn
+        except Cancel as e:
+            return
         with self.history.do(txn.action(), self.fake) as action:
             if not action:
                 return
@@ -1685,7 +1714,10 @@ class Project:
             raise VexCorrupt('Project history not in a clean state.')
 
         txn = LogicalTransaction(self, command)
-        yield txn
+        try:
+            yield txn
+        except Cancel as e:
+            return
         with self.history.do(txn.action(), self.fake) as action:
             if not action:
                 return
@@ -2077,7 +2109,7 @@ class Project:
         if not prefix.startswith('/'):
             raise VexArgument('crap prefix')
         with self.do_without_undo('init') as txn:
-            # so addr for file is easy, ugh
+            # XXX: DOUBLE TXN so addr for file is easy, ugh
             txn.set_setting('ignore', ignore)
             txn.set_setting('include', include)
             txn.set_setting('template', '')
@@ -2124,7 +2156,7 @@ class Project:
                 else:
                     entry.working = None
 
-            session = objects.Session(session_uuid, branch_uuid, 'attached', prefix, commit_uuid, commit_uuid, files, message="") 
+            session = objects.Session(session_uuid, branch_uuid, 'attached', prefix, commit_uuid, commit_uuid, files, message="", activity=None) 
             txn.put_session(session)
 
             txn.set_state("author", author_uuid)
@@ -2177,7 +2209,7 @@ class Project:
             changeset = txn.active_changeset(files)
 
             if not changeset:
-                return None
+                txn.cancel()
 
             prepare = session.prepare
 
@@ -2242,7 +2274,7 @@ class Project:
             changeset.append_changes(txn.active_changeset(files))
 
             if not changeset:
-                return None
+                txn.cancel()
 
             root_uuid = txn.new_root_with_changeset(old.root, changeset)
 
@@ -2264,6 +2296,8 @@ class Project:
             txn.set_state('message', txn.get_setting('template'))
 
             return changeset
+        # Here if txn cancelled
+        return None
 
     def untracked(self, file):
         files = self.check_files((file,))
@@ -2355,7 +2389,7 @@ class Project:
             old = txn.get_branch(active.branch)
             old.sessions.remove(active.uuid)
             buuid = UUID()
-            branch = objects.Branch(buuid, name, 'active', txn.prefix(), old.head, old.head, old.init, upstream=old, sessions=[active.uuid])
+            branch = objects.Branch(buuid, name, 'active', txn.prefix(), old.head, old.base, old.init, upstream=old, sessions=[active.uuid])
             active.branch = buuid
             txn.set_branch_uuid(name, branch.uuid)
             txn.put_session(active)
@@ -2391,6 +2425,7 @@ class Project:
                 session_uuid = sessions[0].uuid
             else:
                 raise VexArgument('welp, too many attached sessions')
+        # XXX DOUBLE TXN
         with self.do_switch('branch:open {}'.format(name)) as txn:
             txn.switch_session(session_uuid)
 
@@ -2406,6 +2441,7 @@ class Project:
             if not prefix: prefix = txn.get_branch(from_branch).prefix
             branch = txn.create_branch(name, prefix, from_commit, from_branch, fork)
             session = txn.create_session(branch.uuid, 'attached', branch.head)
+        # XXX DOUBLE TXN
 
         with self.do_switch('branch:new {}'.format(name)) as txn:
             txn.set_branch_state(branch.uuid, "active")
