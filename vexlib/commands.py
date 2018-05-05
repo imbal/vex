@@ -13,6 +13,7 @@ import types
 import os.path
 import traceback
 import subprocess
+import tempfile
 
 from contextlib import contextmanager
 
@@ -70,7 +71,7 @@ def open_project(allow_empty=False):
     
 
 # CLI bits. Should handle environs, cwd, etc
-vex_cmd = Command('vex', 'a database for files', long=__doc__)
+vex_cmd = Command('vex', 'a database for files', long=__doc__, prefixes=['fake'])
 
 @vex_cmd.on_complete()
 def Complete(prefix, field, argtype):
@@ -1006,3 +1007,204 @@ def SetProp(file, name, value):
         p.set_fileprop(filename, name, value)
 
 
+vex_cmd_debug = vex_cmd.group('debug')
+vex_debug = vex_cmd_debug.subcommand('debug', 'internal: run a command without capturing exceptions, or repairing errors')
+@vex_debug.run()
+def Debug():
+    """
+    `vex debug commit` calls `vex commit`, but will always print a full traceback
+    and never attempt to recover from incomplete changes.
+
+    use with care.
+    """
+    yield ('Use vex debug <cmd> to run <cmd>, or use `vex debug:status`')
+
+
+debug_status = vex_debug.subcommand('status')
+@debug_status.run()
+def DebugStatus():
+    p = open_project(check=False)
+    with p.lock('debug:status') as p:
+        yield ("Clean history", p.clean_state())
+        head = p.active()
+        out = []
+        if head:
+
+            out.append("head: {}".format(head.uuid))
+            out.append("at {}, started at {}".format(head.prepare, head.commit))
+
+            branch = p.branches.get(head.branch)
+            out.append("commiting to branch {}".format(branch.uuid))
+
+            commit = p.get_commit(head.prepare)
+            out.append("last commit: {}".format(commit.__class__.__name__))
+        else:
+            if p.history_isempty():
+                out.append("you undid the creation. try vex redo")
+            else:
+                out.append("no active head, but history, weird")
+        out.append("")
+        return "\n".join(out)
+
+
+debug_restart = vex_debug.subcommand('restart')
+@debug_restart.run()
+def DebugRestart():
+    p = get_project()
+    with p.lock('debug:restart') as p:
+        if p.clean_state():
+            yield ('There is no change in progress to restart')
+            return
+        yield ('Restarting current action...')
+        p.restart_new_action()
+        if p.clean_state():
+            yield ('Project has recovered')
+        else:
+            yield ('Oh dear')
+
+debug_rollback = vex_debug.subcommand('rollback')
+@debug_rollback.run()
+def DebugRollback():
+    p = get_project()
+    with p.lock('debug:rollback') as p:
+        if p.clean_state():
+            yield ('There is no change in progress to rollback')
+            return
+        yield ('Rolling back current action...')
+        p.rollback_new_action()
+        if p.clean_state():
+            yield ('Project has recovered')
+        else:
+            yield ('Oh dear')
+vex_cmd_git = vex_cmd.group('_git')
+git_cmd = vex_cmd_git.subcommand('git', short="* interact with a git repository")
+
+git_init_cmd = git_cmd.subcommand('init', short='* create a new git project')
+@git_init_cmd.run('--name --email directory')
+def GitInit(name, email, directory):
+    pass
+    # call Init with new settings
+
+
+git_set_cmd = git_cmd.subcommand('set', short='* set git options')
+@git_set_cmd.run('--number? --string? --boolean? name value')
+def GitSet(number, string, boolean, name, value):
+    pass
+
+git_get_cmd = git_cmd.subcommand('get', short='* get git options')
+@git_get_cmd.run('name')
+def GitGet(name):
+    pass
+
+def shell(args):
+    print('shell:', args)
+    p= subprocess.run(args, stdout=subprocess.PIPE, shell=True)
+    if p.returncode:
+        sys.stdout.write(p.stdout)
+        raise Exception('error')
+    return p.stdout
+
+class Vex:
+    def __init__(self, path, command=()):
+        self.path = path
+        self.command = command
+
+    def __getattr__(self, name):
+        return self.__class__(self.path, self.command+(name,))
+
+    def __call__(self, *args, **kwargs):
+        cmd = []
+        cmd.append(self.path)
+        if self.command:
+            cmd.append(":".join(self.command))
+        for name, value in kwargs.items():
+            if isinstance(value, (list, tuple)):
+                for v in value:
+                    cmd.append("--{}={}".format(name, v))
+            else:
+                cmd.append("--{}={}".format(name, value))
+        for value in args:
+            cmd.append(value)
+
+        p=  subprocess.run(cmd, stdout=subprocess.PIPE)
+        if p.returncode:
+            sys.stdout.buffer.write(p.stdout)
+            raise Exception('Error')
+        print("vex {}:".format(" ".join(cmd[1:])))
+        for line in p.stdout.splitlines():
+            print(">  ", line.decode('utf-8'))
+
+debug_test = vex_debug.subcommand('test', short="self test")
+@debug_test.run()
+def DebugTest():
+
+    vex = Vex(os.path.normpath(os.path.join(os.path.split(os.path.abspath(__file__))[0], "..", "vex")))
+
+    with tempfile.TemporaryDirectory() as dir:
+        print("Using:", dir)
+        os.chdir(dir)
+        shell('mkdir repo')
+        dir = os.path.join(dir, 'repo')
+        os.chdir(dir)
+
+        vex.init()
+
+        shell('date >> date')
+        shell('mkdir -p dir1 dir2 dir3/dir3.1 dir3/dir3.2')
+        shell('echo yes >> dir1/a')
+        shell('echo yes >> dir1/b')
+        shell('echo yes >> dir1/c')
+
+        vex.add()
+        vex.commit()
+
+        vex.undo()
+        vex.commit.prepare()
+        vex.commit.prepared()
+
+        vex.undo()
+        vex.undo()
+        vex.redo(choice=1)
+        vex.log()
+        shell('date >> date')
+        vex.switch('dir1')
+        shell('rm a')
+        shell('mkdir a')
+        vex.switch('/repo')
+        vex.undo()
+        vex.redo()
+        vex.commit()
+        shell('rmdir dir2')
+        shell('date >> dir2')
+        vex.commit()
+        vex.undo()
+        vex.branch.saveas('other')
+        vex.branch('latest')
+        vex.undo()
+        vex.commit()
+        vex.branch('latest')
+        vex.status()
+
+    
+debug_soak = vex_debug.subcommand('soak', short="soak test")
+@debug_soak.run()
+def DebugSoak():
+    pass
+
+debug_argparse = vex_debug.subcommand('args')
+@debug_argparse.run('''
+    --switch?       # a demo switch
+    --value:str     # pass with --value=...
+    --bucket:int... # a list of numbers
+    pos1            # positional
+    [opt1]          # optional 1
+    [opt2]          # optional 2
+    [tail...]       # tail arg
+''')
+def run(switch, value, bucket, pos1, opt1, opt2, tail):
+    """a demo command that shows all the types of options"""
+    return [switch, value, bucket, pos1, opt1, opt2, tail]
+
+
+
+vex_cmd.main(__name__)

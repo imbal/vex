@@ -740,7 +740,7 @@ class Group:
         return self.command.subcommand(name, short=short, long=long, aliases=aliases, group=self.name)
 
 class Command:
-    def __init__(self, name, short=None, long=None, aliases=()):
+    def __init__(self, name, short=None,*, long=None, aliases=(), prefixes=()):
         self.name = name
         self.prefix = [] 
         self.subcommands = {}
@@ -754,6 +754,7 @@ class Command:
         self.nargs = 0
         self.call_fn = None
         self.complete_fn= None
+        self.prefixes=prefixes
 
     # -- builder methods
 
@@ -840,11 +841,11 @@ class Command:
             handler = self.call_fn
         return handler
 
-    def main(self, name, *, adverbs=()):
+    def main(self, name):
         if name == '__main__':
             argv = sys.argv[1:]
             environ = os.environ
-            code = main(self, argv, environ, adverbs=adverbs)
+            code = main(self, argv, environ)
             sys.exit(code)
 
     def render(self):
@@ -872,7 +873,7 @@ class Command:
         )
             
 
-def main(root, argv, environ, adverbs):
+def main(root, argv, environ):
     obj = root.render()
 
     if 'COMP_LINE' in environ and 'COMP_POINT' in environ:
@@ -881,7 +882,7 @@ def main(root, argv, environ, adverbs):
         tmp = prefix.lstrip().split(' ', 1)
         if len(tmp) > 1:
             path = tmp[1].split(' ')
-            if path[0] in adverbs or path[0] == 'help':
+            if path[0] in root.prefixes or path[0] in ('help', 'debug'):
                 if len(path) > 1:
                     path = path[1].split(':') 
                     result = obj.complete_arg(path, path[2:], arg)
@@ -892,8 +893,6 @@ def main(root, argv, environ, adverbs):
                 result = obj.complete_arg(path0, path[1:], arg)
         else:
             result = obj.complete_path([], arg.split(':'))
-            if "help".startswith(arg):
-                print("help ")
         if isinstance(result, Complete):
             result = root.complete_fn(result.prefix, result.name, result.argtype)
         for line in result:
@@ -908,7 +907,7 @@ def main(root, argv, environ, adverbs):
             path = argv.pop(0).strip().split(':')
         action = obj.parse_args(path, argv, environ, [])
         action = Action("help", action.path, {})
-    elif argv and argv[0] in adverbs and any(argv[1:]):
+    elif argv and (argv[0] in ('debug', 'help') or argv[0] in root.prefixes) and any(argv[1:]):
         mode = argv.pop(0)
         path = []
         if argv and not argv[0].startswith('--'):
@@ -943,7 +942,7 @@ def main(root, argv, environ, adverbs):
         elif action.mode == "help":
             result = obj.help(action.path, usage=False)
             callback = lambda:result
-        elif action.mode == "call" or action.mode in adverbs:
+        elif action.mode in ("call", "debug") or action.mode in root.prefixes:
             callback =  root.bind(action.path, action.argv)
         else:
             raise Error('what')
