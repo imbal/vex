@@ -308,6 +308,28 @@ class objects:
             self.state = state # 
             self.message = message
             self.activity = activity
+            
+        def repo_to_full_path(self, project, file):
+            file = os.path.normpath(file)
+            if os.path.commonpath((file, project.VEX)) == project.VEX:
+                path = os.path.relpath(file, project.VEX)
+                return os.path.normpath(os.path.join(project.settings.dir, path))
+            else:
+                path = os.path.relpath(file, self.prefix)
+                return os.path.normpath(os.path.join(project.working_dir, path))
+
+        def full_to_repo_path(self, project, file):
+            file = os.path.normpath(file)
+            if os.path.commonpath((project.settings.dir, file)) == project.settings.dir:
+                path = os.path.relpath(file, project.settings.dir)
+                path = project.nfc_name(path)
+                return os.path.normpath(os.path.join(project.VEX, path))
+            else:
+                if file.startswith(project.config_dir):
+                    raise VexBug('nope. not .vex')
+                path = os.path.relpath(file, project.working_dir)
+                path = project.nfc_name(path)
+                return os.path.normpath(os.path.join(self.prefix, path))
 
     @codec.register
     class RestoreSession:
@@ -706,7 +728,7 @@ class Cancel(Exception):
     pass
 
 
-class PhysicalTransaction:
+class SessionTransaction:
     def __init__(self, project, command):
         self.project = project
         self.command = command
@@ -727,20 +749,17 @@ class PhysicalTransaction:
         self.old_states = {}
         self.new_states = {}
 
-    def active(self):
-        return self.get_session(self.active_uuid)
-
     def cancel(self):
         raise Cancel()
 
     def prefix(self):
-        return self.get_state("prefix")
+        return self.active().prefix
 
     def repo_to_full_path(self, file):
-        return self.project.repo_to_full_path(self.prefix(),file)
+        return self.active().repo_to_full_path(self.project, file)
 
     def full_to_repo_path(self, file):
-        return self.project.full_to_repo_path(self.prefix(),file)
+        return self.active().full_to_repo_path(self.project, file)
 
     def addr_for_file(self, file):
         return self.project.addr_for_file(file)
@@ -1359,7 +1378,7 @@ class PhysicalTransaction:
             working = {}
         return objects.Action(self.now, self.command, changes, blobs, working)
 
-class LogicalTransaction:
+class SwitchTransaction:
     def __init__(self, project, command):
         self.project = project
         self.command = command
@@ -1606,27 +1625,6 @@ class Project:
     def put_scratch_file(self, value, addr=None):
         return self.repo.put_scratch_file(value, addr)
 
-    def repo_to_full_path(self, prefix, file):
-        file = os.path.normpath(file)
-        if os.path.commonpath((file, self.VEX)) == self.VEX:
-            path = os.path.relpath(file, self.VEX)
-            return os.path.normpath(os.path.join(self.settings.dir, path))
-        else:
-            path = os.path.relpath(file, prefix)
-            return os.path.normpath(os.path.join(self.working_dir, path))
-
-    def full_to_repo_path(self, prefix, file):
-        file = os.path.normpath(file)
-        if os.path.commonpath((self.settings.dir, file)) == self.settings.dir:
-            path = os.path.relpath(file, self.settings.dir)
-            path = self.nfc_name(path)
-            return os.path.normpath(os.path.join(self.VEX, path))
-        else:
-            if file.startswith(self.config_dir):
-                raise VexBug('nope. not .vex')
-            path = os.path.relpath(file, self.working_dir)
-            path = self.nfc_name(path)
-            return os.path.normpath(os.path.join(prefix, path))
 
     def check_files(self, files):
         output = []
@@ -1686,7 +1684,7 @@ class Project:
     @contextmanager
     def do_without_undo(self, command):
         active = self.state.get("active")
-        txn = PhysicalTransaction(self, command)
+        txn = SessionTransaction(self, command)
         try:
             yield txn
         except Cancel as e:
@@ -1702,7 +1700,7 @@ class Project:
         if not self.history.clean_state():
             raise VexCorrupt('Project history not in a clean state.')
 
-        txn = PhysicalTransaction(self, command)
+        txn = SessionTransaction(self, command)
         try:
             yield txn
         except Cancel as e:
@@ -1722,7 +1720,7 @@ class Project:
         if not self.history.clean_state():
             raise VexCorrupt('Project history not in a clean state.')
 
-        txn = LogicalTransaction(self, command)
+        txn = SwitchTransaction(self, command)
         try:
             yield txn
         except Cancel as e:
@@ -1842,11 +1840,11 @@ class Project:
     def apply_working_changes(self, kind, changes):
         if not changes:
             return
-        prefix = self.prefix()
+        active = self.active()
         dirs = set()
         for name in sorted(changes[kind], key=lambda x: x.split('/')):
             addr = changes[kind][name]
-            path = self.repo_to_full_path(prefix, name)
+            path = active.repo_to_full_path(self, name)
             if kind == 'new':
                 old = changes['old'][name]
             elif kind == 'old':
@@ -1942,7 +1940,7 @@ class Project:
         for name, entry in session.files.items():
             if not entry.working:       continue
             if entry.kind == 'ignore':  continue
-            path = self.repo_to_full_path(prefix, name)
+            path = session.repo_to_full_path(self, name)
             entry.refresh(path, self.addr_for_file)
 
 
@@ -1995,6 +1993,8 @@ class Project:
     def restore_session(self, prefix, session):
         if not self._lock:
             raise VexBug('unlocked')
+        session.prefix = prefix
+
         for name in sorted(session.files, key=lambda x:x.split('/')):
             entry = session.files[name]
             if os.path.commonpath((name, prefix)) != prefix and os.path.commonpath((name, self.VEX)) != self.VEX:
@@ -2011,7 +2011,7 @@ class Project:
             if entry.kind == 'ignore':
                 continue
 
-            path = self.repo_to_full_path(prefix, name)
+            path = session.repo_to_full_path(self, name)
 
             if entry.kind == "ignore":
                 pass
@@ -2037,7 +2037,6 @@ class Project:
             # if fail to extract, change to 'missing'
             entry.working = True
 
-        session.prefix = prefix
         self.sessions.set(session.uuid, session)
         self.state.set('prefix', prefix)
         self.state.set('active', session.uuid)
@@ -2132,9 +2131,9 @@ class Project:
 
             root_path = '/'
 
-            ignore_addr = txn.put_file(txn.repo_to_full_path('/.vex/ignore'))
-            include_addr = txn.put_file(txn.repo_to_full_path('/.vex/include'))
-            template_addr = txn.put_file(txn.repo_to_full_path('/.vex/template'))
+            ignore_addr = txn.put_file(self.settings.filename('ignore'))
+            include_addr = txn.put_file(self.settings.filename('include'))
+            template_addr = txn.put_file(self.settings.filename('template'))
             
             changes = {
                     '/' : [ objects.AddDir(properties={}) ] ,
@@ -2183,7 +2182,7 @@ class Project:
             for name, c in changeset.items():
                 e = session.files[name]
                 if e.kind == 'file' and e.addr:
-                    output[name] = dict(old=self.repo.get_file_path(e.addr), new=self.repo_to_full_path(self.prefix(),name))
+                    output[name] = dict(old=self.repo.get_file_path(e.addr), new=session.repo_to_full_path(self.prefix(),name))
             output2 = {}
             for name, d in output.items():
                 df= file_diff(name, d['old'], d['new'])
@@ -2202,7 +2201,7 @@ class Project:
             for name, c in session.files.items():
                 e = files[name]
                 if e.kind == 'file' and e.addr:
-                    output[name] = dict(old=self.repo.get_file_path(e.addr), new=self.repo_to_full_path(self.prefix(),name))
+                    output[name] = dict(old=self.repo.get_file_path(e.addr), new=session.repo_to_full_path(self, name))
             output2 = {}
             for name, d in output.items():
                 df = file_diff(name, d['old'], d['new'])
