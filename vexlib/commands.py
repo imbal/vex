@@ -17,7 +17,7 @@ import tempfile
 
 from contextlib import contextmanager
 
-from vexlib.cli import Command
+from vexlib.cli import Command, argspec
 from vexlib.project import Project
 from vexlib.errors import VexBug, VexNoProject, VexNoHistory, VexUnclean, VexError, VexArgument, VexUnimplemented
 
@@ -164,7 +164,8 @@ def Call(mode, path, args, callback):
 
 
 vex_init = vex_cmd.subcommand('init',short="create a new vex project")
-@vex_init.run('''
+@vex_init.run()
+@argspec('''
     --working:path    # Working directory, where files are edited/changed
     --config:path     # Normally /working_dir/.vex if not given 
     --prefix:path     # Subdirectory to check out of the repository, normally the working directory name

@@ -804,6 +804,9 @@ class Command:
 
         def decorator(fn):
             self.run_fn = fn
+            if hasattr(fn, 'argspec'):
+                self.nargs, self.argspec = fn.nargs, fn.argspec
+                return fn
 
             args = list(self.run_fn.__code__.co_varnames[:self.run_fn.__code__.co_argcount])
             args = [a for a in args if not a.startswith('_')]
@@ -969,3 +972,25 @@ def main(root, argv, environ):
         print()
         print(e.value)
         return e.exit_code
+
+
+def argspec(spec=None):
+    def decorator(fn):
+        nonlocal spec
+        args = list(fn.__code__.co_varnames[:fn.__code__.co_argcount])
+        args = [a for a in args if not a.startswith('_')]
+        
+        if spec is None:
+            nargs, spec = parse_argspec(" ".join(args))
+        else:
+            nargs, spec = parse_argspec(spec)
+
+        if nargs != len(args):
+            raise BadDefinition('bad option definition')
+
+        fn.nargs = nargs
+        fn.argspec = spec
+
+        return fn
+    return decorator
+

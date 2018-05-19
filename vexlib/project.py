@@ -300,12 +300,12 @@ class objects:
             if not (uuid and branch and prepare and commit): raise Exception('no')
             if state not in self.States: raise Exception('no')
             self.uuid = uuid
-            self.branch = branch
-            self.prepare = prepare
-            self.prefix = prefix
-            self.commit = commit
-            self.files = files
-            self.state = state
+            self.branch = branch # uuid
+            self.prepare = prepare # commit
+            self.prefix = prefix # path
+            self.commit = commit # commit
+            self.files = files # { repo_name : Tracked } 
+            self.state = state # 
             self.message = message
             self.activity = activity
 
@@ -661,7 +661,7 @@ class History:
         mode, next, old_current = self.store.next()
         if mode not in self.Modes:
             raise VexCorupt('Real bad')
-        if mode == 'undo' or not old_current:
+        if not old_current:
             raise VexBug('no')
         prev, obj = self.store.get_entry(next)
         current = self.store.current()
@@ -678,7 +678,7 @@ class History:
         mode, next, old_current = self.next()
         if mode not in self.Modes:
             raise VexCorupt('Real bad')
-        if mode == 'undo' or not old_current:
+        if not old_current:
             raise VexBug('no')
         prev, obj = self.store.get_entry(next)
         current = self.store.current()
@@ -1650,7 +1650,16 @@ class Project:
     # ... and so are these, but, they interact with the action log
     def rollback_new_action(self):
         with self.history.rollback_new() as (mode, action):
-            if action:
+            if mode =='undo':
+                if isinstance(action, objects.Action):
+                    self.apply_physical_changes('new', action.changes)
+                elif isinstance(action, objects.Switch):
+                    # raise VexUnimplemented('this should probably pass but ...')
+                    pass
+                else:
+                    raise VexBug('welp')
+
+            elif action:
                 if isinstance(action, objects.Action):
                     self.apply_physical_changes('old', action.changes)
                 elif isinstance(action, objects.Switch):
