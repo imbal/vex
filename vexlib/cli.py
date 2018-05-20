@@ -5,7 +5,7 @@ decorate functions to dispatch:
 
 ```
 cmd = cli.Command('florb','florb the morps')
-@cmd.run("one [two] [three...]")
+@cmd.on_run("one [two] [three...]")
 def cmd_run(one, two, three):
     print([one, two, three])
 ```
@@ -35,14 +35,14 @@ root = cli.Command('example', 'my program')
 
 subcommand = cli.subcommand('one', 'example subcommand')
 
-@subcommand.run(...)
+@subcommand.on_run(...)
 def subcommand_run(...):
     ...
 ```
 
 `cmd help one` `cmd one --help`, `cmd help two` `cmd two --help` will print out the manual and usage for `one` and `two` respectively.
 
-The parameter to `run()`, is called an argspec.
+The parameter to `on_run()`, is called an argspec.
 
 ## Argspec
 
@@ -75,7 +75,7 @@ Passing a multi-line string allows you to pass in short descriptions of the argu
 
 ```
 demo = cli.Command('demo', 'cli example programs')
-@demo.run('''
+@demo.on_run('''
     --switch?       # a demo switch
     --value:str     # pass with --value=...
     --bucket:int... # a list of numbers
@@ -518,6 +518,157 @@ class CommandDescription:
     def version(self):
         return "<None>"
 
+
+class Action:
+    def __init__(self, mode, command, argv, errors=()):
+        self.mode = mode
+        self.path = command
+        self.argv = argv
+        self.errors = errors
+
+class Error(Exception):
+    def __init__(self, exit_code, value) :
+        self.exit_code = exit_code
+        self.value = value
+        Exception.__init__(self)
+
+class Group:
+    def __init__(self, name, command):
+        self.name = name
+        self.command = command
+        
+    def subcommand(self, name, short=None, long=None, aliases=()):
+        return self.command.subcommand(name, short=short, long=long, aliases=aliases, group=self.name)
+
+class Command:
+    def __init__(self, name, short=None,*, long=None, aliases=(), prefixes=()):
+        self.name = name
+        self.prefix = [] 
+        self.subcommands = {}
+        self.groups = {None:[]}
+        self.subaliases = {}
+        self.run_fn = None
+        self.short = short
+        self.long = long
+        self.aliases=aliases
+        self.argspec = None
+        self.nargs = 0
+        self.call_fn = None
+        self.complete_fn= None
+        self.prefixes=prefixes
+
+    def main(self, name):
+        if name == '__main__':
+            argv = sys.argv[1:]
+            environ = os.environ
+            code = main(self, argv, environ)
+            sys.exit(code)
+
+    # -- builder methods
+
+    def group(self, name):
+        self.groups[name] = []
+        return Group(name, self)
+
+    def subcommand(self, name, short=None, long=None, aliases=(), group=None):
+        #if self.argspec:
+        #    raise Exception('bad')
+        if name in self.subaliases or name in self.subcommands:
+            raise BadDefinition('Duplicate {}'.format(name))
+        for a in aliases:
+            if a in self.subaliases or a in self.subcommands:
+                raise BadDefinition('Duplicate {}'.format(a))
+        cmd = Command(name, short)
+        for a in aliases:
+            self.subaliases[a] = name
+        cmd.prefix.extend(self.prefix)
+        cmd.prefix.append(self.name)
+        self.subcommands[name] = cmd
+        self.groups[group].append(name)
+        return cmd
+
+    def on_complete(self):
+        def _decorator(fn):
+            self.complete_fn = fn
+            return fn
+        return _decorator
+
+    def on_call(self):
+        def _decorator(fn):
+            self.call_fn = fn
+            return fn
+        return _decorator
+
+
+    def on_run(self, argspec=None):
+        """A decorator for setting the function to be run"""
+        if self.run_fn:
+            raise BadDefinition('double definition')
+
+        #if self.subcommands:
+        #    raise BadDefinition('bad')
+
+        if argspec is not None:
+            self.nargs, self.argspec = parse_argspec(argspec)
+
+        def decorator(fn):
+            self.run_fn = fn
+            long = self.long
+            if not long:
+                long = self.run_fn.__doc__
+            if long:
+                out = []
+                for para in long.lstrip().rstrip().split('\n\n'):
+                    para = " ".join(x for x in para.split() if x)
+                    out.append(para)
+                long = "\n\n".join(out)
+            else:
+                long = None
+            if long and '\n' in long and not self.short:
+                self.short, self.long = long.split('\n',1)
+            else:
+                self.long = long
+
+            if hasattr(fn, 'argspec'):
+                self.nargs, self.argspec = fn.nargs, fn.argspec
+                return fn
+
+            args = list(self.run_fn.__code__.co_varnames[:self.run_fn.__code__.co_argcount])
+            args = [a for a in args if not a.startswith('_')]
+            
+            if not self.argspec:
+                self.nargs, self.argspec = parse_argspec(" ".join(args))
+            else:
+                if self.nargs != len(args):
+                    raise BadDefinition('bad option definition')
+
+            return fn
+        return decorator
+
+    def handler(self, path):
+        handler = None
+        if path and path[0] in self.subcommands:
+            handler = self.subcommands[path[0]].handler(path[1:])
+        if not handler:
+            handler = self.call_fn
+        return handler
+
+    # -- end of builder methods
+
+    def bind(self, path, argv):
+        if path and path[0] in self.subcommands:
+            return self.subcommands[path[0]].bind(path[1:], argv)
+        elif self.run_fn:
+            if len(argv) == self.nargs:
+                return lambda: self.run_fn(**argv)
+            else:
+                raise Error(-1, "bad options")
+        else:
+            if len(argv) == 0:
+                return lambda: (self.manual())
+            else:
+                raise Error(-1, self.usage())
+
     def complete_path(self, route, path):
         if path:
             output = []
@@ -561,6 +712,44 @@ class CommandDescription:
                 output.append("{} ".format(prefix))
             return output
         return ()
+
+    def parse_args(self, path, argv, environ, route):
+        if self.subcommands and path:
+            if path[0] in self.subaliases:
+                path[0] = self.subaliases[path[0]]
+
+            if path[0] in self.subcommands:
+                return self.subcommands[path[0]].parse_args(path[1:], argv, environ, route+[path[0]])
+            else:
+                if route:
+                    error="unknown subcommand {} for {}".format(path[0],":".join(route))
+                    return Action("error", route, {}, errors=(error,))
+                return Action("error", route, {}, errors=("an unknown command: {}".format(path[0]),))
+
+            # no argspec, print usage
+        elif not self.argspec:
+            if argv and argv[0]:
+                if "--help" in argv:
+                    return Action("usage", route, {})
+                return Action("error", route, {}, errors=("unknown option: {}".format(argv[0]),))
+
+            return Action("help", route, {})
+        else:
+            if '--help' in argv:
+                return Action("usage", route, {})
+            try:
+                args = parse_args(self.argspec, argv, environ)
+                return Action("call", route, args)
+            except BadArg as e:
+                return e.action(route)
+
+    def help(self, path, *, usage=False):
+        if path and path[0] in self.subcommands:
+            return self.subcommands[path[0]].help(path[1:], usage=usage)
+        else:
+            if usage:
+                return self.usage()
+            return self.manual()
 
     def complete_arg(self, path, prefix, text):
         if path: 
@@ -612,45 +801,6 @@ class CommandDescription:
         else:
             return ()
             
-        
-
-    def parse_args(self, path, argv, environ, route):
-        if self.subcommands and path:
-            if path[0] in self.subaliases:
-                path[0] = self.subaliases[path[0]]
-
-            if path[0] in self.subcommands:
-                return self.subcommands[path[0]].parse_args(path[1:], argv, environ, route+[path[0]])
-            else:
-                if route:
-                    error="unknown subcommand {} for {}".format(path[0],":".join(route))
-                    return Action("error", route, {}, errors=(error,))
-                return Action("error", route, {}, errors=("an unknown command: {}".format(path[0]),))
-
-            # no argspec, print usage
-        elif not self.argspec:
-            if argv and argv[0]:
-                if "--help" in argv:
-                    return Action("usage", route, {})
-                return Action("error", route, {}, errors=("unknown option: {}".format(argv[0]),))
-
-            return Action("help", route, {})
-        else:
-            if '--help' in argv:
-                return Action("usage", route, {})
-            try:
-                args = parse_args(self.argspec, argv, environ)
-                return Action("call", route, args)
-            except BadArg as e:
-                return e.action(route)
-
-    def help(self, path, *, usage=False):
-        if path and path[0] in self.subcommands:
-            return self.subcommands[path[0]].help(path[1:], usage=usage)
-        else:
-            if usage:
-                return self.usage()
-            return self.manual()
         
     def manual(self):
         output = []
@@ -718,166 +868,7 @@ class CommandDescription:
         return "\n".join(output)
 
 
-class Action:
-    def __init__(self, mode, command, argv, errors=()):
-        self.mode = mode
-        self.path = command
-        self.argv = argv
-        self.errors = errors
-
-class Error(Exception):
-    def __init__(self, exit_code, value) :
-        self.exit_code = exit_code
-        self.value = value
-        Exception.__init__(self)
-
-class Group:
-    def __init__(self, name, command):
-        self.name = name
-        self.command = command
-        
-    def subcommand(self, name, short=None, long=None, aliases=()):
-        return self.command.subcommand(name, short=short, long=long, aliases=aliases, group=self.name)
-
-class Command:
-    def __init__(self, name, short=None,*, long=None, aliases=(), prefixes=()):
-        self.name = name
-        self.prefix = [] 
-        self.subcommands = {}
-        self.groups = {None:[]}
-        self.subaliases = {}
-        self.run_fn = None
-        self.short = short
-        self.long = long
-        self.aliases=aliases
-        self.argspec = None
-        self.nargs = 0
-        self.call_fn = None
-        self.complete_fn= None
-        self.prefixes=prefixes
-
-    # -- builder methods
-
-    def on_complete(self):
-        def _decorator(fn):
-            self.complete_fn = fn
-            return fn
-        return _decorator
-
-    def on_call(self):
-        def _decorator(fn):
-            self.call_fn = fn
-            return fn
-        return _decorator
-
-    def group(self, name):
-        self.groups[name] = []
-        return Group(name, self)
-
-    def subcommand(self, name, short=None, long=None, aliases=(), group=None):
-        #if self.argspec:
-        #    raise Exception('bad')
-        if name in self.subaliases or name in self.subcommands:
-            raise BadDefinition('Duplicate {}'.format(name))
-        for a in aliases:
-            if a in self.subaliases or a in self.subcommands:
-                raise BadDefinition('Duplicate {}'.format(a))
-        cmd = Command(name, short)
-        for a in aliases:
-            self.subaliases[a] = name
-        cmd.prefix.extend(self.prefix)
-        cmd.prefix.append(self.name)
-        self.subcommands[name] = cmd
-        self.groups[group].append(name)
-        return cmd
-
-    def run(self, argspec=None):
-        """A decorator for setting the function to be run"""
-        if self.run_fn:
-            raise BadDefinition('double definition')
-
-        #if self.subcommands:
-        #    raise BadDefinition('bad')
-
-        if argspec is not None:
-            self.nargs, self.argspec = parse_argspec(argspec)
-
-        def decorator(fn):
-            self.run_fn = fn
-            if hasattr(fn, 'argspec'):
-                self.nargs, self.argspec = fn.nargs, fn.argspec
-                return fn
-
-            args = list(self.run_fn.__code__.co_varnames[:self.run_fn.__code__.co_argcount])
-            args = [a for a in args if not a.startswith('_')]
-            
-            if not self.argspec:
-                self.nargs, self.argspec = parse_argspec(" ".join(args))
-            else:
-                if self.nargs != len(args):
-                    raise BadDefinition('bad option definition')
-
-            return fn
-        return decorator
-
-    # -- end of builder methods
-
-    def bind(self, path, argv):
-        if path and path[0] in self.subcommands:
-            return self.subcommands[path[0]].bind(path[1:], argv)
-        elif self.run_fn:
-            if len(argv) == self.nargs:
-                return lambda: self.run_fn(**argv)
-            else:
-                raise Error(-1, "bad options")
-        else:
-            if len(argv) == 0:
-                return lambda: (self.render().manual())
-            else:
-                raise Error(-1, self.render().usage())
-
-    def handler(self, path):
-        handler = None
-        if path and path[0] in self.subcommands:
-            handler = self.subcommands[path[0]].handler(path[1:])
-        if not handler:
-            handler = self.call_fn
-        return handler
-
-    def main(self, name):
-        if name == '__main__':
-            argv = sys.argv[1:]
-            environ = os.environ
-            code = main(self, argv, environ)
-            sys.exit(code)
-
-    def render(self):
-        long = self.long
-        if self.run_fn and not long:
-            long = self.run_fn.__doc__
-        if long:
-            out = []
-            for para in long.lstrip().rstrip().split('\n\n'):
-                para = " ".join(x for x in para.split() if x)
-                out.append(para)
-            long = "\n\n".join(out)
-        else:
-            long = None
-
-        return CommandDescription(
-            name = self.name,
-            prefix = self.prefix,
-            subcommands = {k: v.render() for k,v in self.subcommands.items()},
-            subaliases = self.subaliases,
-            groups = self.groups,
-            short = self.short,
-            long = long,
-            argspec = self.argspec, 
-        )
-            
-
 def main(root, argv, environ):
-    obj = root.render()
 
     if 'COMP_LINE' in environ and 'COMP_POINT' in environ:
         arg, offset =  environ['COMP_LINE'], int(environ['COMP_POINT'])
@@ -888,14 +879,14 @@ def main(root, argv, environ):
             if path[0] in root.prefixes or path[0] in ('help', 'debug'):
                 if len(path) > 1:
                     path = path[1].split(':') 
-                    result = obj.complete_arg(path, path[2:], arg)
+                    result = root.complete_arg(path, path[2:], arg)
                 else:
-                    result = obj.complete_path([], arg.split(':'))
+                    result = root.complete_path([], arg.split(':'))
             else:
                 path0 = path[0].split(':')
-                result = obj.complete_arg(path0, path[1:], arg)
+                result = root.complete_arg(path0, path[1:], arg)
         else:
-            result = obj.complete_path([], arg.split(':'))
+            result = root.complete_path([], arg.split(':'))
         if isinstance(result, Complete):
             result = root.complete_fn(result.prefix, result.name, result.argtype)
         for line in result:
@@ -908,14 +899,14 @@ def main(root, argv, environ):
         path = []
         if argv and not argv[0].startswith('--'):
             path = argv.pop(0).strip().split(':')
-        action = obj.parse_args(path, argv, environ, [])
+        action = root.parse_args(path, argv, environ, [])
         action = Action("help", action.path, {})
     elif argv and (argv[0] in ('debug', 'help') or argv[0] in root.prefixes) and any(argv[1:]):
         mode = argv.pop(0)
         path = []
         if argv and not argv[0].startswith('--'):
             path = argv.pop(0).strip().split(':')
-        action = obj.parse_args(path, argv, environ, [])
+        action = root.parse_args(path, argv, environ, [])
         if action.path == []:
             action = Action(action.mode, [mode], action.argv)
         elif action.mode == "call":
@@ -928,22 +919,22 @@ def main(root, argv, environ):
         path = []
         if argv and not argv[0].startswith('--'):
             path = argv.pop(0).strip().split(':')
-        action = obj.parse_args(path, argv, environ, [])
+        action = root.parse_args(path, argv, environ, [])
 
 
     try:
         if action.mode == "error":
             print("Error: {}".format(", ".join(action.errors)))
-            print(obj.help(action.path, usage=True))
+            print(root.help(action.path, usage=True))
             return -1
         elif action.mode == "version":
-            result = obj.version()
+            result = root.version()
             callback = lambda:result
         elif action.mode == "usage":
-            result = obj.help(action.path, usage=True)
+            result = root.help(action.path, usage=True)
             callback = lambda:result
         elif action.mode == "help":
-            result = obj.help(action.path, usage=False)
+            result = root.help(action.path, usage=False)
             callback = lambda:result
         elif action.mode in ("call", "debug") or action.mode in root.prefixes:
             callback =  root.bind(action.path, action.argv)

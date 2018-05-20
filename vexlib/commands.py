@@ -163,8 +163,8 @@ def Call(mode, path, args, callback):
     return -1
 
 
-vex_init = vex_cmd.subcommand('init',short="create a new vex project")
-@vex_init.run()
+vex_init = vex_cmd.subcommand('init')
+@vex_init.on_run()
 @argspec('''
     --working:path    # Working directory, where files are edited/changed
     --config:path     # Normally /working_dir/.vex if not given 
@@ -223,10 +223,12 @@ def Init(directory, working, config, prefix, include, ignore):
             p.init(prefix, include, ignore)
 
 
-vex_undo = vex_cmd.subcommand('undo', short="undo the last command")
-@vex_undo.run()
+vex_undo = vex_cmd.subcommand('undo')
+@vex_undo.on_run()
 def Undo():
     """
+        Undo the last command.
+
         `vex undo` will return the project to how it was before the last command changed 
         things. running `vex undo:list` will show the list of commands that can be undone.
 
@@ -257,10 +259,12 @@ def Undo():
     if action:
         yield 'undid {}'.format(action.command)
 
-vex_undo_list = vex_undo.subcommand('list', short="list the commands that canbe undone")
-@vex_undo_list.run()
+vex_undo_list = vex_undo.subcommand('list')
+@vex_undo_list.on_run()
 def UndoList():
     """
+        List the commands that can be undone.
+
         `vex undo` will return the project to how it was before the last command changed 
         things. running `vex undo:list` will show the list of commands that can be undone.
 
@@ -284,12 +288,15 @@ def UndoList():
         yield "{}: {}, ran {}\t{}".format(count, entry.time, entry.command,alternative)
         yield ""
 
-vex_redo = vex_cmd.subcommand('redo', "redo last undone command")
-@vex_redo.run('''
+vex_redo = vex_cmd.subcommand('redo')
+@vex_redo.on_run()
+@argspec('''
     --choice:int # Which command to redo. `--choice=0` means the last action uandone.     
 ''')
 def Redo(choice):
     """
+        Redo the last undone command.
+
         `vex redo` will redo the last action undone. `vex redo --list` will show the
         list of commands to choose from.
 
@@ -325,10 +332,12 @@ def Redo(choice):
             yield ('Nothing to redo')
 
 
-vex_redo_list = vex_redo.subcommand('list', "list the commands that can be redone")
-@vex_redo_list.run()
+vex_redo_list = vex_redo.subcommand('list')
+@vex_redo_list.on_run()
 def RedoList():
     """
+        List the commands that can be redone.
+
         `vex redo` will redo the last action undone. `vex redo:list` will show the
         list of commands to choose from.
     """
@@ -344,13 +353,16 @@ def RedoList():
             yield ('Nothing to redo')
 
 
-vex_status = vex_cmd.subcommand('status', short="list the files being tracked by vex")
-@vex_status.run('''
+vex_status = vex_cmd.subcommand('status')
+@vex_status.on_run()
+@argspec('''
     --all?      # Show all files inside the repo, even ones outside working copy
     --missing?  # Show untracked files
 ''')
 def Status(all, missing):
     """
+        Show the files and directories tracked by vex.
+
         `vex status` shows the state of each visible file, `vex status --all` shows the status 
         of every file in the current session/branch.
     """
@@ -376,12 +388,15 @@ def Status(all, missing):
                 yield "{:16}\t{}".format('untracked', path)
 
 
-vex_log = vex_cmd.subcommand('log', aliases=['changelog'], short="list changes to project")
-@vex_log.run('''
+vex_log = vex_cmd.subcommand('log', aliases=['changelog'])
+@vex_log.on_run()
+@argspec('''
         --all? # Show all changes
 ''')
 def Log(all):
     """
+        List changes made to the project.
+
         `vex changelog` or `vex log` shows the list of commits inside a branch, using 
         the current branch if none given.
     """
@@ -392,15 +407,17 @@ def Log(all):
         yield ""
 
 
-vex_diff = vex_cmd.subcommand('diff', short="show the current changes to the project as a diff")
-vex_diff_file = vex_diff.subcommand('file', short='show changed files since last commit')
-argspec = '''
+vex_diff = vex_cmd.subcommand('diff')
+vex_diff_file = vex_diff.subcommand('file')
+@vex_diff.on_run()
+@vex_diff_file.on_run()
+@argspec('''
     [file:path...] # difference between two files
-'''
-@vex_diff.run(argspec)
-@vex_diff_file.run(argspec)
+''')
 def Diff(file):
     """
+        Show the changes, line by line, that have been made since the last commit.
+
         `vex diff` shows the changes waiting to be committed for the given files
     """
     p = open_project()
@@ -412,14 +429,17 @@ def Diff(file):
 
 vex_cmd_files = vex_cmd.group('files')
 
-vex_add = vex_cmd_files.subcommand('add','add files to the project')
-@vex_add.run('''
+vex_add = vex_cmd_files.subcommand('add')
+@vex_add.on_run()
+@argspec('''
     --include:str... # files to include whe using vex add, can be passed multiple times 
     --ignore:str...  # files to ignore when using vex add, can be passed multiple times
     [file:path...]     # filename or directory to add
 ''')
 def Add(include, ignore, file):
     """
+        Add files to the project.
+
         `vex add` will add all files given to the project, and recurse through
         subdirectories too.
 
@@ -443,7 +463,7 @@ def Add(include, ignore, file):
             yield "add: {}".format(f)
 
 vex_forget = vex_cmd_files.subcommand('forget','remove files from the project, without deleting them')
-@vex_forget.run('''
+@vex_forget.on_run('''
         [file:path...] # Files to remove from next commit
 ''')
 def Forget(file):
@@ -464,7 +484,7 @@ def Forget(file):
             yield "forget: {}".format(f)
 
 vex_remove = vex_cmd_files.subcommand('remove','remove files from the project, deleting them')
-@vex_remove.run('''
+@vex_remove.on_run('''
         [file:path...] # Files to remove from working copy
 ''')
 def Remove(file):
@@ -485,7 +505,7 @@ def Remove(file):
             yield "remove: {}".format(f)
 
 vex_restore = vex_cmd_files.subcommand('restore','restore files from the project, overwriting modifications')
-@vex_restore.run('''
+@vex_restore.on_run('''
         [file:path...] # Files to restore to working copy
 ''')
 def Restore(file):
@@ -501,7 +521,7 @@ def Restore(file):
             f = os.path.relpath(f)
             yield "restore: {}".format(f)
 vex_missing = vex_cmd_files.subcommand('missing','files in current directory but not in project', aliases=['untracked'])
-@vex_missing.run('')
+@vex_missing.on_run('')
 def Missing():
     """
         `vex missing` shows missing files
@@ -513,12 +533,12 @@ def Missing():
 vex_cmd_commit = vex_cmd.group("commit")
 
 vex_id = vex_cmd_commit.subcommand('id', short='what was the last change')
-@vex_id.run()
+@vex_id.on_run()
 def Id():
     raise VexUnimplemented()
 
 vex_commit = vex_cmd_commit.subcommand('commit', short="save the working copy and add an entry to the project changes")
-@vex_commit.run('''
+@vex_commit.on_run('''
     --add?          # Run `vex add` before commiting
     [file:path...]       # Commit only a few changed files
 ''')
@@ -549,7 +569,7 @@ def Commit(add, file):
             yield 'commit: Nothing to commit'
 
 vex_prepare = vex_commit.subcommand('prepare', short="save current working copy to prepare for commit", aliases=['save'])
-@vex_prepare.run('''
+@vex_prepare.on_run('''
         --add?          # Run `vex add` before commiting
         --watch?         # Unsupported
         [file:path...] # Files to add to the commt 
@@ -585,7 +605,7 @@ def Prepare(file,watch, add):
             p.prepare(files)
 
 vex_commit_prepared = vex_commit.subcommand('prepared', short="commit prepared files")
-@vex_commit_prepared.run()
+@vex_commit_prepared.on_run()
 def CommitPrepared():
     """
         `vex commit:prepared` transforms earlier `vex prepare` into a commit
@@ -604,7 +624,7 @@ def CommitPrepared():
 
 
 vex_amend = vex_commit.subcommand('amend', short="replace the last commit with the current changes in the project")
-@vex_amend.run('''
+@vex_amend.on_run('''
         [file:path...] # files to change
 ''')
 def Amend(file):
@@ -629,8 +649,8 @@ def Amend(file):
 
 vex_message = vex_cmd_commit.subcommand('message', short="edit commit message")
 vex_message_edit = vex_message.subcommand('edit', short='edit commit message')
-@vex_message.run('--editor [message]')
-@vex_message_edit.run('--editor [message]')
+@vex_message.on_run('--editor [message]')
+@vex_message_edit.on_run('--editor [message]')
 def EditMessage(editor, message):
     p = open_project()
     if message:
@@ -654,20 +674,20 @@ def EditMessage(editor, message):
 
 
 vex_message_get = vex_message.subcommand('get', 'get commit message')
-@vex_message_get.run('')
+@vex_message_get.on_run('')
 def GetMessage():
     p = open_project()
     if p.state.exists('message'):
         yield p.state.get('message')
 
 vex_message_filename = vex_message.subcommand('filename', 'commit message filename', aliases=['path'])
-@vex_message_filename.run('')
+@vex_message_filename.on_run('')
 def MessageFilename():
     p = open_project()
     yield p.state.filename('message')
 
 vex_message_set = vex_message.subcommand('set', 'set commit message')
-@vex_message_set.run('message')
+@vex_message_set.on_run('message')
 def SetMessage(message):
     p = open_project()
     with p.lock('message:set') as p:
@@ -676,8 +696,8 @@ def SetMessage(message):
 
 vex_template = vex_message.subcommand('template', short="edit commit template")
 vex_template_edit = vex_template.subcommand('edit', short='edit commit template')
-@vex_template.run('--editor')
-@vex_template_edit.run('--editor')
+@vex_template.on_run('--editor')
+@vex_template_edit.on_run('--editor')
 def EditTemplate(editor):
     p = open_project()
     with p.lock('editor') as p:
@@ -696,20 +716,20 @@ def EditTemplate(editor):
 
 
 vex_template_get = vex_template.subcommand('get', 'get commit template')
-@vex_template_get.run('')
+@vex_template_get.on_run('')
 def GetTemplate():
     p = open_project()
     if p.settings.exists('template'):
         yield p.settings.get('template')
 
 vex_template_filename = vex_template.subcommand('filename', 'commit template filename', aliases=['path'])
-@vex_template_filename.run('')
+@vex_template_filename.on_run('')
 def TemplateFilename():
     p = open_project()
     yield p.settings.filename('template')
 
 vex_template_set = vex_template.subcommand('set', 'set commit template')
-@vex_template_set.run('template')
+@vex_template_set.on_run('template')
 def SetTemplate(template):
     p = open_project()
     with p.lock('template:set') as p:
@@ -717,7 +737,7 @@ def SetTemplate(template):
         yield "set"
 
 vex_commit_apply = vex_commit.subcommand('apply', 'apply changes from other branch to current session')
-@vex_commit_apply.run('branch:branch')
+@vex_commit_apply.on_run('branch:branch')
 def Apply(branch):
     p = open_project()
     with p.lock('apply') as p:
@@ -726,7 +746,7 @@ def Apply(branch):
         p.apply_changes_from_branch(branch)
 
 vex_commit_append = vex_commit.subcommand('append', 'append changes from other branch to current session')
-@vex_commit_append.run('branch:branch')
+@vex_commit_append.on_run('branch:branch')
 def Append(branch):
     p = open_project()
     with p.lock('append') as p:
@@ -744,7 +764,7 @@ def Append(branch):
             yield 'append: nothing to commit'
 
 vex_commit_replay = vex_commit.subcommand('replay', 'replay changes from other branch to current session')
-@vex_commit_replay.run('branch:branch')
+@vex_commit_replay.on_run('branch:branch')
 def Replay(branch):
     p = open_project()
     with p.lock('replay') as p:
@@ -753,27 +773,27 @@ def Replay(branch):
         p.replay_changes_from_branch(branch)
 
 vex_commit_squash = vex_commit.subcommand('squash', '* flatten commits into one')
-@vex_commit_squash.run()
+@vex_commit_squash.on_run()
 def Squash():
     raise VexUnimplemented()
 
 vex_rollback = vex_commit.subcommand('rollback', '* take older version and re-commit it')
-@vex_rollback.run()
+@vex_rollback.on_run()
 def Rollback():
     raise VexUnimplemented()
 
 vex_revert = vex_commit.subcommand('revert','* new commit without changes made in an old version')
-@vex_revert.run()
+@vex_revert.on_run()
 def Revert():
     raise VexUnimplemented()
 
 vex_rewind = vex_cmd_commit.subcommand('rewind','* rewind session to earlier change')
-@vex_rewind.run()
+@vex_rewind.on_run()
 def Rewind():
     raise VexUnimplemented()
 
 vex_update = vex_cmd_commit.subcommand('update','* update branch to start from new upstream head')
-@vex_update.run()
+@vex_update.on_run()
 def Update():
     raise VexUnimplemented()
 
@@ -782,7 +802,7 @@ def Update():
 vex_cmd_branch = vex_cmd.group('branch')
 
 vex_branch = vex_cmd_branch.subcommand('branch', short="open/create branch")
-@vex_branch.run('[name:branch]')
+@vex_branch.on_run('[name:branch]')
 def Branch(name):
     """
 
@@ -797,8 +817,8 @@ def Branch(name):
 
 vex_branch_list = vex_branch.subcommand('list', short="list branches")
 vex_branches = vex_cmd_branch.subcommand('branches', short="list branches")
-@vex_branch_list.run()
-@vex_branches.run()
+@vex_branch_list.on_run()
+@vex_branches.on_run()
 def Branches():
     p = open_project()
     with p.lock('branches') as p:
@@ -816,7 +836,7 @@ def Branches():
                 yield branch.uuid
 
 vex_branch_get = vex_branch.subcommand('get', short="get branch info", aliases=["show", "info"])
-@vex_branch_get.run('[name:branch]')
+@vex_branch_get.on_run('[name:branch]')
 def BranchInfo(name):
     """
 
@@ -838,7 +858,7 @@ def BranchInfo(name):
         yield branch.name
 
 vex_open = vex_branch.subcommand('open', short="open or create a branch")
-@vex_open.run('name:branch')
+@vex_open.on_run('name:branch')
 def OpenBranch(name):
     """
 
@@ -848,7 +868,7 @@ def OpenBranch(name):
         p.open_branch(name, create=False)
 
 vex_new = vex_branch.subcommand('new', short="create a new branch")
-@vex_new.run('name:branch')
+@vex_new.on_run('name:branch')
 def NewBranch(name):
     """
 
@@ -860,7 +880,7 @@ def NewBranch(name):
         p.new_branch(name)
 
 vex_saveas = vex_branch.subcommand('saveas', short="save session as a new branch, leaving old one alone")
-@vex_saveas.run('name:branch')
+@vex_saveas.on_run('name:branch')
 def SaveAsBranch(name):
     """
 
@@ -873,7 +893,7 @@ def SaveAsBranch(name):
         return name
 
 vex_rename = vex_branch.subcommand('rename', short="rename current branch")
-@vex_rename.run('name:branch')
+@vex_rename.on_run('name:branch')
 def RenameBranch(name):
     """
 
@@ -885,7 +905,7 @@ def RenameBranch(name):
         p.rename_branch(name)
 
 vex_swap = vex_branch.subcommand('swap', short="swap name with another branch")
-@vex_swap.run('name:branch')
+@vex_swap.on_run('name:branch')
 def SwapBranch(name):
     """
 
@@ -902,8 +922,8 @@ vex_branch_diff = vex_branch.subcommand('diff')
 argspec= ('''
         [branch:branch] # name of branch to check, defaults to current branch
 ''')
-@vex_diff_branch.run(argspec)
-@vex_branch_diff.run(argspec)
+@vex_diff_branch.on_run(argspec)
+@vex_branch_diff.on_run(argspec)
 def DiffBranch(branch):
     """
         `vex diff:branch` shows the changes bewtween working copy and a branch
@@ -924,7 +944,7 @@ def DiffBranch(branch):
             yield diff
 
 vex_switch = vex_cmd.subcommand('switch', short="change which directory (inside the project) is worked on")
-@vex_switch.run('[prefix]')
+@vex_switch.on_run('[prefix]')
 def Switch(prefix):
     """
 
@@ -942,7 +962,7 @@ def Switch(prefix):
 vex_session = vex_cmd_branch.subcommand('session',short="describe the active session for the current branch")
 vex_sessions = vex_cmd_branch.subcommand('sessions',short="show all sessions for current branch")
 
-@vex_sessions.run()
+@vex_sessions.on_run()
 def Sessions():
     p = open_project()
     with p.lock('sessions') as p:
@@ -959,8 +979,8 @@ def Sessions():
 
 vex_ignore = vex_cmd_files.subcommand('ignore', short="add ignored files")
 vex_ignore_add = vex_ignore.subcommand('add', 'add ignored files')
-@vex_ignore.run('[file...]')
-@vex_ignore_add.run('[file...]')
+@vex_ignore.on_run('[file...]')
+@vex_ignore_add.on_run('[file...]')
 def AddIgnore(file):
     p = open_project()
     if file:
@@ -975,8 +995,8 @@ def AddIgnore(file):
 
 vex_include = vex_cmd_files.subcommand('include', short="add include files")
 vex_include_add = vex_include.subcommand('add', 'add include files')
-@vex_include.run('[file...]')
-@vex_include_add.run('[file...]')
+@vex_include.on_run('[file...]')
+@vex_include_add.on_run('[file...]')
 def AddInclude(file):
     p = open_project()
     if file:
@@ -991,8 +1011,8 @@ def AddInclude(file):
 
 props_cmd = vex_cmd_files.subcommand('fileprops', short="get/set properties on files", aliases=['props', 'properties', 'property'])
 props_list_cmd = props_cmd.subcommand('get', short="list properties")
-@props_cmd.run('file')
-@props_list_cmd.run('file')
+@props_cmd.on_run('file')
+@props_list_cmd.on_run('file')
 def ListProps(file):
     p = open_project()
     with p.lock('fileprops:list') as p:
@@ -1001,7 +1021,7 @@ def ListProps(file):
             yield "{}:{}:{}".format(file, key,value)
 
 props_set_cmd = props_cmd.subcommand('set', short='set property')
-@props_set_cmd.run('file name value:scalar')
+@props_set_cmd.on_run('file name value:scalar')
 def SetProp(file, name, value):
     p = open_project()
     with p.lock('fileprops:list') as p:
@@ -1010,7 +1030,7 @@ def SetProp(file, name, value):
 
 vex_cmd_debug = vex_cmd.group('debug')
 vex_debug = vex_cmd_debug.subcommand('debug', 'internal: run a command without capturing exceptions, or repairing errors')
-@vex_debug.run()
+@vex_debug.on_run()
 def Debug():
     """
     `vex debug commit` calls `vex commit`, but will always print a full traceback
@@ -1022,7 +1042,7 @@ def Debug():
 
 
 debug_status = vex_debug.subcommand('status')
-@debug_status.run()
+@debug_status.on_run()
 def DebugStatus():
     p = open_project(check=False)
     with p.lock('debug:status') as p:
@@ -1049,7 +1069,7 @@ def DebugStatus():
 
 
 debug_restart = vex_debug.subcommand('restart')
-@debug_restart.run()
+@debug_restart.on_run()
 def DebugRestart():
     p = get_project()
     with p.lock('debug:restart') as p:
@@ -1064,7 +1084,7 @@ def DebugRestart():
             yield ('Oh dear')
 
 debug_rollback = vex_debug.subcommand('rollback')
-@debug_rollback.run()
+@debug_rollback.on_run()
 def DebugRollback():
     p = get_project()
     with p.lock('debug:rollback') as p:
@@ -1079,23 +1099,6 @@ def DebugRollback():
             yield ('Oh dear')
 vex_cmd_git = vex_cmd.group('_git')
 git_cmd = vex_cmd_git.subcommand('git', short="* interact with a git repository")
-
-git_init_cmd = git_cmd.subcommand('init', short='* create a new git project')
-@git_init_cmd.run('--name --email directory')
-def GitInit(name, email, directory):
-    pass
-    # call Init with new settings
-
-
-git_set_cmd = git_cmd.subcommand('set', short='* set git options')
-@git_set_cmd.run('--number? --string? --boolean? name value')
-def GitSet(number, string, boolean, name, value):
-    pass
-
-git_get_cmd = git_cmd.subcommand('get', short='* get git options')
-@git_get_cmd.run('name')
-def GitGet(name):
-    pass
 
 def shell(args):
     print('shell:', args)
@@ -1136,7 +1139,7 @@ class Vex:
             print(">  ", line.decode('utf-8'))
 
 debug_test = vex_debug.subcommand('test', short="self test")
-@debug_test.run()
+@debug_test.on_run()
 def DebugTest():
 
     vex = Vex(os.path.normpath(os.path.join(os.path.split(os.path.abspath(__file__))[0], "..", "vex")))
@@ -1188,12 +1191,12 @@ def DebugTest():
 
     
 debug_soak = vex_debug.subcommand('soak', short="soak test")
-@debug_soak.run()
+@debug_soak.on_run()
 def DebugSoak():
     pass
 
 debug_argparse = vex_debug.subcommand('args')
-@debug_argparse.run('''
+@debug_argparse.on_run('''
     --switch?       # a demo switch
     --value:str     # pass with --value=...
     --bucket:int... # a list of numbers
