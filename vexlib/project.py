@@ -732,6 +732,7 @@ class SessionTransaction:
     def __init__(self, project, command):
         self.project = project
         self.command = command
+        self.cancelled = False
         self.now = NOW()
         self.old_branches = {}
         self.new_branches = {}
@@ -947,6 +948,7 @@ class SessionTransaction:
         for repo_name in files_to_check:
             entry = active.files[repo_name]
             # and stashed items...? eh nm
+
             if entry.kind == 'file':
                 if entry.state == "added":
                     filename = self.repo_to_full_path(repo_name)
@@ -1382,6 +1384,7 @@ class SwitchTransaction:
     def __init__(self, project, command):
         self.project = project
         self.command = command
+        self.cancelled = False
         self.prefix = {}
         self.active_session = {}
         self.old_branch_states = {}
@@ -1688,6 +1691,7 @@ class Project:
         try:
             yield txn
         except Cancel as e:
+            txn.cancelled = True
             return
         with self.history.do_without_undo(txn.action(), self.fake) as action:
             if any(action.blobs.values()):
@@ -1704,6 +1708,7 @@ class Project:
         try:
             yield txn
         except Cancel as e:
+            txn.cancelled = True
             return
         with self.history.do(txn.action(), self.fake) as action:
             if not action:
@@ -1724,6 +1729,7 @@ class Project:
         try:
             yield txn
         except Cancel as e:
+            txn.cancelled = True
             return
         with self.history.do(txn.action(), self.fake) as action:
             if not action:
