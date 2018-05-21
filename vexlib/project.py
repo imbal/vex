@@ -148,13 +148,15 @@ class Codec:
         buf.extend(b"tree %s\n" % root)
         if obj.previous:
             buf.extend(b"parent %s\n" % (obj.previous[4:].encode('utf-8')))
-        buf.extend(b"author <>\n")
+
+        changeset = self.parse_git_inline(obj.changeset)
+        buf.extend(b"author %s <> %d +0000\n" % (changeset.author.encode('utf8'), int(obj.timestamp.timestamp())))
+        buf.extend(b"committer %s <> %d +0000\n" % (changeset.author.encode('utf8'), int(obj.timestamp.timestamp())))
+
         buf.extend(b"vex.kind %s\n" % obj.kind.encode('utf8'))
         buf.extend(b"vex.timestamp %s\n" % rson.format_datetime(obj.timestamp).encode('utf8'))
         for name, entry in obj.ancestors.items():
             buf.extend(b"vex.ancestor.%s %s\n" % (name.encode('utf8'), entry.encode('utf8')))
-
-        changeset = self.parse_git_inline(obj.changeset)
         buf.extend(b"vex.changeset %s\n" % self.codec.dump(changeset.entries).encode('utf8'))
 
         buf.extend(b'\n')
