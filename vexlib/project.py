@@ -106,13 +106,76 @@ class Codec:
     def parse(self, buf):
         return self.codec.parse(buf.decode('utf-8'))
     def parse_git_commit(self, buf):
-        return self.codec.parse(buf)
-    def parse_git_tree(self, buf):
-        return self.codec.parse(buf)
+        headers = {}
+        buf =  buf.decode('utf-8')
+        print('buf:',buf)
+        lines = buf.splitlines()
+        while lines:
+            line = lines.pop(0)
+            if not line: break
+            name, value = line.split(' ',1)
+            headers[name] = value.strip()
+
+        message = "\n".join(lines)
+        print(lines, headers)
+        root = "git:{}".format(headers['tree'])
+        if root == "git:4b825dc642cb6eb9a060e54bf8d69288fbee4904":
+            root = None
+        kind = headers.get('vex.kind', 'commit')
+        timestamp = None
+        previous = "git:{}".format(headers['parent']) if 'parent' in headers else None
+        ancestors = {}
+        changeset = objects.Changeset(entries={}, author="", message=message)
+        changeset = self.dump_git_inline(changeset)
+        return objects.Commit(kind, timestamp, previous=previous, ancestors=ancestors, changeset=changeset, root=root)
+
     def dump_git_commit(self, obj):
-        return self.codec.dump(obj)
+        buf = bytearray()
+        buf.extend(b"tree %s \n" % (obj.root[4:].encode('utf-8')))
+        if obj.previous:
+            buf.extend(b"parent %s \n" % (obj.previous[4:].encode('utf-8')))
+        buf.extend(b'\n')
+        changeset = self.parse_git_inline(obj.changeset)
+        buf.extend(changeset.message.encode('utf-8'))
+        buf.extend(b'\n')
+        return buf
+
+    def parse_git_tree(self, buf):
+        entries = {}
+        pos = 0
+        while 0 < pos < len(buf):
+            sp = buf.find(b' ', pos)
+            zr = buf.find(b'\0', sp)
+
+            mode = int(buf[pos:sp], 8)
+            name = buf[sp+1:zr].decode('utf8')
+            hash = buf[zr+1:zr+21].hex()
+            entries[name] = (mode, hash)
+            pos = zr+21
+
+        new_entries = {}
+        for name, entry in entries.items():
+            mode, addr = entry
+            addr = "git:{}".format(addr)
+            if mode == 0o40000:
+                new_entries[name] = objects.Dir(addr, properties={})
+            else:
+                new_entries[name] = objects.File(addr, properties={})
+
+        return objects.Tree(entries)
+
     def dump_git_tree(self, obj):
-        return self.codec.dump(obj)
+        out = {}
+        for name, entry in obj.entries.items():
+            mode = b"40000" if isinstance(entry, objects.Dir) else b"100644"
+            addr = entry.addr[4:] if entry.addr else "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+            out[name] = (mode, addr)
+        buf = bytearray()
+        for name, entry in out.items():
+            mode, addr = entry
+            buf.extend(b"%s %s\0%s" %(mode, name.encode('utf-8'), bytes.fromhex(addr)))
+        return buf
+
     def parse_git_inline(self, buf):
         if buf.startswith('rson:'):
             return self.codec.parse(buf[5:])
@@ -1105,7 +1168,7 @@ class SessionTransaction:
             if addr:
                 old = self.get_manifest(addr)
                 if root:
-                    properties = old.properties
+                    properties = getattr(old, 'properties', {})
                 old_entries = old.entries
                 names.update(old_entries.keys())
             if changes:
@@ -1188,7 +1251,7 @@ class SessionTransaction:
         def walk(prefix, addr, root=False):
             old = self.get_manifest(addr)
             if root:
-                output[prefix] = objects.Tracked('dir', 'tracked', properties=old.properties)
+                output[prefix] = objects.Tracked('dir', 'tracked', properties=getattr(old, 'properties', {}))
             for name, entry in old.entries.items():
                 path = os.path.join(prefix, name)
                 if isinstance(entry, objects.Dir):
@@ -2049,13 +2112,17 @@ class Project:
 
         n= -1
         while commit and (all or commit != branch.base):
+            print(commit)
             obj = self.get_commit(commit)
             message = ""
             if obj.changeset:
                 changes = self.get_manifest(obj.changeset)
                 if changes:
                     message = changes.message
-            out.append('{} {} 0x{} {}: {}'.format(n, rson.format_datetime(obj.timestamp),commit[4:12],  obj.kind, message))
+            ts = obj.timestamp
+            if ts:
+                ts= rson.format_datetime(ts)
+            out.append('{} {} 0x{} {}: {}'.format(n, ts,commit[4:12],  obj.kind, message))
             n-=1
             commit = obj.previous
             
