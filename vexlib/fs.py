@@ -286,14 +286,13 @@ class GitRepo:
     def get_commit(self, addr):
         out = self.codec.parse_git_inline(addr)
         if out is not None: return out
-        p = subprocess.run(['git', 'cat-file', 'blob', addr[4:]], stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=self.env)
-        print('get commit',p.stdout)
+        p = subprocess.run(['git', 'cat-file', 'commit', addr[4:]], stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=self.env)
         return self.codec.parse_git_commit(p.stdout)
 
     def get_manifest(self, addr):
         out = self.codec.parse_git_inline(addr)
         if out is not None: return out
-        p = subprocess.run(['git', 'cat-file', 'blob', addr[4:]], stdout=subprocess.PIPE,stderr=subprocess.PIPE, env=self.env)
+        p = subprocess.run(['git', 'cat-file', 'tree', addr[4:]], stdout=subprocess.PIPE,stderr=subprocess.PIPE, env=self.env)
         return self.codec.parse_git_tree(p.stdout)
 
     def copy_from_any(self, addr, path):
@@ -310,7 +309,7 @@ class GitRepo:
         if out: return out
 
         buf = self.codec.dump_git_commit(value) # -t commit
-        p = subprocess.Popen(['git', 'hash-object', '-t', 'blob', '-w', '--stdin'], stdout=subprocess.PIPE, stdin=subprocess.PIPE, stderr=subprocess.PIPE, env=self.env)
+        p = subprocess.Popen(['git', 'hash-object', '-t', 'commit', '-w', '--stdin'], stdout=subprocess.PIPE, stdin=subprocess.PIPE, stderr=subprocess.PIPE, env=self.env)
         p.stdin.write(buf)
         p.stdin.close()
         o= p.stdout.read().decode('utf-8').strip()
@@ -321,7 +320,7 @@ class GitRepo:
         if out: return out
         ### inlining changelog objects
         buf = self.codec.dump_git_tree(value) # -t blob
-        p = subprocess.Popen(['git', 'hash-object', '-w', '-t', 'blob', '--stdin'], stdout=subprocess.PIPE, stdin=subprocess.PIPE,  stderr=subprocess.PIPE, env=self.env)
+        p = subprocess.Popen(['git', 'hash-object', '-w', '-t', 'tree', '--stdin'], stdout=subprocess.PIPE, stdin=subprocess.PIPE,  stderr=subprocess.PIPE, env=self.env)
         p.stdin.write(buf)
         p.stdin.close()
         o= p.stdout.read().decode('utf-8').strip()
