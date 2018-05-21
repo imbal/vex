@@ -37,7 +37,7 @@ from contextlib import contextmanager
 
 from . import rson
 from .errors import *
-from .fs import FileStore, BlobStore, file_diff, match_filename, list_dir
+from .fs import FileStore, BlobStore, file_diff, match_filename, list_dir, Repo, GitRepo
 
 def UUID(): return str(uuid4())
 def NOW(): return datetime.now(timezone.utc)
@@ -96,7 +96,7 @@ class Codec:
         if name in self.literals:
             return name, next(iter(obj.__dict__.values()))
         if name not in self.classes: raise VexBug('An {} object cannot be turned into RSON'.format(name))
-        return name, obj.__dict__
+        return name, {k:v for k,v in obj.__dict__.items() if not k.startswith('_')}
     def from_tag(self, tag, value):
         if tag in self.literals:
             return self.literals[tag](value)
@@ -105,6 +105,20 @@ class Codec:
         return self.codec.dump(obj).encode('utf-8')
     def parse(self, buf):
         return self.codec.parse(buf.decode('utf-8'))
+    def parse_git_commit(self, buf):
+        return self.codec.parse(buf)
+    def parse_git_tree(self, buf):
+        return self.codec.parse(buf)
+    def dump_git_commit(self, obj):
+        return self.codec.dump(obj)
+    def dump_git_tree(self, obj):
+        return self.codec.dump(obj)
+    def parse_git_inline(self, buf):
+        if buf.startswith('rson:'):
+            return self.codec.parse(buf[5:])
+    def dump_git_inline(self, obj):
+        if getattr(obj, 'Inline', False):
+            return "rson:{}".format(self.codec.dump(obj))
 
 codec = Codec()
 
@@ -168,6 +182,7 @@ class objects:
 
     @codec.register
     class Changeset:
+        Inline = True
         def __init__(self, entries, *, author=None, message=None):
             self.author = author
             self.message = message
@@ -281,7 +296,7 @@ class objects:
     class Branch:
         States = set(('created', 'active','inactive','merged', 'closed'))
         def __init__(self, uuid, name, state, prefix, head, base, init, upstream, sessions):
-            if not (uuid and state and head and init): raise Exception('no')
+            if not (uuid and state and head and init): raise Exception(uuid, state, head, init)
             if state not in self.States: raise Exception('no')
             self.uuid = uuid
             self.state = state
@@ -309,6 +324,16 @@ class objects:
             self.message = message
             self.activity = activity
             
+
+        def keypath(self):
+            self._keypath = None
+
+        def update_files(self, added, removed):
+            for r in removed:
+                self.files.pop(r)
+            self.files.update(added)
+            return True
+
         def repo_to_full_path(self, project, file):
             file = os.path.normpath(file)
             if os.path.commonpath((file, project.VEX)) == project.VEX:
@@ -320,15 +345,15 @@ class objects:
 
         def full_to_repo_path(self, project, file):
             file = os.path.normpath(file)
+            file = unicodedata.normalize('NFC', file)
+
             if os.path.commonpath((project.settings.dir, file)) == project.settings.dir:
                 path = os.path.relpath(file, project.settings.dir)
-                path = project.nfc_name(path)
                 return os.path.normpath(os.path.join(project.VEX, path))
             else:
                 if file.startswith(project.config_dir):
                     raise VexBug('nope. not .vex')
                 path = os.path.relpath(file, project.working_dir)
-                path = project.nfc_name(path)
                 return os.path.normpath(os.path.join(self.prefix, path))
 
     @codec.register
@@ -889,10 +914,10 @@ class SessionTransaction:
 
     def update_active_files(self, files, remove):
         active = self.active()
-        active.files.update(files)
-        for r in remove:
-            active.files.pop(r)
-        self.put_session(active)
+        if active.update_files(files, remove):
+            self.put_session(active)
+        else:
+            self.cancel()
 
     def set_active_prepare(self, prepare_uuid):
         active = self.active()
@@ -1456,81 +1481,16 @@ class SwitchTransaction:
         states = dict(old=self.old_states, new=self.new_states)
         return objects.Switch(self.now, self.command, self.prefix, self.active_session, sessions, branches, names, states)
 
-class Repo:
-    def __init__(self, config_dir):
-        self.dir = config_dir
-        self.commits =   BlobStore(os.path.join(config_dir, 'objects', 'commits'), codec)
-        self.manifests = BlobStore(os.path.join(config_dir, 'objects', 'manifests'), codec)
-        self.files =     BlobStore(os.path.join(config_dir, 'objects', 'files'), codec)
-        self.scratch =   BlobStore(os.path.join(config_dir, 'objects', 'scratch'), codec)
-
-    def makedirs(self):
-        os.makedirs(self.dir, exist_ok=True)
-        self.commits.makedirs()
-        self.manifests.makedirs()
-        self.files.makedirs()
-        self.scratch.makedirs()
-
-    def addr_for_file(self, path):
-        return self.scratch.addr_for_file(path)
-
-    def get_commit(self, addr):
-        return self.commits.get_obj(addr)
-
-    def get_manifest(self, addr):
-        return self.manifests.get_obj(addr)
-
-    def get_file(self, addr):
-        return self.files.get_file(addr)
-
-    def get_scratch_file(self, addr):
-        return self.scratch.get_file(addr)
-
-    def get_scratch_commit(self,addr):
-        return self.scratch.get_obj(addr)
-
-    def get_scratch_manifest(self, addr):
-        return self.scratch.get_obj(addr)
-
-    def put_scratch_file(self, value, addr=None):
-        return self.scratch.put_file(value, addr)
-
-    def put_scratch_commit(self, value):
-        return self.scratch.put_obj(value)
-
-    def put_scratch_manifest(self, value):
-        return self.scratch.put_obj(value)
-
-    def add_commit_from_scratch(self, addr):
-        self.commits.copy_from(self.scratch, addr)
-
-    def add_manifest_from_scratch(self, addr):
-        self.manifests.copy_from(self.scratch, addr)
-
-    def add_file_from_scratch(self, addr):
-        self.files.copy_from(self.scratch, addr)
-
-    def get_file_path(self, addr):
-        return self.files.filename(addr)
-
-    def copy_from_scratch(self, addr, path):
-        return self.scratch.make_copy(addr, path)
-
-    def copy_from_file(self, addr, path):
-        return self.files.make_copy(addr, path)
-
-    def copy_from_any(self, addr, path):
-        if self.files.exists(addr):
-            return self.files.make_copy(addr, path)
-
-        return self.scratch.make_copy(addr, path)
-
 class Project:
     VEX = "/.vex"
-    def __init__(self, config_dir, working_dir, fake):
+    def __init__(self, config_dir, working_dir, fake, git):
         self.working_dir = working_dir
         self.config_dir = config_dir
-        self.repo = Repo(config_dir)
+        self.git = git
+        if git:
+            self.repo = GitRepo(config_dir, codec)
+        else:
+            self.repo = Repo(config_dir, codec)
         self.fake = fake
 
 
@@ -2084,7 +2044,7 @@ class Project:
                 changes = self.get_manifest(obj.changeset)
                 if changes:
                     message = changes.message
-            out.append(' 0 {} 0x{} {}: {}'.format(rson.format_datetime(obj.timestamp),commit[4:10], obj.kind, message))
+            out.append(' 0 {} 0x{} {}: {}'.format(rson.format_datetime(obj.timestamp),commit[4:12], obj.kind, message))
             commit = obj.previous
 
         n= -1
@@ -2095,7 +2055,7 @@ class Project:
                 changes = self.get_manifest(obj.changeset)
                 if changes:
                     message = changes.message
-            out.append('{} {} 0x{} {}: {}'.format(n, rson.format_datetime(obj.timestamp),commit[4:10],  obj.kind, message))
+            out.append('{} {} 0x{} {}: {}'.format(n, rson.format_datetime(obj.timestamp),commit[4:12],  obj.kind, message))
             n-=1
             commit = obj.previous
             

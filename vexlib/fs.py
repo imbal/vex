@@ -198,4 +198,161 @@ class BlobStore:
         with open(self.filename(addr), 'rb') as fh:
             return self.codec.parse(fh.read())
 
+class Repo:
+    def __init__(self, config_dir, codec):
+        self.dir = config_dir
+        self.commits =   BlobStore(os.path.join(config_dir, 'objects', 'commits'), codec)
+        self.manifests = BlobStore(os.path.join(config_dir, 'objects', 'manifests'), codec)
+        self.files =     BlobStore(os.path.join(config_dir, 'objects', 'files'), codec)
+        self.scratch =   BlobStore(os.path.join(config_dir, 'objects', 'scratch'), codec)
+
+    def makedirs(self):
+        os.makedirs(self.dir, exist_ok=True)
+        self.commits.makedirs()
+        self.manifests.makedirs()
+        self.files.makedirs()
+        self.scratch.makedirs()
+
+    def addr_for_file(self, path):
+        return self.scratch.addr_for_file(path)
+
+    def get_commit(self, addr):
+        return self.commits.get_obj(addr)
+
+    def get_manifest(self, addr):
+        return self.manifests.get_obj(addr)
+
+    def get_file(self, addr):
+        return self.files.get_file(addr)
+
+    def get_scratch_file(self, addr):
+        return self.scratch.get_file(addr)
+
+    def get_scratch_commit(self,addr):
+        return self.scratch.get_obj(addr)
+
+    def get_scratch_manifest(self, addr):
+        return self.scratch.get_obj(addr)
+
+    def put_scratch_file(self, value, addr=None):
+        return self.scratch.put_file(value, addr)
+
+    def put_scratch_commit(self, value):
+        return self.scratch.put_obj(value)
+
+    def put_scratch_manifest(self, value):
+        return self.scratch.put_obj(value)
+
+    def add_commit_from_scratch(self, addr):
+        self.commits.copy_from(self.scratch, addr)
+
+    def add_manifest_from_scratch(self, addr):
+        self.manifests.copy_from(self.scratch, addr)
+
+    def add_file_from_scratch(self, addr):
+        self.files.copy_from(self.scratch, addr)
+
+    def get_file_path(self, addr):
+        # diff
+        return self.files.filename(addr)
+
+    def copy_from_scratch(self, addr, path):
+        self.scratch.make_copy(addr, path)
+
+    def copy_from_file(self, addr, path):
+        self.files.make_copy(addr, path)
+
+    def copy_from_any(self, addr, path):
+        if self.files.exists(addr):
+            return self.files.make_copy(addr, path)
+
+        self.scratch.make_copy(addr, path)
+
+
+class GitRepo:
+    def __init__(self, config_dir, codec):
+        self.dir = os.path.join(config_dir, 'git')
+        self.codec = codec
+        self.env = {'GIT_DIR':self.dir}
+
+    def makedirs(self):
+        os.makedirs(self.dir, exist_ok=True)
+        subprocess.run(['git', 'init', '-q', '--bare', self.dir])
+
+    def addr_for_file(self, path):
+        p = subprocess.run(['git', 'hash-object','-t','blob', path], stdout=subprocess.PIPE, encoding='utf-8', env=self.env)
+        return "git:{}".format(p.stdout.strip())
+
+    def get_commit(self, addr):
+        out = self.codec.parse_git_inline(addr)
+        if out: return out
+        p = subprocess.run(['git', 'cat-file', 'blob', addr[4:]], stdout=subprocess.PIPE, stderr=subprocess.PIPE, encoding='utf-8', env=self.env)
+        return self.codec.parse_git_commit(p.stdout)
+
+    def get_manifest(self, addr):
+        out = self.codec.parse_git_inline(addr)
+        if out: return out
+        p = subprocess.run(['git', 'cat-file', 'blob', addr[4:]], stdout=subprocess.PIPE,stderr=subprocess.PIPE,  encoding='utf-8', env=self.env)
+        return self.codec.parse_git_tree(p.stdout)
+
+    def copy_from_any(self, addr, path):
+        with open(path, 'xb') as fh:
+            p = subprocess.run(['git', 'cat-file', 'blob', addr[4:]], stdout=fh, stderr=subprocess.PIPE, env=self.env)
+
+    def put_scratch_file(self, value, addr=None):
+        p = subprocess.run(['git', 'hash-object', '-w','-t', 'blob',  value], stdout=subprocess.PIPE, stderr=subprocess.PIPE, encoding='utf-8', env=self.env)
+        o = p.stdout.strip()
+        return "git:{}".format(o)
+
+    def put_scratch_commit(self, value):
+        out = self.codec.dump_git_inline(value)
+        if out: return out
+
+        buf = self.codec.dump_git_commit(value) # -t commit
+        p = subprocess.Popen(['git', 'hash-object', '-t', 'blob', '-w', '--stdin'], stdout=subprocess.PIPE, stdin=subprocess.PIPE, stderr=subprocess.PIPE, encoding='utf-8', env=self.env)
+        p.stdin.write(buf)
+        p.stdin.close()
+        o= p.stdout.read().strip()
+        return "git:{}".format(o)
+
+    def put_scratch_manifest(self, value):
+        out = self.codec.dump_git_inline(value)
+        if out: return out
+        ### inlining changelog objects
+        buf = self.codec.dump_git_tree(value) # -t blob
+        p = subprocess.Popen(['git', 'hash-object', '-w', '-t', 'blob', '--stdin'], stdout=subprocess.PIPE, stdin=subprocess.PIPE,  stderr=subprocess.PIPE, encoding='utf-8', env=self.env)
+        p.stdin.write(buf)
+        p.stdin.close()
+        o= p.stdout.read().strip()
+        return "git:{}".format(o)
+        
+    def get_scratch_commit(self, addr):
+        return self.get_commit(addr)
+
+    def get_scratch_manifest(self, addr):
+        return self.get_manifest(addr)
+
+    def add_commit_from_scratch(self, addr):
+        return
+
+    def add_manifest_from_scratch(self, addr):
+        return
+
+    def add_file_from_scratch(self, addr):
+        return
+
+    def copy_from_scratch(self, addr, path):
+        return self.copy_from_any(addr, path)
+
+    def copy_from_file(self, addr, path):
+        return self.copy_from_any(addr, path)
+
+    def get_file(self, addr):
+        raise Exception() # Unused
+
+    def get_scratch_file(self, addr):
+        raise Exception() # Unused
+
+    def get_file_path(self, addr):
+        raise Exception('nope')
 

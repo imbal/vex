@@ -57,7 +57,8 @@ def get_project():
         if new_working_dir == working_dir:
             return None
         working_dir = new_working_dir
-    return Project(config_dir, working_dir, fake=fake)
+    git = os.path.exists(os.path.join(config_dir, "git"))
+    return Project(config_dir, working_dir, fake=fake, git=git)
 
 def open_project(allow_empty=False):
     p = get_project()
@@ -171,9 +172,10 @@ vex_init = vex_cmd.subcommand('init')
     --prefix:path     # Subdirectory to check out of the repository, normally the working directory name
     --include:str... # files to include whe using vex add, can be passed multiple times 
     --ignore:str...  # files to ignore when using vex add, can be passed multiple times
+    --git? # git backed
     [directory]  #
 ''')
-def Init(directory, working, config, prefix, include, ignore):
+def Init(directory, working, config, prefix, include, ignore, git):
     """
         Create a new vex project in a given directory. 
 
@@ -204,7 +206,7 @@ def Init(directory, working, config, prefix, include, ignore):
     include = include or DEFAULT_INCLUDE
     ignore = ignore or DEFAULT_IGNORE
 
-    p = Project(config_dir, working_dir, fake)
+    p = Project(config_dir, working_dir, fake, git=git)
 
     if p.exists() and not p.clean_state():
         yield ('This vex project is unwell. Try `vex debug:status`')
