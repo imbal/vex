@@ -31,7 +31,7 @@ import sqlite3
 import os.path
 import unicodedata
 
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from uuid import uuid4
 from contextlib import contextmanager
 
@@ -112,10 +112,10 @@ class Codec:
         buf =  buf.decode('utf-8')
         lines = buf.splitlines()
         while lines:
-            line = lines.pop(0)
+            line = lines.pop(0).strip()
             if not line: break
             name, value = line.split(' ',1)
-            headers[name] = value.strip()
+            headers[name] = value
 
         message = "\n".join(lines)
         root = headers['tree']
@@ -127,6 +127,9 @@ class Codec:
         timestamp = headers.get('vex.timestamp', None)
         if timestamp:
             timestamp = rson.parse_datetime(timestamp)
+        else:
+            _, timestamp, offset = headers['committer'].rsplit(' ',2)
+            timestamp = datetime(1970,1,1) + timedelta(seconds=int(timestamp)) + timedelta(hours=int(offset[:-2]))
         previous = "git:{}".format(headers['parent']) if 'parent' in headers else None
         ancestors = {}
         for name, value in headers.items():
@@ -138,6 +141,8 @@ class Codec:
         else:
             entries={}
         author_uuid = headers.get('vex.author', None)
+        if not author_uuid:
+            author_uuid = headers['committer'].split('<', 1)[1].split('>', 1)[0]
         changeset = objects.Changeset(entries=entries, author=author_uuid, message=message)
         changeset = self.dump_git_inline(changeset)
         return objects.Commit(kind, timestamp, previous=previous, ancestors=ancestors, changeset=changeset, root=root)
@@ -163,7 +168,7 @@ class Codec:
         for name, entry in obj.ancestors.items():
             buf.extend(b"vex.ancestor.%s %s\n" % (name.encode('utf8'), entry.encode('utf8')))
         buf.extend(b"vex.author %s\n" % author_uuid.encode('utf8'))
-        buf.extend(b"vex.changeset %s\n" % self.codec.dump(changeset.entries).encode('utf8'))
+        buf.extend(b"vex.changeset %s" % self.codec.dump(changeset.entries).encode('utf8')) # has a \n!
 
         buf.extend(b'\n')
         buf.extend(changeset.message.encode('utf-8'))
@@ -2163,9 +2168,9 @@ class Project:
         while commit != session.commit:
             obj = self.get_commit(commit)
             message = ""
-            if obj.changeset:
+            if obj.changeset is not None:
                 changes = self.get_manifest(obj.changeset)
-                if changes:
+                if changes is not None:
                     message = changes.message
             ts = obj.timestamp
             if ts:
@@ -2177,9 +2182,9 @@ class Project:
         while commit and (all or commit != branch.base):
             obj = self.get_commit(commit)
             message = ""
-            if obj.changeset:
+            if obj.changeset is not None:
                 changes = self.get_manifest(obj.changeset)
-                if changes:
+                if changes is not None:
                     message = changes.message
             ts = obj.timestamp
             if ts:
@@ -2624,8 +2629,6 @@ class Project:
                 txn.set_branch_uuid(name, branch.uuid)
                 if name == head:
                     head_uuid = branch_uuid
-                else:
-                    print(name, head)
 
             branch = txn.get_branch(head_uuid)
             session = txn.create_session(head_uuid, 'attached', branch.head)

@@ -180,7 +180,11 @@ def Call(mode, path, args, callback):
             elif result is not None:
                 print(result, file=p.stdin)
             p.stdin.close()
-            p.wait()
+            while p.poll() is None:
+                try:
+                    p.wait()
+                except KeyboardInterrupt:
+                    pass
         elif isinstance(result, types.GeneratorType):
             for line in result:
                 if line is not None:
