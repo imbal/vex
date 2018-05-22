@@ -77,6 +77,8 @@ class LockFile:
             fh.close()
 
 class Codec:
+    EMPTY_GIT_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+
     def __init__(self):
         self.classes = {}
         self.literals = {}
@@ -117,7 +119,7 @@ class Codec:
 
         message = "\n".join(lines)
         root = headers['tree']
-        if root == "4b825dc642cb6eb9a060e54bf8d69288fbee4904":
+        if root == self.EMPTY_GIT_TREE:
             root = None
         else:
             root = "git:{}".format(root)
@@ -135,7 +137,8 @@ class Codec:
             entries = self.codec.parse(headers['vex.changeset'])
         else:
             entries={}
-        changeset = objects.Changeset(entries=entries, author="", message=message)
+        author_uuid = headers.get('vex.author', None)
+        changeset = objects.Changeset(entries=entries, author=author_uuid, message=message)
         changeset = self.dump_git_inline(changeset)
         return objects.Commit(kind, timestamp, previous=previous, ancestors=ancestors, changeset=changeset, root=root)
 
@@ -144,19 +147,22 @@ class Codec:
         if obj.kind != 'prepare':
             root= obj.root[4:].encode('utf-8')
         else:
-            root = b"4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+            root = self.EMPTY_GIT_TREE.encode('utf-8')
         buf.extend(b"tree %s\n" % root)
         if obj.previous:
             buf.extend(b"parent %s\n" % (obj.previous[4:].encode('utf-8')))
 
         changeset = self.parse_git_inline(obj.changeset)
-        buf.extend(b"author %s <> %d +0000\n" % (changeset.author.encode('utf8'), int(obj.timestamp.timestamp())))
-        buf.extend(b"committer %s <> %d +0000\n" % (changeset.author.encode('utf8'), int(obj.timestamp.timestamp())))
+        author_uuid = changeset.author
+        author_name = changeset.author # XXX
+        buf.extend(b"author %s <%s> %d +0000\n" % (author_name.encode('utf8'), author_uuid.encode('utf-8'), int(obj.timestamp.timestamp())))
+        buf.extend(b"committer %s <%s> %d +0000\n" % (author_name.encode('utf8'), author_uuid.encode('utf-8'), int(obj.timestamp.timestamp())))
 
         buf.extend(b"vex.kind %s\n" % obj.kind.encode('utf8'))
         buf.extend(b"vex.timestamp %s\n" % rson.format_datetime(obj.timestamp).encode('utf8'))
         for name, entry in obj.ancestors.items():
             buf.extend(b"vex.ancestor.%s %s\n" % (name.encode('utf8'), entry.encode('utf8')))
+        buf.extend(b"vex.author %s\n" % author_uuid.encode('utf8'))
         buf.extend(b"vex.changeset %s\n" % self.codec.dump(changeset.entries).encode('utf8'))
 
         buf.extend(b'\n')
@@ -179,39 +185,68 @@ class Codec:
         new_entries = {}
         for name, entry in entries.items():
             mode, addr = entry
-            if addr == "4b825dc642cb6eb9a060e54bf8d69288fbee4904":
+            if addr == self.EMPTY_GIT_TREE:
                 addr = None
             else:
                 addr = "git:{}".format(addr)
-            if mode == 0o40000:
+            if mode == self.GIT_DIR_MODE:
                 new_entries[name] = objects.Dir(addr, properties={})
-            else:
+            elif mode in (self.GIT_FILE_MODE, self.GIT_FILE_MODE2):
                 new_entries[name] = objects.File(addr, properties={})
+            elif mode == self.GIT_EXEC_MODE:
+                new_entries[name] = objects.File(addr, properties={'vex:executable': True})
+            else:
+                raise VexBug('unknown git mode')
 
         return objects.Tree(new_entries)
+
+    GIT_DIR_MODE = 0o040_000
+    GIT_FILE_MODE = 0o100_644
+    GIT_FILE_MODE2 = 0o100_664
+    GIT_EXEC_MODE = 0o100_755
+    GIT_LINK_MODE = 0o120_000
+    GIT_GITLINK_MODE = 0o160_000
 
     def dump_git_tree(self, obj):
         out = {}
         for name, entry in obj.entries.items():
-            mode = b"40000" if isinstance(entry, objects.Dir) else b"100644"
-            addr = entry.addr[4:] if entry.addr else "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+            if isinstance(entry, objects.Dir):
+                mode =  self.GIT_DIR_MODE
+            elif isinstance(entry, objects.File):
+                if entry.properties.get('vex:executable', False):
+                    mode =  self.GIT_EXEC_MODE
+                else:
+                    mode =  self.GIT_FILE_MODE
+            else:
+                raise VexBug('unknown entry', entry)
+
+            addr = entry.addr[4:] if entry.addr else self.EMPTY_GIT_TREE
             out[name] = (mode, addr)
         buf = bytearray()
         for name, entry in out.items():
             mode, addr = entry
-            buf.extend(b"%s %s\0%s" %(mode, name.encode('utf-8'), bytes.fromhex(addr)))
+            buf.extend(b"%o %s\0%s" %(mode, name.encode('utf-8'), bytes.fromhex(addr)))
         return buf
 
     def parse_git_inline(self, buf):
-        if buf.startswith('rson:'):
+        if isinstance(buf, objects.Inline):
+            return buf.object
+        #if buf.startswith('rson:'):
             return self.codec.parse(buf[5:])
     def dump_git_inline(self, obj):
-        if getattr(obj, 'Inline', False):
-            return "rson:{}".format(self.codec.dump(obj))
+        if isinstance(obj, objects.Changeset):
+            return objects.Inline(obj)
+        #if getattr(obj, 'Inline', False):
+        #    return "rson:{}".format(self.codec.dump(obj))
+
 
 codec = Codec()
 
 class objects:
+    @codec.register
+    class Inline:
+        def __init__(self, object):
+            self.object = object
 
     @codec.register
     class Commit:
@@ -271,7 +306,6 @@ class objects:
 
     @codec.register
     class Changeset:
-        Inline = True
         def __init__(self, entries, *, author=None, message=None):
             self.author = author
             self.message = message
@@ -2568,3 +2602,36 @@ class Project:
         #   process inbox
         # on error, switch out to old session
 
+    def init_from_git_clone(self, prefix, include, ignore):
+        if not self._lock:
+            raise VexBug('unlocked')
+        if not self.history_isempty():
+            raise VexNoHistory('cant reinit')
+        if not prefix.startswith('/'):
+            raise VexArgument('crap prefix')
+        with self.do_without_undo('git:clone') as txn:
+            # XXX: DOUBLE TXN so addr for file is easy, ugh
+            txn.set_setting('ignore', ignore)
+            txn.set_setting('include', include)
+            txn.set_setting('template', '')
+            txn.set_state('message', '')
+            author_uuid = UUID() 
+            txn.set_state("author", author_uuid)
+
+            head = self.repo.head()
+
+            branches = self.repo.branches()
+            for name, commit in branches.items():
+                branch_uuid = UUID()
+                commit_uuid = "git:{}".format(commit)
+
+                branch = objects.Branch(branch_uuid, name, 'active', prefix, commit_uuid, None, commit_uuid, None, [])
+                txn.put_branch(branch)
+                txn.set_branch_uuid(name, branch.uuid)
+                if name == head:
+                    head_uuid = branch_uuid
+
+            session = txn.create_session(head_uuid, 'attached', branch.head)
+            txn.put_session(session)
+
+        self.restore_session(prefix, session)

@@ -278,6 +278,32 @@ class GitRepo:
     def makedirs(self):
         os.makedirs(self.dir, exist_ok=True)
         subprocess.run(['git', 'init', '-q', '--bare', self.dir])
+    
+    def clone(self, url):
+        os.makedirs(self.dir, exist_ok=True)
+        subprocess.run(['git', 'clone', '-q', '--bare', url, self.dir])
+        return p.stdout
+
+    def branches(self):
+        dir = os.path.join(self.dir, 'refs', 'heads')
+        branches = {}
+        for name in os.listdir(dir):
+            with open(os.path.join(dir, name)) as fh:
+                branch[name] = fh.read().strip()
+        return branches
+                
+    def head(self):
+        with open(os.path.join(self.dir, 'HEAD')) as fh:
+            head = fh.read().strip()
+            if head.startswith('ref: refs/heads/'):
+                return head.rsplit('/',1)[1]
+            raise VexBug('welp')
+
+
+    def push(self, url, remote_branch, commit):
+        p = subprocess.run(['git', 'push', url, '{}:refs/heads/{}'.format(commit[4:], remote_branch)], stdout=subprocess.PIPE, encoding='utf-8', env=self.env)
+        return p.stdout
+        
 
     def addr_for_file(self, path):
         p = subprocess.run(['git', 'hash-object','-t','blob', path], stdout=subprocess.PIPE, encoding='utf-8', env=self.env)

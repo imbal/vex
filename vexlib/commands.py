@@ -103,15 +103,9 @@ props_set_cmd = props_cmd.subcommand('set')
 
 vex_cmd_debug = vex_cmd.group('debug')
 vex_debug = vex_cmd_debug.subcommand('debug', 'internal: run a command without capturing exceptions, or repairing errors')
-debug_status = vex_debug.subcommand('status')
-debug_restart = vex_debug.subcommand('restart')
-debug_rollback = vex_debug.subcommand('rollback')
-debug_test = vex_debug.subcommand('test', short="self test")
-debug_soak = vex_debug.subcommand('soak', short="soak test")
-debug_argparse = vex_debug.subcommand('args')
 
 vex_cmd_git = vex_cmd.group('git')
-git_cmd = vex_cmd_git.subcommand('git', short="* interact with a git repository")
+vex_git = vex_cmd_git.subcommand('git', short="* interact with a git repository")
 
 def get_project():
     working_dir = os.getcwd()
@@ -1134,6 +1128,15 @@ def SetProp(file, name, value):
     with p.lock('fileprops:list') as p:
         p.set_fileprop(filename, name, value)
 
+# Debug
+
+debug_status = vex_debug.subcommand('status')
+debug_restart = vex_debug.subcommand('restart')
+debug_rollback = vex_debug.subcommand('rollback')
+debug_test = vex_debug.subcommand('test', short="self test")
+debug_soak = vex_debug.subcommand('soak', short="soak test")
+debug_argparse = vex_debug.subcommand('args')
+
 
 @vex_debug.on_run()
 def Debug():
@@ -1222,7 +1225,11 @@ class Vex:
         if self.command:
             cmd.append(":".join(self.command))
         for name, value in kwargs.items():
-            if isinstance(value, (list, tuple)):
+            if value is True:
+                cmd.append("--{}=true".format(name))
+            elif value is False:
+                cmd.append("--{}=false".format(name))
+            elif isinstance(value, (list, tuple)):
                 for v in value:
                     cmd.append("--{}={}".format(name, v))
             else:
@@ -1239,7 +1246,8 @@ class Vex:
             print(">  ", line.decode('utf-8'))
 
 @debug_test.on_run()
-def DebugTest():
+@argspec('--git?')
+def DebugTest(git):
 
     vex = Vex(os.path.normpath(os.path.join(os.path.split(os.path.abspath(__file__))[0], "..", "vex")))
 
@@ -1250,7 +1258,7 @@ def DebugTest():
         dir = os.path.join(dir, 'repo')
         os.chdir(dir)
 
-        vex.init()
+        vex.init(git=git)
 
         shell('date >> date')
         shell('mkdir -p dir1 dir2 dir3/dir3.1 dir3/dir3.2')
@@ -1286,7 +1294,8 @@ def DebugTest():
         vex.undo()
         vex.commit()
         vex.branch('latest')
-        vex.status()
+        vex.status(all=True)
+        vex.id()
 
     
 @debug_soak.on_run()
@@ -1306,6 +1315,80 @@ def DebugSoak():
 def run(switch, value, bucket, pos1, opt1, opt2, tail):
     """a demo command that shows all the types of options"""
     return [switch, value, bucket, pos1, opt1, opt2, tail]
+
+# Git
+
+vex_git_push = vex_git.subcommand('push')
+vex_git_init = vex_git.subcommand('init')
+vex_git_clone = vex_git.subcommand('clone')
+
+@vex_git_push.on_run()
+@argspec('url [remote_branch]')
+def GitPush(url, remote_branch):
+    p = open_project()
+    if not p.git:
+        raise VexArgument('no')
+    with p.lock('git-push') as p:
+        active = p.active()
+        branch = p.branches.get(active.branch)
+        remote_branch = remote_branch or branch.name
+        return p.repo.push(url, remote_branch, branch.head)
+
+
+@vex_git_clone.on_run()
+@argspec('''
+    --working:path    # Working directory, where files are edited/changed
+    --config:path     # Normally /working_dir/.vex if not given 
+    --prefix:path     # Subdirectory to check out of the repository, normally the working directory name
+    --include:str... # files to include whe using vex add, can be passed multiple times 
+    --ignore:str...  # files to ignore when using vex add, can be passed multiple times
+    url              # 
+    [directory]      #
+''')
+def GitClone(url, directory, working, config, prefix, include, ignore):
+    """
+        Create a new vex project in a given directory from the given git url
+
+        - If no directory given, it is assumed to be the current directory.
+        - Inside that directory, a `.vex` directory is created to store the project history.
+        - An initial empty commit is added.
+        - The subtree checkout defaults to `/directory_name`.
+        
+        i.e a `vex init` in `/a/b` creates a `/a/b/.vex` directory, an empty commit, and checks
+        out `/b` in the repo, into `/a/b` on the filesystem.`
+
+        If you make a mistake, `vex undo` will undo the initial commit, but not remove
+        the `.vex` directory. 
+
+        `init` takes multiple `--include=<file>` and `--ignore=<file>` arguments, 
+        defaulting to `--include='*' --ignore='.vex' --ignore='.*'`
+
+        `--include`, `--ignore`, can be passed multiple times, and work the 
+        same as `vex include 'pattern'` and `vex ignore 'pattern'`
+
+    """
+
+    working_dir = working or directory or os.getcwd()
+    config_dir = config or os.path.join(working_dir,  DEFAULT_CONFIG_DIR)
+    prefix = prefix or os.path.split(working_dir)[1] or ''
+    prefix = os.path.join('/', prefix)
+
+    include = include or DEFAULT_INCLUDE
+    ignore = ignore or DEFAULT_IGNORE
+
+    p = Project(config_dir, working_dir, fake, git=True)
+
+    if p.exists() and not p.clean_state():
+        yield ('This vex project is unwell. Try `vex debug:status`')
+    elif p.exists():
+        raise VexError("A vex project already exists here")
+    else:
+        p.repo.clone(url)
+        p.makedirs()
+        p.makelock()
+        with p.lock('git:init') as p:
+            yield ('Creating vex project in "{}"...'.format(working_dir))
+            p.init_from_git_clone(prefix, include, ignore)
 
 
 
