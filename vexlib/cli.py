@@ -432,7 +432,7 @@ def parse_args(argspec, argv, environ):
         if argspec.positional:
             for name in argspec.positional:
                 if not options: 
-                    raise parse_err("missing option: {}".format(name), pos, argv)
+                    raise parse_err("missing option: {}".format(name), len(argv), argv)
                 pos, value= options.pop(0)
 
                 args[name] = try_parse(name, value, argspec.argtypes.get(name), pos, argv)
