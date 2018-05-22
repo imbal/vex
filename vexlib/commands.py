@@ -537,7 +537,14 @@ vex_cmd_commit = vex_cmd.group("commit")
 vex_id = vex_cmd_commit.subcommand('id', short='what was the last change')
 @vex_id.on_run()
 def Id():
-    raise VexUnimplemented()
+    """
+        Show last commit identifier
+
+        `vex id` will print the commit-id
+    """
+
+    p = open_project()
+    return p.active().prepare
 
 vex_commit = vex_cmd_commit.subcommand('commit', short="save the working copy and add an entry to the project changes")
 @vex_commit.on_run('''
