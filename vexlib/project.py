@@ -2610,15 +2610,9 @@ class Project:
         if not prefix.startswith('/'):
             raise VexArgument('crap prefix')
         with self.do_without_undo('git:clone') as txn:
-            # XXX: DOUBLE TXN so addr for file is easy, ugh
-            txn.set_setting('ignore', ignore)
-            txn.set_setting('include', include)
-            txn.set_setting('template', '')
-            txn.set_state('message', '')
-            author_uuid = UUID() 
-            txn.set_state("author", author_uuid)
 
             head = self.repo.head()
+            head_uuid = None
 
             branches = self.repo.branches()
             for name, commit in branches.items():
@@ -2630,8 +2624,20 @@ class Project:
                 txn.set_branch_uuid(name, branch.uuid)
                 if name == head:
                     head_uuid = branch_uuid
+                else:
+                    print(name, head)
 
+            branch = txn.get_branch(head_uuid)
             session = txn.create_session(head_uuid, 'attached', branch.head)
             txn.put_session(session)
 
         self.restore_session(prefix, session)
+        with self.do('git:clone') as txn:
+            if not txn.get_setting('ignore'):
+                txn.set_setting('ignore', ignore)
+            if not txn.get_setting('include'):
+                txn.set_setting('include', include)
+            if not txn.get_setting('template'):
+                txn.set_setting('template', '')
+            author_uuid = UUID() 
+            txn.set_state("author", author_uuid)

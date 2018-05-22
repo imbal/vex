@@ -281,15 +281,23 @@ class GitRepo:
     
     def clone(self, url):
         os.makedirs(self.dir, exist_ok=True)
-        subprocess.run(['git', 'clone', '-q', '--bare', url, self.dir])
+        p = subprocess.run(['git', 'clone', '-q', '--bare', url, self.dir])
         return p.stdout
 
     def branches(self):
         dir = os.path.join(self.dir, 'refs', 'heads')
         branches = {}
+        print(dir)
         for name in os.listdir(dir):
             with open(os.path.join(dir, name)) as fh:
-                branch[name] = fh.read().strip()
+                branches[name] = fh.read().strip()
+        with open(os.path.join(self.dir, 'packed-refs')) as fh:
+            for line in fh.readlines():
+                value, name = line.split(' ',1)
+                name = name.strip()
+                if name.startswith('refs/heads/'):
+                    branches[name.rsplit('/',1)[1]] = value
+
         return branches
                 
     def head(self):
@@ -301,7 +309,7 @@ class GitRepo:
 
 
     def push(self, url, remote_branch, commit):
-        p = subprocess.run(['git', 'push', url, '{}:refs/heads/{}'.format(commit[4:], remote_branch)], stdout=subprocess.PIPE, encoding='utf-8', env=self.env)
+        p = subprocess.run(['git', 'push', '-f', url, '{}:refs/heads/{}'.format(commit[4:], remote_branch)], stdout=subprocess.PIPE, encoding='utf-8', env=self.env)
         return p.stdout
         
 

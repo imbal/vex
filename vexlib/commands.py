@@ -1370,7 +1370,7 @@ def GitClone(url, directory, working, config, prefix, include, ignore):
 
     working_dir = working or directory or os.getcwd()
     config_dir = config or os.path.join(working_dir,  DEFAULT_CONFIG_DIR)
-    prefix = prefix or os.path.split(working_dir)[1] or ''
+    prefix = prefix or '/'
     prefix = os.path.join('/', prefix)
 
     include = include or DEFAULT_INCLUDE
@@ -1383,11 +1383,12 @@ def GitClone(url, directory, working, config, prefix, include, ignore):
     elif p.exists():
         raise VexError("A vex project already exists here")
     else:
-        p.repo.clone(url)
+        yield ('Creating vex project in "{}"...'.format(working_dir))
+        yield p.repo.clone(url)
         p.makedirs()
         p.makelock()
         with p.lock('git:init') as p:
-            yield ('Creating vex project in "{}"...'.format(working_dir))
+            yield ('Creating working env')
             p.init_from_git_clone(prefix, include, ignore)
 
 
