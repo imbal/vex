@@ -600,16 +600,13 @@ class Command:
         return _decorator
 
 
-    def on_run(self, argspec=None):
+    def on_run(self):
         """A decorator for setting the function to be run"""
         if self.run_fn:
             raise BadDefinition('double definition')
 
         #if self.subcommands:
         #    raise BadDefinition('bad')
-
-        if argspec is not None:
-            self.nargs, self.argspec = parse_argspec(argspec)
 
         def decorator(fn):
             self.run_fn = fn
@@ -629,18 +626,17 @@ class Command:
             else:
                 self.long = long
 
-            if hasattr(fn, 'argspec'):
-                self.nargs, self.argspec = fn.nargs, fn.argspec
-                return fn
-
             args = list(self.run_fn.__code__.co_varnames[:self.run_fn.__code__.co_argcount])
             args = [a for a in args if not a.startswith('_')]
-            
-            if not self.argspec:
-                self.nargs, self.argspec = parse_argspec(" ".join(args))
+
+            if hasattr(fn, 'argspec'):
+                self.nargs, self.argspec = fn.nargs, fn.argspec
             else:
-                if self.nargs != len(args):
-                    raise BadDefinition('bad option definition')
+                self.nargs, self.argspec = parse_argspec(" ".join(args))
+
+        
+            if self.nargs != len(args):
+                raise BadDefinition('bad option definition')
 
             return fn
         return decorator
