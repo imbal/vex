@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""
+"""a database for files and directories
 
 vex is a command line program for saving changes to a project, switching
 between different versions, and sharing those changes.
@@ -27,52 +27,8 @@ DEFAULT_IGNORE =  [".*", DEFAULT_CONFIG_DIR, ".DS_Store", "*~", "*.swp", "__*__"
 
 fake = False
 
-@contextmanager
-def watcher():
-    p = subprocess.run('fswatch --version', stdout=subprocess.DEVNULL, shell=True)
-    if p.returncode: raise VexBug('fswatch is not installed')
-
-    p = subprocess.Popen('fswatch .', shell=True, stdout=subprocess.PIPE)
-    def watch_files():
-        line = None
-        while True:
-            try:
-                line = p.stdout.readline()
-                if not line: break
-                yield line.decode('utf-8').rstrip()
-            except KeyboardInterrupt:
-                break
-    try:
-        yield watch_files
-    finally:
-        p.terminate()
-
-def get_project():
-    working_dir = os.getcwd()
-    while True:
-        config_dir = os.path.join(working_dir,  DEFAULT_CONFIG_DIR)
-        if os.path.exists(config_dir):
-            break
-        new_working_dir = os.path.split(working_dir)[0]
-        if new_working_dir == working_dir:
-            return None
-        working_dir = new_working_dir
-    git = os.path.exists(os.path.join(config_dir, "git"))
-    return Project(config_dir, working_dir, fake=fake, git=git)
-
-def open_project(allow_empty=False):
-    p = get_project()
-    if not p:
-        raise VexNoProject('no vex project found in {}'.format(os.getcwd()))
-    if not allow_empty and p.history_isempty():
-        raise VexNoHistory('Vex project exists, but `vex init` has not been run (or has been undone)')
-    elif not p.clean_state():
-        raise VexUnclean('Another change is already in progress. Try `vex debug:status`')
-    return p
-    
-
 # CLI bits. Should handle environs, cwd, etc
-vex_cmd = Command('vex', 'a database for files', long=__doc__, prefixes=['fake'])
+vex_cmd = Command('vex', long=__doc__, prefixes=['fake'])
 vex_init = vex_cmd.subcommand('init')
 
 vex_undo = vex_cmd.subcommand('undo')
@@ -97,53 +53,53 @@ vex_missing = vex_cmd_files.subcommand('missing', aliases=['untracked'])
 
 vex_cmd_commit = vex_cmd.group("commit")
 
-vex_id = vex_cmd_commit.subcommand('id', short='what was the last change')
+vex_id = vex_cmd_commit.subcommand('id')
 vex_commit = vex_cmd_commit.subcommand('commit')
 vex_prepare = vex_commit.subcommand('prepare', aliases=['save'])
 vex_commit_prepared = vex_commit.subcommand('prepared')
 vex_amend = vex_commit.subcommand('amend')
-vex_message = vex_cmd_commit.subcommand('message', short="edit commit message")
-vex_message_edit = vex_message.subcommand('edit', short='edit commit message')
-vex_message_get = vex_message.subcommand('get', 'get commit message')
+vex_message = vex_cmd_commit.subcommand('message')
+vex_message_edit = vex_message.subcommand('edit')
+vex_message_get = vex_message.subcommand('get')
 vex_message_filename = vex_message.subcommand('filename', aliases=['path'])
 vex_message_set = vex_message.subcommand('set')
-vex_template = vex_message.subcommand('template', short="edit commit template")
-vex_template_edit = vex_template.subcommand('edit', short='edit commit template')
-vex_template_get = vex_template.subcommand('get', 'get commit template')
-vex_template_filename = vex_template.subcommand('filename', 'commit template filename', aliases=['path'])
-vex_template_set = vex_template.subcommand('set', 'set commit template')
-vex_commit_apply = vex_commit.subcommand('apply', 'apply changes from other branch to current session')
-vex_commit_append = vex_commit.subcommand('append', 'append changes from other branch to current session')
-vex_commit_replay = vex_commit.subcommand('replay', 'replay changes from other branch to current session')
-vex_commit_squash = vex_commit.subcommand('squash', '* flatten commits into one')
-vex_rollback = vex_commit.subcommand('rollback', '* take older version and re-commit it')
-vex_revert = vex_commit.subcommand('revert','* new commit without changes made in an old version')
-vex_rewind = vex_cmd_commit.subcommand('rewind','* rewind session to earlier change')
-vex_update = vex_cmd_commit.subcommand('update','* update branch to start from new upstream head')
+vex_template = vex_message.subcommand('template')
+vex_template_edit = vex_template.subcommand('edit')
+vex_template_get = vex_template.subcommand('get')
+vex_template_filename = vex_template.subcommand('filename', aliases=['path'])
+vex_template_set = vex_template.subcommand('set')
+vex_commit_apply = vex_commit.subcommand('apply')
+vex_commit_append = vex_commit.subcommand('append')
+vex_commit_replay = vex_commit.subcommand('replay')
+vex_commit_squash = vex_commit.subcommand('squash')
+vex_rollback = vex_commit.subcommand('rollback')
+vex_revert = vex_commit.subcommand('revert')
+vex_rewind = vex_cmd_commit.subcommand('rewind')
+vex_update = vex_cmd_commit.subcommand('update')
 vex_cmd_branch = vex_cmd.group('branch')
 
-vex_branch = vex_cmd_branch.subcommand('branch', short="open/create branch")
-vex_branch_list = vex_branch.subcommand('list', short="list branches")
-vex_branches = vex_cmd_branch.subcommand('branches', short="list branches")
-vex_branch_get = vex_branch.subcommand('get', short="get branch info", aliases=["show", "info"])
-vex_branch_open = vex_branch.subcommand('open', short="open or create a branch")
-vex_branch_new = vex_branch.subcommand('new', short="create a new branch")
-vex_branch_saveas = vex_branch.subcommand('saveas', short="save session as a new branch, leaving old one alone")
-vex_branch_rename = vex_branch.subcommand('rename', short="rename current branch")
-vex_branch_swap = vex_branch.subcommand('swap', short="swap name with another branch")
+vex_branch = vex_cmd_branch.subcommand('branch')
+vex_branch_list = vex_branch.subcommand('list')
+vex_branches = vex_cmd_branch.subcommand('branches')
+vex_branch_get = vex_branch.subcommand('get', aliases=["show", "info"])
+vex_branch_open = vex_branch.subcommand('open')
+vex_branch_new = vex_branch.subcommand('new')
+vex_branch_saveas = vex_branch.subcommand('saveas')
+vex_branch_rename = vex_branch.subcommand('rename')
+vex_branch_swap = vex_branch.subcommand('swap')
 
 vex_diff_branch = vex_diff.subcommand('branch')
 vex_branch_diff = vex_branch.subcommand('diff')
 
-vex_session = vex_cmd_branch.subcommand('session',short="describe the active session for the current branch")
-vex_sessions = vex_cmd_branch.subcommand('sessions',short="show all sessions for current branch")
-vex_ignore = vex_cmd_files.subcommand('ignore', short="add ignored files")
-vex_ignore_add = vex_ignore.subcommand('add', 'add ignored files')
-vex_include = vex_cmd_files.subcommand('include', short="add include files")
-vex_include_add = vex_include.subcommand('add', 'add include files')
-props_cmd = vex_cmd_files.subcommand('fileprops', short="get/set properties on files", aliases=['props', 'properties', 'property'])
-props_list_cmd = props_cmd.subcommand('get', short="list properties")
-props_set_cmd = props_cmd.subcommand('set', short='set property')
+vex_session = vex_cmd_branch.subcommand('session')
+vex_sessions = vex_cmd_branch.subcommand('sessions')
+vex_ignore = vex_cmd_files.subcommand('ignore')
+vex_ignore_add = vex_ignore.subcommand('add')
+vex_include = vex_cmd_files.subcommand('include')
+vex_include_add = vex_include.subcommand('add')
+props_cmd = vex_cmd_files.subcommand('fileprops', aliases=['props', 'properties', 'property'])
+props_list_cmd = props_cmd.subcommand('get')
+props_set_cmd = props_cmd.subcommand('set')
 
 vex_cmd_debug = vex_cmd.group('debug')
 vex_debug = vex_cmd_debug.subcommand('debug', 'internal: run a command without capturing exceptions, or repairing errors')
@@ -157,6 +113,29 @@ debug_argparse = vex_debug.subcommand('args')
 vex_cmd_git = vex_cmd.group('git')
 git_cmd = vex_cmd_git.subcommand('git', short="* interact with a git repository")
 
+def get_project():
+    working_dir = os.getcwd()
+    while True:
+        config_dir = os.path.join(working_dir,  DEFAULT_CONFIG_DIR)
+        if os.path.exists(config_dir):
+            break
+        new_working_dir = os.path.split(working_dir)[0]
+        if new_working_dir == working_dir:
+            return None
+        working_dir = new_working_dir
+    git = os.path.exists(os.path.join(config_dir, "git"))
+    return Project(config_dir, working_dir, fake=fake, git=git)
+
+def open_project(allow_empty=False):
+    p = get_project()
+    if not p:
+        raise VexNoProject('no vex project found in {}'.format(os.getcwd()))
+    if not allow_empty and p.history_isempty():
+        raise VexNoHistory('Vex project exists, but `vex init` has not been run (or has been undone)')
+    elif not p.clean_state():
+        raise VexUnclean('Another change is already in progress. Try `vex debug:status`')
+    return p
+    
 @vex_cmd.on_complete()
 def Complete(prefix, field, argtype):
     out = []
@@ -182,7 +161,6 @@ def Complete(prefix, field, argtype):
                 out.extend("{} ".format(name) for name, uuid in vals if name)
 
     return out
-
 
 @vex_cmd.on_call()
 def Call(mode, path, args, callback):
@@ -245,6 +223,27 @@ def Call(mode, path, args, callback):
             else:
                 print('Good news: The changes that were attempted have been undone')
     return -1
+
+@contextmanager
+def watcher():
+    p = subprocess.run('fswatch --version', stdout=subprocess.DEVNULL, shell=True)
+    if p.returncode: raise VexBug('fswatch is not installed')
+
+    p = subprocess.Popen('fswatch .', shell=True, stdout=subprocess.PIPE)
+    def watch_files():
+        line = None
+        while True:
+            try:
+                line = p.stdout.readline()
+                if not line: break
+                yield line.decode('utf-8').rstrip()
+            except KeyboardInterrupt:
+                break
+    try:
+        yield watch_files
+    finally:
+        p.terminate()
+
 
 
 @vex_init.on_run()
@@ -890,10 +889,12 @@ def Revert():
 
 @vex_rewind.on_run()
 def Rewind():
+    """ Open up an old version of the project """
     raise VexUnimplemented()
 
 @vex_update.on_run()
 def Update():
+    """ Update the current branch with changes from the original """
     raise VexUnimplemented()
 
 # Rollback, Revert, Squash, Update,
@@ -902,6 +903,7 @@ def Update():
 @argspec('[name:branch]')
 def Branch(name):
     """
+        Open an old branch or create a new branch
 
     """
     p = open_project()
@@ -915,6 +917,7 @@ def Branch(name):
 @vex_branch_list.on_run()
 @vex_branches.on_run()
 def Branches():
+    """ List all active branches in project """
     p = open_project()
     with p.lock('branches') as p:
         branches = p.list_branches()
@@ -934,7 +937,7 @@ def Branches():
 @argspec('[name:branch]')
 def BranchInfo(name):
     """
-
+        show current branch name
     """
     p = open_project()
     with p.lock('branch') as p:
@@ -956,7 +959,7 @@ def BranchInfo(name):
 @argspec('name:branch')
 def OpenBranch(name):
     """
-
+        Open a branch
     """
     p = open_project()
     with p.lock('open') as p:
@@ -966,7 +969,7 @@ def OpenBranch(name):
 @argspec('name:branch')
 def NewBranch(name):
     """
-
+        Create new branch
     """
     p = open_project()
     with p.lock('new') as p:
@@ -978,7 +981,7 @@ def NewBranch(name):
 @argspec('name:branch')
 def SaveAsBranch(name):
     """
-
+        Save working copy as a different branch
     """
     p = open_project()
     with p.lock('saveas') as p:
@@ -991,7 +994,7 @@ def SaveAsBranch(name):
 @argspec('name:branch')
 def RenameBranch(name):
     """
-
+        Rename the current branch
     """
     p = open_project()
     with p.lock('rename') as p:
@@ -1003,7 +1006,7 @@ def RenameBranch(name):
 @argspec('name:branch')
 def SwapBranch(name):
     """
-
+        Rename the current branch, swapping names with another
     """
     p = open_project()
     with p.lock('swap') as p:
@@ -1056,9 +1059,18 @@ def Switch(prefix):
     else:
         return p.prefix()
 
+@vex_session.on_run()
+def Session():
+    """ Show active session for current branch"""
+    p = open_project()
+    with p.lock('sessions') as p:
+        sessions = p.list_sessions()
+        active = p.active()
+    return active.uuid
 
 @vex_sessions.on_run()
 def Sessions():
+    """ Show open sessions for current branch"""
     p = open_project()
     with p.lock('sessions') as p:
         sessions = p.list_sessions()

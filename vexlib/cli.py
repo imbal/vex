@@ -548,14 +548,32 @@ class Command:
         self.groups = {None:[]}
         self.subaliases = {}
         self.run_fn = None
-        self.short = short
-        self.long = long
         self.aliases=aliases
         self.argspec = None
         self.nargs = 0
         self.call_fn = None
         self.complete_fn= None
         self.prefixes=prefixes
+        self.set_desc(short, long)
+
+    def set_desc(self, short, long):
+        if long:
+            out = []
+            for para in long.strip().split('\n\n'):
+                para = " ".join(x for x in para.split() if x)
+                out.append(para)
+            long = "\n\n".join(out)
+        else:
+            long = None
+        if long and '\n' in long and short is None:
+            self.short, self.long = long.split('\n',1)
+            self.long = self.long.strip()
+        elif long and short is None:
+            self.long = long.strip()
+            self.short = self.long
+        else:
+            self.short = short
+            self.long = long
 
     def main(self, name):
         if name == '__main__':
@@ -610,21 +628,8 @@ class Command:
 
         def decorator(fn):
             self.run_fn = fn
-            long = self.long
-            if not long:
-                long = self.run_fn.__doc__
-            if long:
-                out = []
-                for para in long.lstrip().rstrip().split('\n\n'):
-                    para = " ".join(x for x in para.split() if x)
-                    out.append(para)
-                long = "\n\n".join(out)
-            else:
-                long = None
-            if long and '\n' in long and not self.short:
-                self.short, self.long = long.split('\n',1)
-            else:
-                self.long = long
+            if not self.long:
+                self.set_desc(self.short, fn.__doc__)
 
             args = list(self.run_fn.__code__.co_varnames[:self.run_fn.__code__.co_argcount])
             args = [a for a in args if not a.startswith('_')]
