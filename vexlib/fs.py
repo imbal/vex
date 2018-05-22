@@ -309,7 +309,7 @@ class GitRepo:
 
 
     def push(self, url, remote_branch, commit):
-        p = subprocess.run(['git', 'push', '-f', url, '{}:refs/heads/{}'.format(commit[4:], remote_branch)], stdout=subprocess.PIPE, encoding='utf-8', env=self.env)
+        p = subprocess.run(['git', 'push', url, '{}:refs/heads/{}'.format(commit[4:], remote_branch)], stdout=subprocess.PIPE, encoding='utf-8', env=self.env)
         return p.stdout
         
 
