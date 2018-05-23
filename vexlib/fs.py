@@ -18,6 +18,152 @@ import os
 import os.path
 import sys
 import shutil
+import fcntl
+import sqlite3
+
+
+from contextlib import contextmanager
+from uuid import uuid4
+from datetime import datetime, timezone
+
+def UUID(): return str(uuid4())
+def NOW(): return datetime.now(timezone.utc)
+
+class LockFile:
+    def __init__(self, lockfile):
+        self.lockfile = lockfile
+
+    def makelock(self):
+        with open(self.lockfile, 'xb') as fh:
+            fh.write(b'# created by %d at %a\n'%(os.getpid(), str(NOW())))
+
+    @contextmanager
+    def __call__(self, command):
+        try:
+            fh = open(self.lockfile, 'wb')
+            fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except (IOError, FileNotFoundError):
+            raise VexLock('Cannot open project lockfile: {}'.format(self.lockfile))
+        try:
+            fh.truncate(0)
+            fh.write(b'# locked by %d at %a\n'%(os.getpid(), str(NOW())))
+            fh.write("{}".format(command).encode('utf-8'))
+            fh.write(b'\n')
+            fh.flush()
+            yield self
+            fh.write(b'# released by %d %a\n'%(os.getpid(), str(NOW())))
+        finally:
+            fh.close()
+
+# History: Used to track undo/redo and changes to repository state
+
+class HistoryStore:
+    def __init__(self, file, codec):
+        self.file = file
+        self._db = None
+        self.codec = codec
+    
+    @property
+    def db(self):
+        if self._db:
+            return self._db
+        self._db = sqlite3.connect(self.file)
+        return self._db
+
+    def makedirs(self):
+        c = self.db.cursor()
+        c.execute('''
+            create table if not exists dos(
+                addr text primary key,
+                prev text not null, 
+                timestamp datetime default current_timestamp,
+                action text)
+        ''')
+        c.execute('''
+            create table if not exists redos(
+                addr text primary key,
+                dos text not null)
+        ''')
+        c.execute('''
+            create table if not exists next(
+                id INTEGER PRIMARY KEY CHECK (id = 0) default 0,
+                mode text not null,
+                value text not null,
+                current text)
+        ''')
+        c.execute('''
+            create table if not exists current (
+                id INTEGER PRIMARY KEY CHECK (id = 0) default 0,
+                value text not null)
+        ''')
+        self.db.commit()
+
+    def exists(self):
+        if os.path.exists(self.file):
+            c = self.db.cursor()
+            c.execute('''SELECT name FROM sqlite_master WHERE name='current' ''')
+            if bool(c.fetchone()):
+                return bool(self.current())
+
+    def current(self):
+        c = self.db.cursor() 
+        c.execute('select value from current where id = 0')
+        row = c.fetchone()
+        if row:
+            return self.codec.parse(row[0])
+
+    def next(self):
+        c = self.db.cursor() 
+        c.execute('select mode, value, current from next where id = 0')
+        row = c.fetchone()
+        if row:
+            return str(row[0]), str(row[1]), str(row[2])
+
+    def set_current(self, value):
+        if not value: raise Exception()
+        c = self.db.cursor() 
+        buf = self.codec.dump(value)
+        c.execute('update current set value = ? where id = 0', [buf])
+        c.execute('insert or ignore into current (id,value) values (0,?)',[buf])
+        self.db.commit()
+
+    def set_next(self, mode, value, current):
+        c = self.db.cursor() 
+        c.execute('update next set mode = ?, value=?, current = ? where id = 0', [mode, value, current])
+        c.execute('insert or ignore into next (id,mode, value,current) values (0,?,?,?)',[mode, value, current])
+        self.db.commit()
+
+    def get_entry(self, addr):
+        c = self.db.cursor() 
+        c.execute('select prev, action from dos where addr = ?', [addr])
+        row = c.fetchone()
+        if row:
+            return (str(row[0]),self.codec.parse(row[1]))
+
+    def put_entry(self, prev, obj):
+        c=self.db.cursor()
+        buf = self.codec.dump(obj)
+        addr = UUID().split('-',1)[0]
+        c.execute('insert into dos (addr, prev, action) values (?,?,?)',[addr, prev, buf])
+        self.db.commit()
+        return addr
+
+    def get_redos(self, addr):
+        c = self.db.cursor() 
+        c.execute('select dos from redos where addr = ?', [addr])
+        row = c.fetchone()
+        if row and row[0]:
+            row = str(row[0]).split(",")
+            return row
+        return []
+
+    def set_redos(self, addr, redo):
+        c = self.db.cursor() 
+        buf = ",".join(redo) if redo else ""
+        c.execute('update redos set dos = ? where addr = ?', [buf, addr])
+        self.db.commit()
+        c.execute('insert or ignore into redos (addr,dos) values (?,?)',[addr, buf])
+        self.db.commit()
 
 # Filename patterns
 
@@ -316,6 +462,10 @@ class GitRepo:
     def addr_for_file(self, path):
         p = subprocess.run(['git', 'hash-object','-t','blob', path], stdout=subprocess.PIPE, encoding='utf-8', env=self.env)
         return "git:{}".format(p.stdout.strip())
+
+    def cat_file(self, addr):
+        p = subprocess.run(['git', 'cat-file', '-p', addr[4:]], stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=self.env)
+        return p.stdout
 
     def get_commit(self, addr):
         out = self.codec.parse_git_inline(addr)

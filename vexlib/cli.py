@@ -925,7 +925,10 @@ def main(root, argv, environ):
 
     try:
         if action.mode == "error":
-            print("Error: {}".format(", ".join(action.errors)))
+            if action.path:
+                print("Error: {} {}, {}".format(root.name, ":".join(action.path), ", ".join(action.errors)))
+            else:
+                print("Error: {}, {}".format(root.name, ", ".join(action.errors)))
             print(root.help(action.path, usage=True))
             return -1
         elif action.mode == "version":

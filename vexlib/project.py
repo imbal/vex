@@ -25,64 +25,30 @@
 """
 import os
 import sys
-import fcntl
 import time
-import sqlite3
 import os.path
 import unicodedata
 
 from datetime import datetime, timezone, timedelta
-from uuid import uuid4
 from contextlib import contextmanager
 
 from . import rson
 from .errors import *
-from .fs import FileStore, BlobStore, file_diff, match_filename, list_dir, Repo, GitRepo
+from .fs import UUID, FileStore, BlobStore, file_diff, match_filename, list_dir, Repo, GitRepo, LockFile, HistoryStore
 
-def UUID(): return str(uuid4())
 def NOW(): return datetime.now(timezone.utc)
 
 # If you check a last modified time, it should be reasonably in the past
 # if too close to current time, may miss any current modificatons
 
-MTIME_GRACE_SECONDS = 0.5
-
-# But on FAT32, this should be > 3 seconds, and on nanotimes, 1^-9
-
-
-class LockFile:
-    def __init__(self, lockfile):
-        self.lockfile = lockfile
-
-    def makelock(self):
-        with open(self.lockfile, 'xb') as fh:
-            fh.write(b'# created by %d at %a\n'%(os.getpid(), str(NOW())))
-
-    @contextmanager
-    def __call__(self, command):
-        try:
-            fh = open(self.lockfile, 'wb')
-            fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except (IOError, FileNotFoundError):
-            raise VexLock('Cannot open project lockfile: {}'.format(self.lockfile))
-        try:
-            fh.truncate(0)
-            fh.write(b'# locked by %d at %a\n'%(os.getpid(), str(NOW())))
-            fh.write("{}".format(command).encode('utf-8'))
-            fh.write(b'\n')
-            fh.flush()
-            yield self
-            fh.write(b'# released by %d %a\n'%(os.getpid(), str(NOW())))
-        finally:
-            fh.close()
+MTIME_GRACE_SECONDS = 0.5 # But on FAT32, this should be > 3 seconds, and on nanotimes, 1^-9
 
 class Codec:
-    EMPTY_GIT_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
-
     def __init__(self):
         self.classes = {}
         self.literals = {}
         self.codec = rson.Codec(self.to_tag, self.from_tag)
+
     def register(self, cls):
         if cls.__name__ in self.classes or cls.__name__ in self.literals:
             raise VexBug('Duplicate wire type')
@@ -107,6 +73,17 @@ class Codec:
         return self.codec.dump(obj).encode('utf-8')
     def parse(self, buf):
         return self.codec.parse(buf.decode('utf-8'))
+
+    # Wow, isn't git amazing.
+    EMPTY_GIT_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+    GIT_DIR_MODE = 0o040_000
+    GIT_FILE_MODE = 0o100_644
+    GIT_FILE_MODE2 = 0o100_664
+    GIT_EXEC_MODE = 0o100_755
+    GIT_LINK_MODE = 0o120_000
+    GIT_GITLINK_MODE = 0o160_000
+
+
     def parse_git_commit(self, buf):
         headers = {}
         buf =  buf.decode('utf-8')
@@ -204,13 +181,6 @@ class Codec:
                 raise VexBug('unknown git mode')
 
         return objects.Tree(new_entries)
-
-    GIT_DIR_MODE = 0o040_000
-    GIT_FILE_MODE = 0o100_644
-    GIT_FILE_MODE2 = 0o100_664
-    GIT_EXEC_MODE = 0o100_755
-    GIT_LINK_MODE = 0o120_000
-    GIT_GITLINK_MODE = 0o160_000
 
     def dump_git_tree(self, obj):
         out = {}
@@ -607,120 +577,11 @@ class objects:
             elif self.kind == "ignore":
                 pass
 
-# History: Used to track undo/redo and changes to repository state
-
-class HistoryStore:
-    def __init__(self, file):
-        self.file = file
-        self._db = None
-    
-    @property
-    def db(self):
-        if self._db:
-            return self._db
-        self._db = sqlite3.connect(self.file)
-        return self._db
-
-    def makedirs(self):
-        c = self.db.cursor()
-        c.execute('''
-            create table if not exists dos(
-                addr text primary key,
-                prev text not null, 
-                timestamp datetime default current_timestamp,
-                action text)
-        ''')
-        c.execute('''
-            create table if not exists redos(
-                addr text primary key,
-                dos text not null)
-        ''')
-        c.execute('''
-            create table if not exists next(
-                id INTEGER PRIMARY KEY CHECK (id = 0) default 0,
-                mode text not null,
-                value text not null,
-                current text)
-        ''')
-        c.execute('''
-            create table if not exists current (
-                id INTEGER PRIMARY KEY CHECK (id = 0) default 0,
-                value text not null)
-        ''')
-        self.db.commit()
-
-    def exists(self):
-        if os.path.exists(self.file):
-            c = self.db.cursor()
-            c.execute('''SELECT name FROM sqlite_master WHERE name='current' ''')
-            if bool(c.fetchone()):
-                return bool(self.current())
-
-    def current(self):
-        c = self.db.cursor() 
-        c.execute('select value from current where id = 0')
-        row = c.fetchone()
-        if row:
-            return codec.parse(row[0])
-
-    def next(self):
-        c = self.db.cursor() 
-        c.execute('select mode, value, current from next where id = 0')
-        row = c.fetchone()
-        if row:
-            return str(row[0]), str(row[1]), str(row[2])
-
-    def set_current(self, value):
-        if not value: raise Exception()
-        c = self.db.cursor() 
-        buf = codec.dump(value)
-        c.execute('update current set value = ? where id = 0', [buf])
-        c.execute('insert or ignore into current (id,value) values (0,?)',[buf])
-        self.db.commit()
-
-    def set_next(self, mode, value, current):
-        c = self.db.cursor() 
-        c.execute('update next set mode = ?, value=?, current = ? where id = 0', [mode, value, current])
-        c.execute('insert or ignore into next (id,mode, value,current) values (0,?,?,?)',[mode, value, current])
-        self.db.commit()
-
-    def get_entry(self, addr):
-        c = self.db.cursor() 
-        c.execute('select prev, action from dos where addr = ?', [addr])
-        row = c.fetchone()
-        if row:
-            return (str(row[0]),codec.parse(row[1]))
-
-    def put_entry(self, prev, obj):
-        c=self.db.cursor()
-        buf = codec.dump(obj)
-        addr = UUID().split('-',1)[0]
-        c.execute('insert into dos (addr, prev, action) values (?,?,?)',[addr, prev, buf])
-        self.db.commit()
-        return addr
-
-    def get_redos(self, addr):
-        c = self.db.cursor() 
-        c.execute('select dos from redos where addr = ?', [addr])
-        row = c.fetchone()
-        if row and row[0]:
-            row = str(row[0]).split(",")
-            return row
-        return []
-
-    def set_redos(self, addr, redo):
-        c = self.db.cursor() 
-        buf = ",".join(redo) if redo else ""
-        c.execute('update redos set dos = ? where addr = ?', [buf, addr])
-        self.db.commit()
-        c.execute('insert or ignore into redos (addr,dos) values (?,?)',[addr, buf])
-        self.db.commit()
-
 class History:
     START = 'init'
     Modes = set(('init', 'do', 'undo', 'redo', 'quiet'))
-    def __init__(self, dir):
-        self.store = HistoryStore(dir)
+    def __init__(self, dir, codec):
+        self.store = HistoryStore(dir, codec)
 
     def makedirs(self):
         self.store.makedirs()
@@ -876,7 +737,6 @@ class History:
             prev, obj = self.store.get_entry(do)
             out.append(obj)
         return out
-
 class Cancel(Exception):
     pass
 
@@ -1626,7 +1486,7 @@ class Project:
         self.names =      FileStore(os.path.join(config_dir, 'branches', 'names'), codec)
         self.sessions =   FileStore(os.path.join(config_dir, 'branches', 'sessions'), codec)
         self.state =      FileStore(os.path.join(config_dir, 'state'), codec, rawkeys=['message'])
-        self.history =   History(os.path.join(config_dir, 'history'))
+        self.history =   History(os.path.join(config_dir, 'history'), codec)
         self.lockfile =  LockFile(os.path.join(config_dir, 'lock'))
         self._lock = None
 

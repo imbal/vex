@@ -202,9 +202,9 @@ def Call(mode, path, args, callback):
         vex_error = isinstance(e, VexError)
 
     if path:
-        print("{}: error: {}".format(':'.join(path), message))
+        print("Error: vex {}, {}".format(':'.join(path), message))
     else:
-        print("vex: error: {}".format(message))
+        print("Error: vex {}".format(message))
 
     if not vex_error:
         print("\nWorse still, it's an error vex doesn't recognize yet. A python traceback follows:\n")
@@ -625,9 +625,10 @@ def Id():
 @vex_commit.on_run()
 @argspec('''
     --add?          # Run `vex add` before commiting
-    [file:path...]       # Commit only a few changed files
+    --message:str       # Set commit message
+    [file:path...]  # Commit only a few changed files
 ''')
-def Commit(add, file):
+def Commit(add, message, file):
     """
         Save the working copy, adding a new entry into the list of project changes.
 
@@ -643,6 +644,9 @@ def Commit(add, file):
 
         cwd = os.getcwd()
         files = file if file else None
+
+        if message is not None:
+            p.state.set('message', message)
 
         changes = p.commit_active(files)
 
@@ -1325,6 +1329,7 @@ def run(switch, value, bucket, pos1, opt1, opt2, tail):
 vex_git_push = vex_git.subcommand('push')
 vex_git_init = vex_git.subcommand('init')
 vex_git_clone = vex_git.subcommand('clone')
+vex_git_cat = vex_git.subcommand('cat')
 
 @vex_git_push.on_run()
 @argspec('url [remote_branch]')
@@ -1337,6 +1342,13 @@ def GitPush(url, remote_branch):
         branch = p.branches.get(active.branch)
         remote_branch = remote_branch or branch.name
         return p.repo.push(url, remote_branch, branch.head)
+
+@vex_git_cat.on_run()
+@argspec('commit')
+def GitCat(commit):
+    p = open_project()
+    if commit.startswith('git'):
+        return p.repo.cat_file(commit).decode('utf-8')
 
 
 @vex_git_clone.on_run()
