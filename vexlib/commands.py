@@ -456,7 +456,8 @@ def Status(all, missing):
                 if all:
                     yield "{}:{:8}\t{}".format('setting', entry.state, path)
             else:
-                yield "{:16}\t{}{}".format(entry.state, path, ('*' if entry.stash else '') )
+                if all or entry.state != 'tracked':
+                    yield "{:16}\t{}{}".format(entry.state, path, ('*' if entry.stash else '') )
         yield ""
         if all or missing:
             for f in p.untracked(os.getcwd()):

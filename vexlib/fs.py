@@ -428,7 +428,7 @@ class GitRepo:
     
     def clone(self, url):
         os.makedirs(self.dir, exist_ok=True)
-        p = subprocess.run(['git', 'clone', '-q', '--bare', url, self.dir])
+        p = subprocess.run(['git', 'clone',  '-q', '--bare', url, self.dir])
         return p.stdout
 
     def branches(self):
@@ -474,7 +474,7 @@ class GitRepo:
     def get_commit(self, addr):
         out = self.codec.parse_git_inline(addr)
         if out is not None: return out
-        p = subprocess.run(['git', 'cat-file', 'commit', addr[4:]], stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=self.env)
+        p = subprocess.run(['git', 'cat-file',  'commit', addr[4:]], stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=self.env)
         return self.codec.parse_git_commit(p.stdout)
 
     def get_manifest(self, addr):

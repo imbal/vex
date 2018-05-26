@@ -179,7 +179,7 @@ class Codec:
             elif mode == self.GIT_EXEC_MODE:
                 new_entries[name] = objects.File(addr, properties={'vex:executable': True})
             else:
-                raise VexBug('unknown git mode', "{:o}".format(mode))
+                new_entries[name] = objects.GitFile(addr, properties={'git:mode': mode})
 
         return objects.Tree(new_entries)
 
@@ -193,6 +193,8 @@ class Codec:
                     mode =  self.GIT_EXEC_MODE
                 else:
                     mode =  self.GIT_FILE_MODE
+            elif isinstance(entry, objects.GitFile):
+                mode = entry.properties['git:mode']
             else:
                 raise VexBug('unknown entry', entry)
 
@@ -312,6 +314,13 @@ class objects:
         text = "ignored path"
         def __init__(self):
             pass
+
+    @codec.register
+    class GitFile:
+        text = "git special"
+        def __init__(self, addr, properties):
+            self.addr = addr
+            self.properties = properties
 
     @codec.register
     class AddFile:
@@ -472,7 +481,7 @@ class objects:
     #
     @codec.register
     class Tracked:
-        Kinds = set(('dir', 'file', 'ignore'))
+        Kinds = set(('dir', 'file', 'ignore', 'gitfile'))
         States = set(('tracked', 'replaced', 'added', 'modified', 'deleted'))
         Unchanged = set(('tracked'))
         Changed = set(('added', 'modified', 'deleted', 'replaced'))
@@ -497,6 +506,8 @@ class objects:
                 self.state = 'modified'
 
         def refresh(self, path, addr_for_file):
+            if self.kind == 'ignore' or self.kind == 'gitfile' or not self.working:
+                return
             if self.state == 'deleted':
                 return
             try:
@@ -573,7 +584,8 @@ class objects:
                     raise VexBug('welp')
             elif self.kind == "ignore":
                 pass
-
+            elif self.kind == "gitfile":
+                pass
 class History:
     START = 'init'
     Modes = set(('init', 'do', 'undo', 'redo', 'quiet'))
@@ -812,7 +824,11 @@ class SessionTransaction:
     def get_session(self, uuid):
         if uuid in self.new_sessions:
             return self.new_sessions[uuid]
-        return self.project.sessions.get(uuid)
+        elif uuid in self.old_sessions:
+            return self.old_sessions[uuid]
+        value = self.project.sessions.get(uuid)
+        self.old_sessions[uuid] = value
+        return value
 
     def put_session(self, session):
         if session.uuid not in self.old_sessions:
@@ -862,8 +878,11 @@ class SessionTransaction:
     def get_state(self, name):
         if name in self.new_states:
             return self.new_states[name]
-
-        return self.project.state.get(name)
+        if name in self.old_states:
+            return self.old_states[name]
+        value = self.project.state.get(name)
+        self.old_states[name] = value
+        return value
 
     def set_setting(self, name, value):
         if name not in self.old_settings:
@@ -924,11 +943,10 @@ class SessionTransaction:
     def refresh_active(self):
         copy = self.active()
         for name, entry in copy.files.items():
-            if entry.working is None:
+            if not entry.working:
                 continue
-            path = self.repo_to_full_path(name)
+            path = copy.repo_to_full_path(self.project, name)
             entry.refresh(path, self.addr_for_file)
-
         self.put_session(copy)
         return copy
 
@@ -998,6 +1016,8 @@ class SessionTransaction:
                 else:
                     raise VexBug('state {}'.format(entry.state))
             elif entry.kind == 'ignore':
+                pass
+            elif entry.kind == 'gitfile':
                 pass
             else:
                 raise VexBug('kind')
@@ -1184,6 +1204,8 @@ class SessionTransaction:
                     output[path] = objects.Tracked('file', 'tracked', addr=entry.addr, properties=entry.properties)
                 elif isinstance(entry, objects.Ignored):
                     output[path] = objects.Tracked('ignore', 'tracked', properties={})
+                elif isinstance(entry, objects.GitFile):
+                    output[path] = objects.Tracked('gitfile', 'tracked', addr=entry.addr, properties=entry.properties)
 
         def extract(changes):
             for path, changes in changes.items():
@@ -1361,6 +1383,8 @@ class SessionTransaction:
                     self.new_working[path] = "dir"
             elif entry.kind == "ignore":
                 pass
+            elif entry.kind == "gitfile":
+                pass
             else:
                 raise VexBug('kind')
 
@@ -1459,8 +1483,11 @@ class SwitchTransaction:
     def get_state(self, name):
         if name in self.new_states:
             return self.new_states[name]
-
-        return self.project.state.get(name)
+        if name in self.old_states:
+            return self.old_states[name]
+        value = self.project.state.get(name)
+        self.old_states[name] = value
+        return value
 
     def action(self):
         branches = dict(old=self.old_branch_states, new=self.new_branch_states)
@@ -1893,7 +1920,7 @@ class Project:
         dirs = set()
         for name, entry in session.files.items():
             if not entry.working:       continue
-            if entry.kind == 'ignore':  continue
+            if entry.kind in ('ignore', 'gitfile'):  continue
             path = session.repo_to_full_path(self, name)
             entry.refresh(path, self.addr_for_file)
 
@@ -1962,14 +1989,12 @@ class Project:
                 entry.size = None
                 entry.mode = None
 
-            if entry.kind == 'ignore':
+            if entry.kind in ('ignore', 'gitfile'):
                 continue
 
             path = session.repo_to_full_path(self, name)
 
-            if entry.kind == "ignore":
-                pass
-            elif entry.state == "deleted":
+            if entry.state == "deleted":
                 pass
             elif entry.stash:
                 if entry.kind != 'file': raise VexBug('state')
@@ -2523,7 +2548,7 @@ class Project:
             author_uuid = UUID() 
             branch_uuid = UUID()
             session_uuid = UUID()
-            branch_name = 'latest'
+            branch_name = 'master' # git compat *rolls eyes*
 
             root_path = '/'
             
