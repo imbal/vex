@@ -439,7 +439,10 @@ class GitRepo:
                 branches[name] = fh.read().strip()
         with open(os.path.join(self.dir, 'packed-refs')) as fh:
             for line in fh.readlines():
-                value, name = line.split(' ',1)
+                line = line.split(' ',1)
+                if len(line) != 2:
+                    continue
+                value, name = line
                 name = name.strip()
                 if name.startswith('refs/heads/'):
                     branches[name.rsplit('/',1)[1]] = value

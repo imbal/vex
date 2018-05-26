@@ -31,6 +31,7 @@ import unicodedata
 
 from datetime import datetime, timezone, timedelta
 from contextlib import contextmanager
+from stat import S_ISREG, S_ISDIR
 
 from . import rson
 from .errors import *
@@ -178,7 +179,7 @@ class Codec:
             elif mode == self.GIT_EXEC_MODE:
                 new_entries[name] = objects.File(addr, properties={'vex:executable': True})
             else:
-                raise VexBug('unknown git mode')
+                raise VexBug('unknown git mode', "{:o}".format(mode))
 
         return objects.Tree(new_entries)
 
@@ -496,69 +497,67 @@ class objects:
                 self.state = 'modified'
 
         def refresh(self, path, addr_for_file):
+            if self.state == 'deleted':
+                return
+            try:
+                st = os.stat(path)
+            except FileNotFoundError:
+                self.state = "deleted"
+                self.kind = self.replace or self.kind
+                self.addr, self.properties = None, None
+                return
             if self.kind == "file":
-                if not os.path.exists(path):
-                    self.state = "deleted"
-                    self.kind = self.replace or self.kind
-                    self.addr, self.properties = None, None
-                elif os.path.isdir(path):
+                if S_ISDIR(st.st_mode):
                     if not self.replace: self.replace = self.kind
                     self.state = "replaced"
                     self.kind = "dir"
-                elif self.state == 'deleted':
-                    pass
                 elif self.state == 'tracked':
                     modified = False
-                    now = time.time()
-                    stat = os.stat(path)
                     old_mtime = self.mtime
 
-                    if self.mtime != None and (self.mtime < stat.st_mtime):
+                    if self.mtime != None and (self.mtime < st.st_mtime):
                         modified=True
-                    elif self.size != None and (self.size != stat.st_size):
+                    elif self.size != None and (self.size != st.st_size):
                         modified = True
-                    elif self.mode != None and (self.mode != stat.st_mode):
+                    elif self.mode != None and (self.mode != st.st_mode):
                         modified = True
                     elif self.mtime is None or self.mode is None or self.size is None:
                         new_addr = addr_for_file(path)
                         if new_addr != self.addr:
                             modified = True
                         else:
-                            self.mode = stat.st_mode
-                            self.size = stat.st_size
-                            if now - stat.st_mtime >= MTIME_GRACE_SECONDS:
-                                self.mtime = stat.st_mtime
-                            if stat.st_mode & 64:
+                            self.mode = st.st_mode
+                            self.size = st.st_size
+                            now = time.time()
+                            if now - st.st_mtime >= MTIME_GRACE_SECONDS:
+                                self.mtime = st.st_mtime
+                            if st.st_mode & 64:
                                 self.properties['vex:executable'] = True
                             elif 'vex:executable' in self.properties:
                                 self.properties.pop('vex:executable')
 
                     if modified:
                         self.state = "modified"
-                        self.mode = stat.st_mode
-                        self.size = stat.st_size
-                        if stat.st_mode & 64:
+                        self.mode = st.st_mode
+                        self.size = st.st_size
+                        if st.st_mode & 64:
                             self.properties['vex:executable'] = True
                         elif 'vex:executable' in self.properties:
                             self.properties.pop('vex:executable')
-                        if now - stat.st_mtime >= MTIME_GRACE_SECONDS:
-                            self.mtime = stat.st_mtime
+                        now = time.time()
+                        if now - st.st_mtime >= MTIME_GRACE_SECONDS:
+                            self.mtime = st.st_mtime
                 elif self.state in ('modified', 'added', 'replaced'):
-                    stat = os.stat(path)
-                    self.mode = stat.st_mode
-                    self.size = stat.st_size
-                    if stat.st_mode & 64:
+                    self.mode = st.st_mode
+                    self.size = st.st_size
+                    if st.st_mode & 64:
                         self.properties['vex:executable'] = True
                     elif 'vex:executable' in self.properties:
                         self.properties.pop('vex:executable')
                 else:
                     raise VexBug('welp')
             elif self.kind == "dir":
-                if not os.path.exists(path):
-                    self.kind = self.replace or self.kind
-                    self.state = "deleted"
-                    self.properties = None
-                elif os.path.isfile(path):
+                if S_ISREG(st.st_mode):
                     self.state = "replaced"
                     if not self.replace: self.replace = self.kind
                     self.kind = "file"
