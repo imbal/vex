@@ -1376,10 +1376,12 @@ def GitCat(commit):
     --prefix:path     # Subdirectory to check out of the repository, normally the working directory name
     --include:str... # files to include whe using vex add, can be passed multiple times 
     --ignore:str...  # files to ignore when using vex add, can be passed multiple times
+    --author:str    #
+    --email:str     #
     url              # 
     [directory]      #
 ''')
-def GitClone(url, directory, working, config, prefix, include, ignore):
+def GitClone(url, directory, working, config, prefix, include, ignore, author, email):
     """
         Create a new vex project in a given directory from the given git url
 
@@ -1412,6 +1414,11 @@ def GitClone(url, directory, working, config, prefix, include, ignore):
     include = include or DEFAULT_INCLUDE
     ignore = ignore or DEFAULT_IGNORE
 
+    if not author:
+        author = subprocess.run(['git','config','--global', 'user.name'], encoding='utf-8', check=True, stdout=subprocess.PIPE).stdout.strip()
+
+    if not email:
+        email = subprocess.run(['git','config','--global', 'user.email'], encoding='utf-8', check=True, stdout=subprocess.PIPE).stdout.strip()
     p = Project(config_dir, working_dir, fake, git=True)
 
     if p.exists() and not p.clean_state():
@@ -1425,7 +1432,7 @@ def GitClone(url, directory, working, config, prefix, include, ignore):
         p.makelock()
         with p.lock('git:clone') as p:
             yield ('Creating working env')
-            p.init_from_git_clone(prefix, include, ignore)
+            p.init_from_git_clone(prefix, include, ignore, author, email)
 
 @vex_git_init.on_run()
 @argspec('''
@@ -1434,9 +1441,11 @@ def GitClone(url, directory, working, config, prefix, include, ignore):
     --prefix:path     # Subdirectory to check out of the repository, normally the working directory name
     --include:str... # files to include whe using vex add, can be passed multiple times 
     --ignore:str...  # files to ignore when using vex add, can be passed multiple times
+    --author:str
+    --email:str
     [directory]      # defaults to '.'
 ''')
-def GitInit(directory, working, config, prefix, include, ignore):
+def GitInit(directory, working, config, prefix, include, ignore, author, email):
     """
         Create a new vex project in a given directory from the given git url
 
@@ -1467,6 +1476,11 @@ def GitInit(directory, working, config, prefix, include, ignore):
     include = include or DEFAULT_INCLUDE
     ignore = ignore or DEFAULT_IGNORE
 
+    if not author:
+        author = subprocess.run(['git','config','--global', 'user.name'], encoding='utf-8', check=True, stdout=subprocess.PIPE).stdout.strip()
+
+    if not email:
+        email = subprocess.run(['git','config','--global', 'user.email'], encoding='utf-8', check=True, stdout=subprocess.PIPE).stdout.strip()
     p = Project(config_dir, working_dir, fake, git=True)
 
     if p.exists() and not p.clean_state():
@@ -1479,7 +1493,7 @@ def GitInit(directory, working, config, prefix, include, ignore):
         p.makelock()
         with p.lock('git:init') as p:
             yield ('Creating working env')
-            p.init_from_git_init(prefix, include, ignore)
+            p.init_from_git_init(prefix, include, ignore, author, email)
 
 
 

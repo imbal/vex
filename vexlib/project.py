@@ -75,6 +75,9 @@ class Codec:
     def parse(self, buf):
         return self.codec.parse(buf.decode('utf-8'))
 
+class GitCodec:
+    def __init__(self, codec):
+        self.codec = codec
     # Wow, isn't git amazing.
     EMPTY_GIT_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
     GIT_DIR_MODE = 0o040_000
@@ -221,6 +224,12 @@ class Codec:
 codec = Codec()
 
 class objects:
+    @codec.register
+    class Account:
+        def __init__(self, name, email):
+            self.name = name
+            self.email = email
+
     @codec.register
     class Inline:
         def __init__(self, object):
@@ -1257,9 +1266,9 @@ class SessionTransaction:
         return dirs, names
 
     def add_files_to_active(self, files, include, ignore):
-        dirs, names = self.find_new_files(files, include, ignore)
-
         active = self.active()
+        dirs, names = self.find_new_files(active, files, include, ignore)
+
         added = set()
         new_files = {}
         for name, filename in dirs.items():
@@ -1491,7 +1500,7 @@ class Project:
         self.config_dir = config_dir
         self.git = git
         if git:
-            self.repo = GitRepo(config_dir, codec)
+            self.repo = GitRepo(config_dir, GitCodec(codec.codec))
         else:
             self.repo = Repo(config_dir, codec)
         self.fake = fake
@@ -2096,6 +2105,7 @@ class Project:
             txn.set_setting('ignore', ignore)
             txn.set_setting('include', include)
             txn.set_setting('template', '')
+            txn.set_setting('authors', {})
             txn.set_state('message', '')
 
         with self.do('init') as txn:
@@ -2482,7 +2492,7 @@ class Project:
         #   process inbox
         # on error, switch out to old session
 
-    def init_from_git_clone(self, prefix, include, ignore):
+    def init_from_git_clone(self, prefix, include, ignore, author_name, author_email):
         if not self._lock:
             raise VexBug('unlocked')
         if not self.history_isempty():
@@ -2519,8 +2529,10 @@ class Project:
                 txn.set_setting('template', '')
             author_uuid = UUID() 
             txn.set_state("author", author_uuid)
+            if not txn.get_setting('authors'):
+                txn.set_setting('authors', {author_uuid:objects.Account(author_name, author_email)})
 
-    def init_from_git_init(self, prefix, include, ignore):
+    def init_from_git_init(self, prefix, include, ignore, author_name, author_email):
         if not self._lock:
             raise VexBug('unlocked')
         if not self.history_isempty():
@@ -2533,9 +2545,11 @@ class Project:
             txn.set_setting('include', include)
             txn.set_setting('template', '')
             txn.set_state('message', '')
+            author_uuid = UUID() 
+            txn.set_state("author", author_uuid)
+            txn.set_setting('authors', {author_uuid:objects.Account(author_name, author_email)})
 
         with self.do('init') as txn:
-            author_uuid = UUID() 
             branch_uuid = UUID()
             session_uuid = UUID()
             branch_name = 'master' # git compat *rolls eyes*
@@ -2570,6 +2584,5 @@ class Project:
             session = objects.Session(session_uuid, branch_uuid, 'attached', prefix, commit_uuid, commit_uuid, files, message="", activity=None) 
             txn.put_session(session)
 
-            txn.set_state("author", author_uuid)
             txn.set_state("active", session_uuid)
             txn.set_state("prefix", prefix)
