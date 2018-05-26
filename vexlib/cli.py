@@ -456,9 +456,9 @@ def parse_args(argspec, argv, environ):
             args[name] = tail
 
     if options and named_args:
-        raise parse_err("unnamed options given {!r}".format(" ".join(options)), pos, argv)
+        raise parse_err("unnamed options given {!r}".format(" ".join(arg for pos,arg in options)), pos, argv)
     if options:
-        raise parse_err("unrecognised option: {!r}".format(" ".join(options)), pos, argv)
+        raise parse_err("unrecognised option: {!r}".format(" ".join(arg for pos,arg in options)), pos, argv)
     return args
 
 def try_parse(name, arg, argtype, pos, argv):

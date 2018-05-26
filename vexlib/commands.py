@@ -614,7 +614,7 @@ def Restore(file):
             yield "restore: {}".format(f)
 
 @vex_missing.on_run()
-@argspec('')
+@argspec()
 def Missing():
     """
         List files that are untracked within the working copy.

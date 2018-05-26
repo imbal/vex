@@ -1226,7 +1226,7 @@ class SessionTransaction:
                         raise VexBug(change)
 
         old_uuid, old, changes = self.prepared_changeset(commit)
-        if old.root:
+        if old.root is not None:
             walk('/', old.root, root=True)
         else:
             output['/'] = objects.Tracked("dir", "tracked", properties={})
@@ -1253,7 +1253,7 @@ class SessionTransaction:
                 to_scan.add(filename)
             filename = os.path.split(filename)[0]
             name = os.path.split(name)[0]
-            while name != '/' and name != self.project.VEX:
+            while name != '/' and filename != self.project.config_dir:
                 entry = active.files.get(name)
                 if entry and entry.kind != 'dir': 
                     break
