@@ -2166,22 +2166,38 @@ class Project:
 
     def active_diff_files(self, files):
         files = self.check_files(files) if files else None
-        with self.do_without_undo('diff') as txn:
-            session = txn.refresh_active()
-            files = [session.full_to_repo_path(self, filename) for filename in files] if files else None
-            changeset = txn.active_changeset(files)
+        if self.git:
 
-            output = {}
-            for name, c in changeset.items():
-                e = session.files[name]
-                if e.kind == 'file' and e.addr:
-                    output[name] = dict(old=self.repo.get_file_path(e.addr), new=session.repo_to_full_path(self.prefix(),name))
-            output2 = {}
-            for name, d in output.items():
-                df= file_diff(name, d['old'], d['new'])
-                if df: 
-                    output2[name] = df
-            return output2
+            with self.do_without_undo('diff') as txn:
+                session = txn.refresh_active()
+                files = [session.full_to_repo_path(self, filename) for filename in files] if files else None
+                changeset = txn.active_changeset(files)
+
+                output = {}
+                for name, c in changeset.items():
+                    e = session.files[name]
+                    if e.kind == 'file' and e.addr:
+                        new = self.repo.put_scratch_file(session.repo_to_full_path(self, name))
+                        output[name] = self.repo.diff(e.addr, new)
+                return output
+
+        else:
+            with self.do_without_undo('diff') as txn:
+                session = txn.refresh_active()
+                files = [session.full_to_repo_path(self, filename) for filename in files] if files else None
+                changeset = txn.active_changeset(files)
+
+                output = {}
+                for name, c in changeset.items():
+                    e = session.files[name]
+                    if e.kind == 'file' and e.addr:
+                        output[name] = dict(old=self.repo.get_file_path(e.addr), new=session.repo_to_full_path(self,name))
+                output2 = {}
+                for name, d in output.items():
+                    df= file_diff(name, d['old'], d['new'])
+                    if df: 
+                        output2[name] = df
+                return output2
 
 
     def active_diff_commit(self, commit):

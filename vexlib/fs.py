@@ -467,6 +467,12 @@ class GitRepo:
         p = subprocess.run(['git', 'hash-object','-t','blob', path], stdout=subprocess.PIPE, encoding='utf-8', env=self.env)
         return "git:{}".format(p.stdout.strip())
 
+    def diff(self,old, new):
+        cmd = ['git', 'diff', old[4:], new[4:]]
+        print(cmd, file=sys.stderr)
+        p = subprocess.run(cmd, stdout=subprocess.PIPE, encoding='utf8')
+        return p.stdout
+
     def cat_file(self, addr):
         p = subprocess.run(['git', 'cat-file', '-p', addr[4:]], stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=self.env)
         return p.stdout
