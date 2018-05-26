@@ -683,8 +683,6 @@ class History:
             yield None
             return
 
-        print(redos, n, file=sys.stderr)
-
         do = redos.pop(n)
 
         prev, obj = self.store.get_entry(do)
@@ -826,11 +824,7 @@ class SessionTransaction:
     def get_session(self, uuid):
         if uuid in self.new_sessions:
             return self.new_sessions[uuid]
-        elif uuid in self.old_sessions:
-            return self.old_sessions[uuid]
-        value = self.project.sessions.get(uuid)
-        self.old_sessions[uuid] = value
-        return value
+        return self.project.sessions.get(uuid)
 
     def put_session(self, session):
         if session.uuid not in self.old_sessions:
@@ -880,11 +874,7 @@ class SessionTransaction:
     def get_state(self, name):
         if name in self.new_states:
             return self.new_states[name]
-        if name in self.old_states:
-            return self.old_states[name]
-        value = self.project.state.get(name)
-        self.old_states[name] = value
-        return value
+        return self.project.state.get(name)
 
     def set_setting(self, name, value):
         if name not in self.old_settings:
@@ -942,15 +932,16 @@ class SessionTransaction:
         session.commit = commit_uuid
         self.put_session(session)
 
-    def refresh_active(self):
-        copy = self.active()
-        for name, entry in copy.files.items():
+    def refresh_active(self, active=None):
+        if active is None:
+            active = self.active()
+        for name, entry in active.files.items():
             if not entry.working:
                 continue
-            path = copy.repo_to_full_path(self.project, name)
-            entry.refresh(path, self.addr_for_file)
-        self.put_session(copy)
-        return copy
+            path = active.repo_to_full_path(self.project, name)
+            entry.refresh(path, self.project.addr_for_file)
+        self.put_session(active)
+        return active
 
     def prepared_changeset(self, old_uuid):
         changes = objects.Changeset(entries={})

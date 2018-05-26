@@ -1279,8 +1279,11 @@ def DebugTest(git):
         vex.commit()
 
         vex.undo()
+        vex.status(all=True)
         vex.commit.prepare()
+        vex.status(all=True)
         vex.commit.prepared()
+        vex.status(all=True)
 
         vex.undo()
         vex.undo()
