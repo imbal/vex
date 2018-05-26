@@ -76,17 +76,17 @@ class Codec:
         return self.codec.parse(buf.decode('utf-8'))
 
 class GitCodec:
-    def __init__(self, codec):
-        self.codec = codec
-    # Wow, isn't git amazing.
-    EMPTY_GIT_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+    EMPTY_GIT_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904" # Wow, isn't git amazing.
     GIT_DIR_MODE = 0o040_000
     GIT_FILE_MODE = 0o100_644
     GIT_FILE_MODE2 = 0o100_664
     GIT_EXEC_MODE = 0o100_755
     GIT_LINK_MODE = 0o120_000
-    GIT_GITLINK_MODE = 0o160_000
+    GIT_GITLINK_MODE = 0o160_000 # actually a submodule, blegh
 
+    def __init__(self, project, codec):
+        self.codec = codec
+        self.project = project
 
     def parse_git_commit(self, buf):
         headers = {}
@@ -140,9 +140,17 @@ class GitCodec:
 
         changeset = self.parse_git_inline(obj.changeset)
         author_uuid = changeset.author
-        author_name = changeset.author # XXX
-        buf.extend(b"author %s <%s> %d +0000\n" % (author_name.encode('utf8'), author_uuid.encode('utf-8'), int(obj.timestamp.timestamp())))
-        buf.extend(b"committer %s <%s> %d +0000\n" % (author_name.encode('utf8'), author_uuid.encode('utf-8'), int(obj.timestamp.timestamp())))
+        authors = self.project.settings.get('authors')
+        if authors and author_uuid in authors:
+            author = authors[author_uuid]
+            author_name = author.name
+            author_email = author.email
+        else:
+            author_name = author_uuid 
+            author_email = 'uuid:{}'.format(author_uuid)
+
+        buf.extend(b"author %s <%s> %d +0000\n" % (author_name.encode('utf8'), author_email.encode('utf-8'), int(obj.timestamp.timestamp())))
+        buf.extend(b"committer %s <%s> %d +0000\n" % (author_name.encode('utf8'), author_email.encode('utf-8'), int(obj.timestamp.timestamp())))
 
         buf.extend(b"vex.kind %s\n" % obj.kind.encode('utf8'))
         buf.extend(b"vex.timestamp %s\n" % rson.format_datetime(obj.timestamp).encode('utf8'))
@@ -1500,7 +1508,7 @@ class Project:
         self.config_dir = config_dir
         self.git = git
         if git:
-            self.repo = GitRepo(config_dir, GitCodec(codec.codec))
+            self.repo = GitRepo(config_dir, GitCodec(self, codec.codec))
         else:
             self.repo = Repo(config_dir, codec)
         self.fake = fake
