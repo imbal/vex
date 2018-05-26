@@ -683,6 +683,8 @@ class History:
             yield None
             return
 
+        print(redos, n, file=sys.stderr)
+
         do = redos.pop(n)
 
         prev, obj = self.store.get_entry(do)
@@ -2042,7 +2044,7 @@ class Project:
             txn.put_session(active)
 
 
-    def log(self, all=False):
+    def log(self, all=False, count=50):
         with self.do_without_undo('log') as txn:
             session = txn.active()
 
@@ -2075,8 +2077,10 @@ class Project:
             if ts:
                 ts= rson.format_datetime(ts)
             out.append('{} {} 0x{} {}: {}'.format(n, ts,commit[4:12],  obj.kind, message))
-            n-=1
             commit = obj.previous
+            if -n > count:
+                break
+            n-=1
             
         return out
 
