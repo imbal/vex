@@ -1384,7 +1384,9 @@ def GitClone(url, directory, working, config, prefix, include, ignore):
 
     """
 
-    working_dir = working or directory or os.getcwd()
+    name = url.rsplit('/',1)[1].rsplit('.git',1)[0]
+
+    working_dir = working or directory or os.path.join(os.getcwd(), name)
     config_dir = config or os.path.join(working_dir,  DEFAULT_CONFIG_DIR)
     prefix = prefix or '/'
     prefix = os.path.join('/', prefix)
