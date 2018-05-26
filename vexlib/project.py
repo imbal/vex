@@ -127,7 +127,7 @@ class Codec:
 
     def dump_git_commit(self, obj):
         buf = bytearray()
-        if obj.kind != 'prepare':
+        if obj.root is not None: # obj.kind != 'prepare':
             root= obj.root[4:].encode('utf-8')
         else:
             root = self.EMPTY_GIT_TREE.encode('utf-8')
@@ -564,8 +564,6 @@ class objects:
                     self.properties = {}
                     self.addr = None
                 elif self.state == 'added' or self.state =='replaced':
-                    pass
-                elif self.state == 'deleted':
                     pass
                 elif self.state == 'modified':
                     pass
@@ -1202,7 +1200,10 @@ class SessionTransaction:
                         raise VexBug(change)
 
         old_uuid, old, changes = self.prepared_changeset(commit)
-        walk('/', old.root, root=True)
+        if old.root:
+            walk('/', old.root, root=True)
+        else:
+            output['/'] = objects.Tracked("dir", "tracked", properties={})
 
         extract(changes)
 
@@ -2503,3 +2504,57 @@ class Project:
                 txn.set_setting('template', '')
             author_uuid = UUID() 
             txn.set_state("author", author_uuid)
+
+    def init_from_git_init(self, prefix, include, ignore):
+        if not self._lock:
+            raise VexBug('unlocked')
+        if not self.history_isempty():
+            raise VexNoHistory('cant reinit')
+        if not prefix.startswith('/'):
+            raise VexArgument('crap prefix')
+        with self.do_without_undo('init') as txn:
+            # XXX: DOUBLE TXN so addr for file is easy, ugh
+            txn.set_setting('ignore', ignore)
+            txn.set_setting('include', include)
+            txn.set_setting('template', '')
+            txn.set_state('message', '')
+
+        with self.do('init') as txn:
+            author_uuid = UUID() 
+            branch_uuid = UUID()
+            session_uuid = UUID()
+            branch_name = 'latest'
+
+            root_path = '/'
+            
+            changes = {
+                    '/' : [ objects.AddDir(properties={}) ] ,
+            }
+            if prefix != '/':
+                changes[prefix] = [ objects.AddDir(properties={})]
+            changeset = objects.Changeset(message="", entries=changes, author=author_uuid)
+
+            root_uuid = txn.new_root_with_changeset(None, changeset)
+
+            changeset_uuid = txn.put_manifest(changeset)
+
+            commit = objects.Commit('init', txn.now, previous=None, changeset=changeset_uuid, root=root_uuid, ancestors={})
+            commit_uuid = txn.put_commit(commit)
+
+            branch = objects.Branch(branch_uuid, branch_name, 'active', prefix, commit_uuid, None, commit_uuid, None, [session_uuid])
+            txn.put_branch(branch)
+            txn.set_branch_uuid(branch_name, branch.uuid)
+
+            files = txn.build_files(commit_uuid)
+            for name, entry in files.items():
+                if os.path.commonpath((name, prefix)) == prefix:
+                    entry.working = True
+                else:
+                    entry.working = None
+
+            session = objects.Session(session_uuid, branch_uuid, 'attached', prefix, commit_uuid, commit_uuid, files, message="", activity=None) 
+            txn.put_session(session)
+
+            txn.set_state("author", author_uuid)
+            txn.set_state("active", session_uuid)
+            txn.set_state("prefix", prefix)

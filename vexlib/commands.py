@@ -1405,9 +1405,63 @@ def GitClone(url, directory, working, config, prefix, include, ignore):
         yield p.repo.clone(url)
         p.makedirs()
         p.makelock()
-        with p.lock('git:init') as p:
+        with p.lock('git:clone') as p:
             yield ('Creating working env')
             p.init_from_git_clone(prefix, include, ignore)
+
+@vex_git_init.on_run()
+@argspec('''
+    --working:path    # Working directory, where files are edited/changed
+    --config:path     # Normally /working_dir/.vex if not given 
+    --prefix:path     # Subdirectory to check out of the repository, normally the working directory name
+    --include:str... # files to include whe using vex add, can be passed multiple times 
+    --ignore:str...  # files to ignore when using vex add, can be passed multiple times
+    [directory]      # defaults to '.'
+''')
+def GitInit(directory, working, config, prefix, include, ignore):
+    """
+        Create a new vex project in a given directory from the given git url
+
+        - If no directory given, it is assumed to be the current directory.
+        - Inside that directory, a `.vex` directory is created to store the project history.
+        - An initial empty commit is added.
+        - The subtree checkout defaults to `/directory_name`.
+        
+        i.e a `vex init` in `/a/b` creates a `/a/b/.vex` directory, an empty commit, and checks
+        out `/b` in the repo, into `/a/b` on the filesystem.`
+
+        If you make a mistake, `vex undo` will undo the initial commit, but not remove
+        the `.vex` directory. 
+
+        `init` takes multiple `--include=<file>` and `--ignore=<file>` arguments, 
+        defaulting to `--include='*' --ignore='.vex' --ignore='.*'`
+
+        `--include`, `--ignore`, can be passed multiple times, and work the 
+        same as `vex include 'pattern'` and `vex ignore 'pattern'`
+
+    """
+
+    working_dir = working or directory or os.getcwd()
+    config_dir = config or os.path.join(working_dir,  DEFAULT_CONFIG_DIR)
+    prefix = prefix or '/'
+    prefix = os.path.join('/', prefix)
+
+    include = include or DEFAULT_INCLUDE
+    ignore = ignore or DEFAULT_IGNORE
+
+    p = Project(config_dir, working_dir, fake, git=True)
+
+    if p.exists() and not p.clean_state():
+        yield ('This vex project is unwell. Try `vex debug:status`')
+    elif p.exists():
+        raise VexError("A vex project already exists here")
+    else:
+        yield ('Creating vex project in "{}"...'.format(working_dir))
+        p.makedirs()
+        p.makelock()
+        with p.lock('git:init') as p:
+            yield ('Creating working env')
+            p.init_from_git_init(prefix, include, ignore)
 
 
 

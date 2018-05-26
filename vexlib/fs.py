@@ -203,14 +203,15 @@ def list_dir(dir, ignore, include):
     scan = [dir]
     while scan:
         dir = scan.pop()
-        for f in os.listdir(dir):
-            p = os.path.join(dir, f)
-            if not match_filename(p, f, ignore, include): continue
-            if os.path.isdir(p):
-                output.append(p)
-                scan.append(p)
-            elif os.path.isfile(p):
-                output.append(p)
+        with os.scandir(dir) as ls:
+            for f in ls:
+                p = f.path
+                if not match_filename(p, f.name, ignore, include): continue
+                if f.is_dir():
+                    output.append(p)
+                    scan.append(p)
+                elif f.is_file():
+                    output.append(p)
     return output
 # Stores
 
