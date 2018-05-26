@@ -9,6 +9,7 @@ vex supports bash completion: run `complete -o nospace -C vex vex`
 """
 import os
 import sys
+import time
 import types
 import os.path
 import traceback
@@ -28,7 +29,7 @@ DEFAULT_IGNORE =  [".*", DEFAULT_CONFIG_DIR, ".DS_Store", "*~", "*.swp", "__*__"
 fake = False
 
 # CLI bits. Should handle environs, cwd, etc
-vex_cmd = Command('vex', long=__doc__, prefixes=['fake'])
+vex_cmd = Command('vex', long=__doc__, prefixes=['fake', 'time'])
 vex_init = vex_cmd.subcommand('init')
 
 vex_undo = vex_cmd.subcommand('undo')
@@ -164,63 +165,76 @@ def Call(mode, path, args, callback):
     global fake # so sue me
     if mode == 'fake':
         fake = True
-    try:
-        result = callback()
-        if sys.stderr.isatty() and sys.stdout.isatty():
-            env = {}
-            env.update(os.environ)
-            env["LESS"] = "FRX"
-            env["LV"] = "-c"
-            p = subprocess.Popen('less', env=env, stdin=subprocess.PIPE, encoding='utf8')
+    def do(pager=True):
+        try:
+            result = callback()
+            if pager and sys.stderr.isatty() and sys.stdout.isatty():
+                env = {}
+                env.update(os.environ)
+                env["LESS"] = "FRX"
+                env["LV"] = "-c"
+                p = subprocess.Popen('less', env=env, stdin=subprocess.PIPE, encoding='utf8')
 
-            if isinstance(result, types.GeneratorType):
+                if isinstance(result, types.GeneratorType):
+                    for line in result:
+                        if line is not None:
+                            print(line, file=p.stdin)
+                elif result is not None:
+                    print(result, file=p.stdin)
+                p.stdin.close()
+                while p.poll() is None:
+                    try:
+                        p.wait()
+                    except KeyboardInterrupt:
+                        pass
+            elif isinstance(result, types.GeneratorType):
                 for line in result:
                     if line is not None:
-                        print(line, file=p.stdin)
+                        print(line)
             elif result is not None:
-                print(result, file=p.stdin)
-            p.stdin.close()
-            while p.poll() is None:
-                try:
-                    p.wait()
-                except KeyboardInterrupt:
-                    pass
-        elif isinstance(result, types.GeneratorType):
-            for line in result:
-                if line is not None:
-                    print(line)
-        elif result is not None:
+                print(result)
+            return 0
+
+        except Exception as e:
+            if mode =="debug":
+                raise
+            result= "".join(traceback.format_exception(*sys.exc_info()))
+            message = str(e)
+            if not message: message = e.__class__.__name__
+            vex_error = isinstance(e, VexError)
+
+        if path:
+            print("Error: vex {}, {}".format(':'.join(path), message))
+        else:
+            print("Error: vex {}".format(message))
+
+        if not vex_error:
+            print("\nWorse still, it's an error vex doesn't recognize yet. A python traceback follows:\n")
             print(result)
-        return 0
 
-    except Exception as e:
-        if mode =="debug":
-            raise
-        result= "".join(traceback.format_exception(*sys.exc_info()))
-        message = str(e)
-        if not message: message = e.__class__.__name__
-        vex_error = isinstance(e, VexError)
+        p = get_project()
 
-    if path:
-        print("Error: vex {}, {}".format(':'.join(path), message))
+        if p and p.exists() and not p.clean_state():
+            with p.lock('rollback') as p:
+                p.rollback_new_action()
+
+                if not p.clean_state():
+                    print('This is bad: The project history is corrupt, try `vex debug:status` for more information')
+                else:
+                    print('Good news: The changes that were attempted have been undone')
+        return -1
+    if mode == 'time':
+        now = time.monotonic()
+        ret = do(pager=False)
+        end = time.monotonic()
+        print()
+        print("{}".format(end-now))
+
+        return ret
+
     else:
-        print("Error: vex {}".format(message))
+        return do()
 
-    if not vex_error:
-        print("\nWorse still, it's an error vex doesn't recognize yet. A python traceback follows:\n")
-        print(result)
-
-    p = get_project()
-
-    if p and p.exists() and not p.clean_state():
-        with p.lock('rollback') as p:
-            p.rollback_new_action()
-
-            if not p.clean_state():
-                print('This is bad: The project history is corrupt, try `vex debug:status` for more information')
-            else:
-                print('Good news: The changes that were attempted have been undone')
-    return -1
 
 @contextmanager
 def watcher():

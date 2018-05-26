@@ -778,12 +778,6 @@ class SessionTransaction:
     def prefix(self):
         return self.active().prefix
 
-    def repo_to_full_path(self, file):
-        return self.active().repo_to_full_path(self.project, file)
-
-    def full_to_repo_path(self, file):
-        return self.active().full_to_repo_path(self.project, file)
-
     def addr_for_file(self, file):
         return self.project.addr_for_file(file)
 
@@ -972,15 +966,15 @@ class SessionTransaction:
 
             if entry.kind == 'file':
                 if entry.state == "added":
-                    filename = self.repo_to_full_path(repo_name)
+                    filename = active.repo_to_full_path(self.project, repo_name)
                     addr = self.addr_for_file(filename)
                     out[repo_name]=objects.AddFile(addr, properties=entry.properties)
                 elif entry.state == "replaced":
-                    filename = self.repo_to_full_path(repo_name)
+                    filename = active.repo_to_full_path(self.project, repo_name)
                     addr = self.addr_for_file(filename)
                     out[repo_name]=objects.NewFile(addr, properties=entry.properties)
                 elif entry.state == "modified":
-                    filename = self.repo_to_full_path(repo_name)
+                    filename = active.repo_to_full_path(self.project, repo_name)
                     addr = self.addr_for_file(filename)
                     out[repo_name]=objects.ChangeFile(addr, properties=entry.properties)
                 elif entry.state == "deleted":
@@ -1037,7 +1031,7 @@ class SessionTransaction:
                 mode = None
                 size = None
                 if entry.working:
-                    path = self.repo_to_full_path(name)
+                    path = active.repo_to_full_path(self.project, name)
                     stat = os.stat(path)
                     if (time.time() - stat.st_mtime) < MTIME_GRACE_SECONDS:
                         mtime = None
@@ -1072,7 +1066,7 @@ class SessionTransaction:
                 
             elif entry.kind == 'file':
                 if entry.working:
-                    filename = self.repo_to_full_path(name)
+                    filename = active.repo_to_full_path(self.project, name)
                     if os.path.isfile(filename) and isinstance(change, (objects.AddFile, objects.ChangeFile, objects.NewFile)):
                         addr = self.put_file(filename)
                         if addr != change.addr:
@@ -1224,13 +1218,14 @@ class SessionTransaction:
 
         return output
 
-    def find_new_files(self, files, include, ignore):
-        active = self.active()
+    def find_new_files(self, active, files, include, ignore):
+        if active is None:
+            active = self.active()
         to_scan = set()
         names = {}
         dirs = {}
         for filename in files:
-            name = self.full_to_repo_path(filename)
+            name = active.full_to_repo_path(self.project, filename)
             entry = active.files.get(name)
             if os.path.isfile(filename):
                 if not entry or entry.kind != 'file': 
@@ -1251,7 +1246,7 @@ class SessionTransaction:
 
         for dir in to_scan:
             for filename in list_dir(dir, ignore, include): # recursive
-                name = self.full_to_repo_path(filename)
+                name = active.full_to_repo_path(self.project, filename)
                 entry = active.files.get(name)
                 if os.path.isfile(filename):
                     if not entry or entry.kind != 'file': 
@@ -1301,7 +1296,7 @@ class SessionTransaction:
         dirs = []
         changed = {}
         for filename in files:
-            name = self.full_to_repo_path(filename)
+            name = session.full_to_repo_path(self.project, filename)
             if name in session.files:
                 entry = session.files[name]
                 changed[name]= filename
@@ -1312,7 +1307,7 @@ class SessionTransaction:
                         for e in session.files:
                             if e.startswith(p):
                                 names[e] = session.files[e]
-                                changed[e] = self.repo_to_full_path(e)
+                                changed[e] = session.repo_to_full_path(self.project, e)
         new_files = {}
         gone_files = set()
 
@@ -1345,14 +1340,14 @@ class SessionTransaction:
         old_files = self.build_files(active.prepare)
         new_files = {}
         changed = {}
-        paths = [self.full_to_repo_path(file) for file in files]
+        paths = [active.full_to_repo_path(self.project, file) for file in files]
         
         while paths:
             path = paths.pop()
             if path not in old_files:
                 continue
             entry = old_files[path]
-            file = self.repo_to_full_path(path)
+            file = active.repo_to_full_path(self.project, path)
             if entry.kind == 'file': 
                 if os.path.exists(file):
                     if not os.path.isfile(file):
@@ -2021,7 +2016,7 @@ class Project:
         file = self.check_files([file])[0] if file else None
         with self.do_without_undo('fileprops:get') as txn:
             active = txn.active()
-            file = txn.full_to_repo_path(file) 
+            file = active.full_to_repo_path(self, file) 
             tracked = active.files[file]
             return tracked.properties
 
@@ -2029,7 +2024,7 @@ class Project:
         file = self.check_files([file])[0] if file else None
         with self.do('fileprops:set') as txn:
             active = txn.active()
-            file = txn.full_to_repo_path(file) 
+            file = active.full_to_repo_path(self, file) 
             tracked = active.files[file]
             tracked.set_property(name, value)
             txn.put_session(active)
@@ -2155,7 +2150,7 @@ class Project:
         files = self.check_files(files) if files else None
         with self.do_without_undo('diff') as txn:
             session = txn.refresh_active()
-            files = [txn.full_to_repo_path(filename) for filename in files] if files else None
+            files = [session.full_to_repo_path(self, filename) for filename in files] if files else None
             changeset = txn.active_changeset(files)
 
             output = {}
@@ -2192,7 +2187,7 @@ class Project:
         files = self.check_files(files) if files else None
         with self.do('prepare') as txn:
             session = txn.refresh_active()
-            files = [txn.full_to_repo_path(filename) for filename in files] if files else None
+            files = [session.full_to_repo_path(self, filename) for filename in files] if files else None
 
             changeset = txn.active_changeset(files)
 
@@ -2255,7 +2250,7 @@ class Project:
 
         with self.do(command) as txn:
             session = txn.refresh_active()
-            files = [txn.full_to_repo_path(filename) for filename in files] if files else None
+            files = [session.full_to_repo_path(self, filename) for filename in files] if files else None
 
             old_uuid, old, changeset = txn.prepared_changeset(session.prepare)
 
@@ -2294,7 +2289,7 @@ class Project:
             include = txn.get_setting('include')
             ignore = txn.get_setting('ignore')
 
-            dirs, files = txn.find_new_files(files, include, ignore)
+            dirs, files = txn.find_new_files(session, files, include, ignore)
             return files.values()
 
     def add(self, files, include=None, ignore=None):
