@@ -184,9 +184,12 @@ You can create a git backed repo with `vex init --git`, or `vex git:init`. The l
 - `vex add`
 - `vex forget` 
 - `vex ignore` 
-{- `vex include`
+- `vex include`
 - `vex remove` 
 - `vex restore` 
+
+TODO
+
 - `vex restore --pick` *
 
 ### File properties
@@ -207,6 +210,9 @@ You can create a git backed repo with `vex init --git`, or `vex git:init`. The l
 - `vex message:get` print message
 - `vex commit <files>`
 - `vex commit:prepare` / 'vex commit:prepared'
+
+TODO 
+
 - `vex commit:amend` *
 - `vex commit --pick` * 
 - `vex commit:rollback` *
@@ -222,17 +228,25 @@ You can create a git backed repo with `vex init --git`, or `vex git:init`. The l
 - `vex branch:swap`  
 - `vex branch:rename` 
 - `vex branches` list all branches
+
+TODO
+
 - `vex branch:close` *
 
 ### Working on an anonymous branch
 
 - `vex session` (see all open branches/anonymous branches)
 - `vex sessions`
+
+TODO
+
 - `vex session:new` *
 - `vex session:open` *
 - `vex session:detach` *
 - `vex session:attach` *
 - `vex rewind`  * (like git checkout)
+
+## TODO
 
 ### Applying changes from a branch *
 
@@ -246,7 +260,7 @@ When applying changes from another branch, vex creates new commits with new time
 - `vex commit:apply --squash` *
    create a new commit with the changes from the other branch
 - `vex commit:apply --pick`  *
-{
+
 ### Rebuilding a branch with upsteam changes *
 
 - `vex update` * (rebase, --all affecting downstream branches too) 
@@ -307,24 +321,4 @@ The directory `/.vex/settings/bin/` inside working copy is tracked, and added to
 
 - `vex commit --major/--minor/--patch`  *
 - /.vex/setting/features *
-
-
-### Internals
-
-- a content addressable store 
-- a json-like format with tagged values
-- a transactional layer
-- the project layer
-- the cli layer
-
-a project has sessions, one of which is active, which points to a branch, both the session and branch point to commits, commits point to each other, directory root and changelog entries. 
-
-the file `vex` defines the commands and entry points, and sends `argv` etc to `cli.py`, which then calls into a `@cmd.on_call()` function, which runs, prints, and wraps error handling.
-
-inside `project.py`, there is a `Project` method with `commit` `add` esque methods, which inside open a transaction, make changes, then exit
-
-the transaction objects come in two flavours, physical and logical. the physical one stores entire snapshots of before, after, but the logical one stores the arguments to commands to run for undo/redo
-
-the reason is undoing/redoing something like changing a branch can't be done with concrete snapshots, and has to stash/unstash files so can't really revert the old / new sessions.
-
 
