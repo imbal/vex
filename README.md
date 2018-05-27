@@ -1,21 +1,35 @@
 # Vex - A database for files and directories.
 
+Note: This is a work-in-progress, Please don't link to this project yet, it isn't ready for an audience yet. Thank you!
+
 `vex` is a command line tool for tracking and sharing changes, like `hg`, `git`, or `svn`. Unlike other source
 control systems, vex comes with `vex undo`, and `vex redo`.
 
-Note: This is a work-in-progress, Please don't link to this project yet, it isn't ready for an audience yet. Thank you!
+## Undo and Redo are faster than re-downloading and crying.
 
-## Undo and Redo are faster than restarting
+Added the wrong file? Run: `vex undo`
 
 ```
 $ vex add wrong_file.txt
 $ vex undo
 ```
 
+Deleted an important file? Run `vex undo`
+
 ```
 $ vex remove important.txt
 $ vex undo
 ```
+
+Restored the wrong file? Run `vex undo`
+
+```
+$ vex restore file_with_changes.txt
+$ vex undo
+
+```
+
+Commited on the wrong branch? Yes, `vex undo`
 
 ```
 $ vex commit 
@@ -23,27 +37,54 @@ $ vex undo
 $ vex branch:save_as testing
 ```
 
-
-## Quick install
+Created a project with the wrong settings? ... `vex undo`!
 
 ```
-# install python 3.6
-$ alias vex=/path/to/repo/vex
+$ vex init . --include='*.py'
+$ vex undo
+$ vex init . --include='*.rb' --include='Gemspec'
+```
+
+## What makes vex different:
+
+- Tab Completion built in!
+- Empty Directories are tracked too.
+- You can work on a subdirectory, rather than the project as a whole.
+- You can change branches without having to commit or remove unsaved changes.
+- Branches can have multiple sessions attached, with different changes (committed & uncommited).
+- Output goes through `less` if it's too big for your terminal.
+- Commands are named after their purpose, rather than implemention.
+- Changed files do not need to be `vex add`'d before commit, just new ones
+
+... and if there's a bug in `vex`, it tries its best to leave the project in a working state too!
+
+## Quick Install
+
+Install python 3.6, I recommend using the wonderful "Homebrew" tool. Then, enable tab completion:
+
+```
+$ alias vex=/path/to/project/vex # or `pwd`/vex if you're inside the project
 $ complete -o nospace -O vex vex
 ```
 
-## Cheatsheet
+### Command Cheatsheet
 
-`vex help <cmd>` will show a manual, and `vex <cmd> --help` will show a list of options taken.
+Every vex command looks like this: 
 
-## Undo/Redo
+`vex <path:to:command> <--arguments> <--arguments=value> <value> ...`
+
+`vex help <command>` will show the manual, and `vex <command> --help` shows usage.
+
+Commands can be one or more names seperated by `:`, like `vex commit` or `vex undo:list`
+
+### Undo/Redo
 
 | `vex undo`		| `hg rollback` for commits	| `git reset --hard HEAD~1` for commits, check stackoverflow otherwise |
 | `vex redo`		| ...             	        | ... 	|
 | `vex undo:list`	| ...             	        | ... 	|
 | `vex redo:list`	| ...             	        | ... 	|
 
-## General
+### General
 
 | `vex init`		| `hg init`		    | `git init` 	|
 | `vex status`		| `hg status`	    | `git status` 	|
@@ -52,7 +93,8 @@ $ complete -o nospace -O vex vex
 | `vex diff:branch`      		| `hg diff`   	| `git diff @{upstream}` 	|
 
 ### Files
-| `vex add`	    	| `hg add`	    	| `git add` 	|
+
+| `vex add`	 (only for new files)   	| `hg add`	    	| `git add` (for changed and new files)	|
 | `vex forget`		| `hg forget`   	| `git remove --cached (-r)` 	|
 | `vex remove`		| `hg remove`   	| `git remove (-r)` 	|
 | `vex restore`		| `hg revert`   	| `git checkout HEAD -- <file>` |
@@ -77,44 +119,23 @@ $ complete -o nospace -O vex vex
 | ...			    | ...			| ...		|
 
 
-## `vex`
+### Options/Arguments
 
-Every vex command looks like this: 
-
-`vex <path:to:command> <--arguments> <--arguments=value> <value> ...`
-
-`vex help <command>` will show the manual, and `vex <command> --help` shows usage.
-
-Commands can be one or more names seperated by `:`, like `vex commit` or `vex undo:list`
-
-Argument can take the following form:
+The argument to a command can take one the following form:
 
 - Boolean: `--name`, `--name=true`, `--name=false`
-
 - Single value `--name=...`
-
 - Multiple values `--name=... --name=...`
+- Positional `vex command <value> <value>`
 
-- Positional `vex command <value>`
-
-- There are no single letter flags like, `-x`. 
-
-Aside: Single letter flags are the work of the devil, mystery meat configuration at best. `vex` strives to avoid needing them, exposing new subcommands instead.
-
-Use `complete -o nospace -C vex vex` to set up tab completion in bash. Command names (including subcommands), argument names, and some argument values can be tab completed.
+There are no single letter flags like, `-x`. Tab completion works, and vex opts for a new command over a flag to change behaviour.
 
 ## Debugging
 
-If `vex` crashes with a known exception, it will not print the stack trace by default. Additionally, after a crash, `vex` will try to roll back any unfinished changes.
+If `vex` crashes with a known exception, it will not print the stack trace by default. Additionally, after a crash, `vex` will try to roll back any unfinished changes. Use `vex debug <command>` to always print the stack trace, but this will leave the repo in a broken state, so use `vex debug:rollback` to rollback manually.
 
-use `vex debug <command>` to always print the stack trace, but this will leave the repo in a broken state. use `vex debug:rollback` to rollback manually.
+Note: some things just break horribly, and a `rollback` isn't enough. Use `vex fake <command>` to not break things and see what would be changed (for some commands, they rely on changes being written and so `fake` gives weird results, sorry).
 
-note: some things just break things, sorry.
-
-use `vex fake <command>` to not break things and see what would be changed*
-
-* sort-of, the stash might get changed but nothing else should
-* and some commands rely on previous changes soooo good luck with that
 
 ## Workflows
 
