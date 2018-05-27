@@ -79,6 +79,8 @@ Commands can be one or more names seperated by `:`, like `vex commit` or `vex un
 
 ### Undo/Redo
 
+| `vex` | `hg` | `git` |
+| ----- | ----- | ----- |
 | `vex undo`		| `hg rollback` for commits	| `git reset --hard HEAD~1` for commits, check stackoverflow otherwise |
 | `vex redo`		| ...             	        | ... 	|
 | `vex undo:list`	| ...             	        | ... 	|
@@ -86,6 +88,8 @@ Commands can be one or more names seperated by `:`, like `vex commit` or `vex un
 
 ### General
 
+| `vex` | `hg` | `git` |
+| ----- | ----- | ----- |
 | `vex init`		| `hg init`		    | `git init` 	|
 | `vex status`		| `hg status`	    | `git status` 	|
 | `vex log`	    	| `hg log`		    | `git log --first-parent` 	|
@@ -94,6 +98,8 @@ Commands can be one or more names seperated by `:`, like `vex commit` or `vex un
 
 ### Files
 
+| `vex` | `hg` | `git` |
+| ----- | ----- | ----- |
 | `vex add`	 (only for new files)   	| `hg add`	    	| `git add` (for changed and new files)	|
 | `vex forget`		| `hg forget`   	| `git remove --cached (-r)` 	|
 | `vex remove`		| `hg remove`   	| `git remove (-r)` 	|
@@ -102,6 +108,8 @@ Commands can be one or more names seperated by `:`, like `vex commit` or `vex un
 
 ### Commits
 
+| `vex` | `hg` | `git` |
+| ----- | ----- | ----- |
 | `vex id`		        | `hg id`   	| `git rev-parse HEAD` 	|
 | `vex commit`		    | `hg commit`	| `git commit -a` 	|
 | `vex commit:amend`	| ...        	| `git commit --amend` 	|
@@ -110,6 +118,8 @@ Commands can be one or more names seperated by `:`, like `vex commit` or `vex un
 
 ### Branches
 
+| `vex` | `hg` | `git` |
+| ----- | ----- | ----- |
 | `vex branch:new`                  | `hg bookmark -i`, `hg update -r` | `git branch`, `git checkout`|
 | `vex branch:open`                 | `hg update -r <name>` | `git checkout` |
 | `vex branch:saveas`               | `hg bookmark <name>` | `git checkout -b`|
