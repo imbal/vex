@@ -1983,6 +1983,8 @@ class Project:
                 raise VexBug('sync')
             if not os.listdir(dir):
                 os.rmdir(dir)
+            else:
+                print('skipping ', dir, file=sys.stderr)
         self.state.set('prefix', None)
         self.state.set('active', None)
         session.message = self.state.get('message')
@@ -1995,20 +1997,6 @@ class Project:
         session.prefix = prefix
 
         def process(name, entry):
-            if os.path.commonpath((name, prefix)) != prefix and os.path.commonpath((name, self.VEX)) != self.VEX:
-                entry.working = None
-                entry.mtime = None
-                entry.mode = None
-                entry.size = None
-                return
-            else:
-                entry.mtime = None
-                entry.size = None
-                entry.mode = None
-
-            if entry.kind in ('ignore', 'gitfile'):
-                return
-
             path = session.repo_to_full_path(self, name)
 
             if entry.state == "deleted":
@@ -2027,12 +2015,23 @@ class Project:
                     os.chmod(path, stat.st_mode | 64)
             else:
                 raise VexBug('kind')
-            # if fail to extract, change to 'missing'
-            entry.working = True
 
         files = {}
         for name in sorted(session.files, key=lambda x:x.split('/')):
             entry = session.files[name]
+            entry.mtime = None
+            entry.mode = None
+            entry.size = None
+            if os.path.commonpath((name, prefix)) != prefix and os.path.commonpath((name, self.VEX)) != self.VEX:
+                entry.working = None
+                continue
+
+            if entry.kind in ('ignore', 'gitfile'):
+                entry.working = None
+                continue
+
+            entry.working = True
+
             if entry.kind =='dir':
                 if name not in ('/', self.VEX, prefix):
                     path = session.repo_to_full_path(self, name)

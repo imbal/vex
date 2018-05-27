@@ -62,6 +62,7 @@ vex_amend = vex_commit.subcommand('amend')
 vex_message = vex_cmd_commit.subcommand('message')
 vex_message_edit = vex_message.subcommand('edit')
 vex_message_get = vex_message.subcommand('get')
+vex_message_amend = vex_message.subcommand('amend')
 vex_message_filename = vex_message.subcommand('filename', aliases=['path'])
 vex_message_set = vex_message.subcommand('set')
 vex_template = vex_message.subcommand('template')
@@ -794,6 +795,40 @@ def EditMessage(editor, message):
         p.state.set('editor', editor)
     os.execvp(editor, [editor, file])
 
+@vex_message_amend.on_run()
+@argspec('--editor')
+def AmendMessage(editor):
+    """
+        Amend the commit message
+
+        Use `--editor` to open the file in an editor
+    """
+    p = open_project()
+
+    with p.lock('message:amend') as p:
+        if not editor and p.state.exists('editor'):
+            editor = p.state.get('editor')
+        if not editor:
+            editor = os.environ.get('EDITOR')
+        if not editor:
+            editor = os.environ.get('VISUAL')
+        file = p.state.filename('message')
+        if not editor:
+            path = os.path.relpath(file)
+            raise VexArgument('with what editor?, you can open ./{} directly too'.format(path))
+        p.state.set('editor', editor)
+
+        old_message = p.state.get('message')
+        template = p.settings.get('template')
+        if old_message and old_message != template:
+            raise VexArgument("would overwrite changes.... and I can't undo that. Clear message first")
+
+        commit = p.get_commit(p.active().prepare)
+        changeset = p.get_manifest(commit.changeset)
+        message = changeset.message
+        p.state.set('message', message)
+    os.execvp(editor, [editor, file])
+
 
 @vex_message_get.on_run()
 def GetMessage():
@@ -1276,12 +1311,12 @@ class Vex:
             print(">  ", line.decode('utf-8'))
 
 @debug_test.on_run()
-@argspec('--git?')
-def DebugTest(git):
+@argspec('--git? [dir]')
+def DebugTest(git, dir):
 
     vex = Vex(os.path.normpath(os.path.join(os.path.split(os.path.abspath(__file__))[0], "..", "vex")))
 
-    with tempfile.TemporaryDirectory() as dir:
+    def do(dir):
         print("Using:", dir)
         os.chdir(dir)
         shell('mkdir repo')
@@ -1317,9 +1352,12 @@ def DebugTest(git):
         vex.switch('/repo')
         vex.undo()
         vex.redo()
+        vex.status(all=True)
         vex.commit()
+        vex.status(all=True)
         shell('rmdir dir2')
         shell('date >> dir2')
+        vex.status(all=True)
         vex.commit()
         vex.undo()
         vex.branch.saveas('other')
@@ -1329,6 +1367,14 @@ def DebugTest(git):
         vex.branch('latest')
         vex.status(all=True)
         vex.id()
+    if not dir:
+        with tempfile.TemporaryDirectory() as dir:
+            do(dir)
+    else:
+        dir = os.path.join(os.getcwd(),dir)
+        os.makedirs(dir, exist_ok=True)
+        print(dir)
+        do(dir)
 
     
 @debug_soak.on_run()
