@@ -1,10 +1,20 @@
 # Vex - A database for files 
 
-This README assumes some familiarily with `git`, `hg`, or `svn`.
+Currently, this README assumes some familiarily with `git`, `hg`, or `svn`.
 
 `vex` comes with a full undo/redo system, for almost every command. 
 
+## Quick install
+
+```
+# install python 3.6
+$ alias vex=/path/to/repo/vex
+$ complete -o nospace -O vex vex
+```
+
 ## Cheatsheet
+
+`vex help <cmd>` will show a manual, and `vex <cmd> --help` will show a list of options taken.
 
 | `vex` | `hg` | `git`  |
 | --- | --- | --- |
@@ -39,51 +49,6 @@ This README assumes some familiarily with `git`, `hg`, or `svn`.
 | ...			    | ...			| ...		|
 
 Note: This is a work-in-progress, Please don't link to this project yet, it isn't ready for an audience yet. Thank you!
-
-## A Manifesto for yet-another Source Control System
-
-- The working copy is sacred. Preserve it at all costs.
-- Everything should be as easy to do as it is to undo/redo. Not the other way around: permanent changes should be hard.
-- Don't ever leave the project in a broken state: unless the user *explicitly* asked, rollback. If it breaks, try and fix it before complaining about it. 
-- The history of a project is when the changes were applied, not when the changes were written.
-- Flags are a terrible idea, short flags are worse. (They should be for sharing behaviour across commands, not changing what commands ultimately do. Use another command instead of a flag)
-
-Imagine `git`, except:
-
-- Branches automatically stash and unstash
-- It tracks directories as well as files, even empty ones.
-- The index is the stage (like `hg`)
-- Branches can have more than one working copy associated with it,  detached heads never get lost.
-- Instead of a reflog, `undo` and `redo`.
-- `log` always shows the changes in the order they were applied, not written
-- Instead of rewriting history, rebasing creates a new merge commit, and then replays the changes atop. 
-- Subtree checkouts, subversion-like fileprops
-
-Imagine `hg`, except:
-
-- Branches work more like `hg bookmarks` or `git branch` internally.
-- Branches automatically stash and unstash.
-- Branches can have multiple heads `hg heads` is roughly `vex sessions`.
-- `log` always shows the changes in the order they were applied, not written
-- `vex update` does a rebase without destroying history
-- Subtree checkouts, subversion-like fileprops.
-
-Imagine `svn`, except:
-
-- Branches work as outlined above.
-- Commiting offline and sharing changes asynchronously.
-- But yes, subtree checkouts, and fileprops are still around. Finally.
-
-Now Imagine:
-
-- Online mode (i.e push on commit), Partial checkouts.
-- Large file, large directory, and binary support.
-- Branch configuration inside a tracked directory, used for default properties, ignore lists, author settings, and merge policies.
-- UUIDs everywhere: Changing author information without rebuilding project
-- Working submodules/repos
-- Purging: a way strip changes from a project and push it to remote services
-
-Good, because none of it is ready yet.
 
 ## `vex`
 
