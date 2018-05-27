@@ -29,6 +29,7 @@ import time
 import os.path
 import unicodedata
 import concurrent.futures
+import pickle
 
 from datetime import datetime, timezone, timedelta
 from contextlib import contextmanager
@@ -75,6 +76,12 @@ class Codec:
         return self.codec.dump(obj).encode('utf-8')
     def parse(self, buf):
         return self.codec.parse(buf.decode('utf-8'))
+
+class PickleCodec:
+    def dump(self, obj):
+        return pickle.dumps(obj)
+    def parse(self, buf):
+        return pickle.loads(buf)
 
 class GitCodec:
     EMPTY_GIT_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904" # Wow, isn't git amazing.
@@ -231,6 +238,7 @@ class GitCodec:
 
 
 codec = Codec()
+pickle_codec = PickleCodec()
 
 class objects:
     @codec.register
@@ -947,7 +955,7 @@ class SessionTransaction:
     def refresh_active(self, active=None):
         if active is None:
             active = self.active()
-        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=6) as executor:
             for name, entry in active.files.items():
                 if not entry.working or entry.state =='deleted':
                     continue
@@ -1516,11 +1524,11 @@ class Project:
         self.fake = fake
 
 
-        self.branches =   FileStore(os.path.join(config_dir, 'branches'), codec)
-        self.names =      FileStore(os.path.join(config_dir, 'branches', 'names'), codec)
-        self.sessions =   FileStore(os.path.join(config_dir, 'branches', 'sessions'), codec)
-        self.state =      FileStore(os.path.join(config_dir, 'state'), codec, rawkeys=['message'])
-        self.history =   History(os.path.join(config_dir, 'history'), codec)
+        self.branches =   FileStore(os.path.join(config_dir, 'branches'), pickle_codec)
+        self.names =      FileStore(os.path.join(config_dir, 'branches', 'names'), pickle_codec)
+        self.sessions =   FileStore(os.path.join(config_dir, 'branches', 'sessions'), pickle_codec)
+        self.state =      FileStore(os.path.join(config_dir, 'state'), pickle_codec, rawkeys=['message'])
+        self.history =   History(os.path.join(config_dir, 'history'), pickle_codec)
         self.lockfile =  LockFile(os.path.join(config_dir, 'lock'))
         self._lock = None
 

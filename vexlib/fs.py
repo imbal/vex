@@ -434,7 +434,6 @@ class GitRepo:
     def branches(self):
         dir = os.path.join(self.dir, 'refs', 'heads')
         branches = {}
-        print(dir)
         for name in os.listdir(dir):
             with open(os.path.join(dir, name)) as fh:
                 branches[name] = fh.read().strip()
@@ -469,7 +468,6 @@ class GitRepo:
 
     def diff(self,old, new):
         cmd = ['git', 'diff', old[4:], new[4:]]
-        print(cmd, file=sys.stderr)
         p = subprocess.run(cmd, stdout=subprocess.PIPE, encoding='utf8')
         return p.stdout
 
