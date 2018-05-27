@@ -28,6 +28,7 @@ import sys
 import time
 import os.path
 import unicodedata
+import concurrent.futures
 
 from datetime import datetime, timezone, timedelta
 from contextlib import contextmanager
@@ -946,11 +947,12 @@ class SessionTransaction:
     def refresh_active(self, active=None):
         if active is None:
             active = self.active()
-        for name, entry in active.files.items():
-            if not entry.working:
-                continue
-            path = active.repo_to_full_path(self.project, name)
-            entry.refresh(path, self.project.addr_for_file)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+            for name, entry in active.files.items():
+                if not entry.working or entry.state =='deleted':
+                    continue
+                path = active.repo_to_full_path(self.project, name)
+                executor.submit(entry.refresh,path, self.project.addr_for_file)
         self.put_session(active)
         return active
 

@@ -29,7 +29,7 @@ DEFAULT_IGNORE =  [".*", DEFAULT_CONFIG_DIR, ".DS_Store", "*~", "*.swp", "__*__"
 fake = False
 
 # CLI bits. Should handle environs, cwd, etc
-vex_cmd = Command('vex', long=__doc__, prefixes=['fake', 'time'])
+vex_cmd = Command('vex', long=__doc__, prefixes=['fake', 'time', 'profile'])
 vex_init = vex_cmd.subcommand('init')
 
 vex_undo = vex_cmd.subcommand('undo')
@@ -231,7 +231,14 @@ def Call(mode, path, args, callback):
         print("{}".format(end-now))
 
         return ret
-
+    elif mode == 'profile':
+        import cProfile
+        pr = cProfile.Profile()
+        pr.enable()
+        ret = do(pager=False)
+        pr.disable()
+        pr.print_stats(sort='time')
+        return ret
     else:
         return do()
 

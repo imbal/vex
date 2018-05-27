@@ -1,8 +1,28 @@
-# Vex - A database for files 
+# Vex - A database for files and directories.
 
-Currently, this README assumes some familiarily with `git`, `hg`, or `svn`.
+`vex` is a command line tool for tracking and sharing changes, like `hg`, `git`, or `svn`. Unlike other source
+control systems, vex comes with `vex undo`, and `vex redo`.
 
-`vex` comes with a full undo/redo system, for almost every command. 
+Note: This is a work-in-progress, Please don't link to this project yet, it isn't ready for an audience yet. Thank you!
+
+## Undo and Redo are faster than restarting
+
+```
+$ vex add wrong_file.txt
+$ vex undo
+```
+
+```
+$ vex remove important.txt
+$ vex undo
+```
+
+```
+$ vex commit 
+$ vex undo
+$ vex branch:save_as testing
+```
+
 
 ## Quick install
 
@@ -16,30 +36,38 @@ $ complete -o nospace -O vex vex
 
 `vex help <cmd>` will show a manual, and `vex <cmd> --help` will show a list of options taken.
 
-| `vex` | `hg` | `git`  |
-| --- | --- | --- |
-| `vex init`		| `hg init`		    | `git init` 	|
+## Undo/Redo
+
 | `vex undo`		| `hg rollback` for commits	| `git reset --hard HEAD~1` for commits, check stackoverflow otherwise |
 | `vex redo`		| ...             	        | ... 	|
 | `vex undo:list`	| ...             	        | ... 	|
 | `vex redo:list`	| ...             	        | ... 	|
+
+## General
+
+| `vex init`		| `hg init`		    | `git init` 	|
 | `vex status`		| `hg status`	    | `git status` 	|
 | `vex log`	    	| `hg log`		    | `git log --first-parent` 	|
 | `vex diff`	            	| `hg diff`	    | `git diff` / `git diff --cached` 	|
 | `vex diff:branch`      		| `hg diff`   	| `git diff @{upstream}` 	|
-| `vex switch`		| no subtree checkouts		| no subtree checkouts	|
-|   |   |   |
+
+### Files
 | `vex add`	    	| `hg add`	    	| `git add` 	|
 | `vex forget`		| `hg forget`   	| `git remove --cached (-r)` 	|
 | `vex remove`		| `hg remove`   	| `git remove (-r)` 	|
 | `vex restore`		| `hg revert`   	| `git checkout HEAD -- <file>` |
-|   |   |   |
+| `vex switch`		| no subtree checkouts		| no subtree checkouts	|
+
+### Commits
+
 | `vex id`		        | `hg id`   	| `git rev-parse HEAD` 	|
 | `vex commit`		    | `hg commit`	| `git commit -a` 	|
 | `vex commit:amend`	| ...        	| `git commit --amend` 	|
 | `vex message:edit` | ... | ... |
 | `vex message:get` | ... | ... |
-|   |   |   |
+
+### Branches
+
 | `vex branch:new`                  | `hg bookmark -i`, `hg update -r` | `git branch`, `git checkout`|
 | `vex branch:open`                 | `hg update -r <name>` | `git checkout` |
 | `vex branch:saveas`               | `hg bookmark <name>` | `git checkout -b`|
@@ -48,7 +76,6 @@ $ complete -o nospace -O vex vex
 | `vex branches` / `branch:list`    | `hg bookmark` | `git branch --list` |
 | ...			    | ...			| ...		|
 
-Note: This is a work-in-progress, Please don't link to this project yet, it isn't ready for an audience yet. Thank you!
 
 ## `vex`
 
