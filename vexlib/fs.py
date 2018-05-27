@@ -18,7 +18,6 @@ import os
 import os.path
 import sys
 import shutil
-import fcntl
 import sqlite3
 
 
@@ -29,31 +28,57 @@ from datetime import datetime, timezone
 def UUID(): return str(uuid4())
 def NOW(): return datetime.now(timezone.utc)
 
-class LockFile:
-    def __init__(self, lockfile):
-        self.lockfile = lockfile
+try:
+    import fcntl
 
-    def makelock(self):
-        with open(self.lockfile, 'xb') as fh:
-            fh.write(b'# created by %d at %a\n'%(os.getpid(), str(NOW())))
+    class LockFile:
+        def __init__(self, lockfile):
+            self.lockfile = lockfile
 
-    @contextmanager
-    def __call__(self, command):
-        try:
-            fh = open(self.lockfile, 'wb')
-            fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except (IOError, FileNotFoundError):
-            raise VexLock('Cannot open project lockfile: {}'.format(self.lockfile))
-        try:
-            fh.truncate(0)
-            fh.write(b'# locked by %d at %a\n'%(os.getpid(), str(NOW())))
-            fh.write("{}".format(command).encode('utf-8'))
-            fh.write(b'\n')
-            fh.flush()
-            yield self
-            fh.write(b'# released by %d %a\n'%(os.getpid(), str(NOW())))
-        finally:
-            fh.close()
+        def makelock(self):
+            with open(self.lockfile, 'xb') as fh:
+                fh.write(b'# created by %d at %a\n'%(os.getpid(), str(NOW())))
+
+        @contextmanager
+        def __call__(self, command):
+            try:
+                fh = open(self.lockfile, 'wb')
+                fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except (IOError, FileNotFoundError):
+                raise VexLock('Cannot open project lockfile: {}'.format(self.lockfile))
+            try:
+                fh.truncate(0)
+                fh.write(b'# locked by %d at %a\n'%(os.getpid(), str(NOW())))
+                fh.write("{}".format(command).encode('utf-8'))
+                fh.write(b'\n')
+                fh.flush()
+                yield self
+                fh.write(b'# released by %d %a\n'%(os.getpid(), str(NOW())))
+            finally:
+                fh.close()
+except ImportError:
+    import msvcrt
+    class LockFile:
+        def __init__(self, lockfile):
+            self.lockfile = lockfile
+
+        def makelock(self):
+            with open(self.lockfile, 'xb') as fh:
+                fh.write(b'# created by %d at %a\n'%(os.getpid(), str(NOW())))
+
+        @contextmanager
+        def __call__(self, command):
+            try:
+                fh = open(self.lockfile, 'wb')
+                msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+            except (OSError, IOError, FileNotFoundError):
+                raise VexLock('Cannot open project lockfile: {}'.format(self.lockfile))
+            try:
+                yield self
+            finally:
+                msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+
+
 
 # History: Used to track undo/redo and changes to repository state
 
