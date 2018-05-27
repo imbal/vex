@@ -81,7 +81,7 @@ Commands can be one or more names seperated by `:`, like `vex commit` or `vex un
 
 | `vex` | `hg` | `git` |
 | ----- | ----- | ----- |
-| `vex undo`		| `hg rollback` for commits	| `git reset --hard HEAD~1` for commits, check stackoverflow otherwise |
+| `vex undo`		| `hg rollback` for commits	| `git reset --hard HEAD~1` for commits |
 | `vex redo`		| ...             	        | ... 	|
 | `vex undo:list`	| ...             	        | ... 	|
 | `vex redo:list`	| ...             	        | ... 	|
