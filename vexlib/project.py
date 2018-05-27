@@ -594,7 +594,7 @@ class objects:
                 else:
                     raise VexBug('welp')
             elif self.kind == "dir":
-                if S_ISREG(st.st_mode):
+                if not S_ISDIR(st.st_mode):
                     self.state = "replaced"
                     if not self.replace: self.replace = self.kind
                     self.kind = "file"
@@ -955,7 +955,7 @@ class SessionTransaction:
     def refresh_active(self, active=None):
         if active is None:
             active = self.active()
-        with concurrent.futures.ThreadPoolExecutor(max_workers=6) as executor:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
             for name, entry in active.files.items():
                 if not entry.working or entry.state =='deleted':
                     continue
@@ -1933,18 +1933,18 @@ class Project:
         if prefix != self.prefix() or session.uuid != self.state.get("active"):
             raise VexBug('no')
         dirs = set()
-        for name, entry in session.files.items():
-            if not entry.working:       continue
-            if entry.kind in ('ignore', 'gitfile'):  continue
+
+        def process(name, entry):
+            if not entry.working:       return
+            if entry.kind in ('ignore', 'gitfile'):  return
             path = session.repo_to_full_path(self, name)
             entry.refresh(path, self.addr_for_file)
-
 
             if entry.kind in ('file',):
                 if os.path.commonpath((path, self.working_dir)) != self.working_dir:
                     raise VexBug('file outside of working dir inside tracked')
                 if entry.kind == 'deleted':
-                    continue
+                    return
                 if not os.path.isfile(path):
                     raise VexBug('sync')
                 if entry.state in ('added', 'replaced', 'modified'):
@@ -1959,11 +1959,11 @@ class Project:
                 if os.path.commonpath((path, self.working_dir)) != self.working_dir:
                     raise VexBug('file outside of working dir inside tracked')
                 if entry.kind == 'deleted':
-                    continue
+                    return
                 if not os.path.isdir(path):
                     raise VexBug('sync')
                 if name in ("/", self.VEX): 
-                    continue
+                    return
                 if entry.state in ('added', 'replaced', 'modified', 'tracked'):
                     dirs.add(path)
             else:
@@ -1972,6 +1972,9 @@ class Project:
             entry.mtime = None
             entry.mode = None
             entry.size = None
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+            for name, entry in session.files.items():
+                executor.submit(process, name, entry)
 
         for dir in sorted(dirs, reverse=True, key=lambda x: x.split("/")):
             if dir in (self.working_dir, self.settings.dir):
@@ -1991,21 +1994,20 @@ class Project:
             raise VexBug('unlocked')
         session.prefix = prefix
 
-        for name in sorted(session.files, key=lambda x:x.split('/')):
-            entry = session.files[name]
+        def process(name, entry):
             if os.path.commonpath((name, prefix)) != prefix and os.path.commonpath((name, self.VEX)) != self.VEX:
                 entry.working = None
                 entry.mtime = None
                 entry.mode = None
                 entry.size = None
-                continue
+                return
             else:
                 entry.mtime = None
                 entry.size = None
                 entry.mode = None
 
             if entry.kind in ('ignore', 'gitfile'):
-                continue
+                return
 
             path = session.repo_to_full_path(self, name)
 
@@ -2018,9 +2020,6 @@ class Project:
                 if entry.properties.get('vex:executable'):
                     stat = os.stat(path)
                     os.chmod(path, stat.st_mode | 64)
-            elif entry.kind =='dir':
-                if name not in ('/', self.VEX, prefix):
-                    os.makedirs(path, exist_ok=True)
             elif entry.kind =="file":
                 self.repo.copy_from_file(entry.addr, path)
                 if entry.properties.get('vex:executable'):
@@ -2030,6 +2029,20 @@ class Project:
                 raise VexBug('kind')
             # if fail to extract, change to 'missing'
             entry.working = True
+
+        files = {}
+        for name in sorted(session.files, key=lambda x:x.split('/')):
+            entry = session.files[name]
+            if entry.kind =='dir':
+                if name not in ('/', self.VEX, prefix):
+                    path = session.repo_to_full_path(self, name)
+                    os.makedirs(path, exist_ok=True)
+            else:
+                files[name] = entry
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+            for name, entry in files.items():
+                executor.submit(process, name, entry)
 
         self.sessions.set(session.uuid, session)
         self.state.set('prefix', prefix)
