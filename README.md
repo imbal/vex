@@ -1,8 +1,44 @@
 # Vex - A database for files 
 
-This README assumes some familiarily with `git`, `hg`, or `svn`
+This README assumes some familiarily with `git`, `hg`, or `svn`.
 
-Note: This is a work-in-progress, large chunks of this README are fictional. Please don't link to this project yet, it isn't ready for an audience yet. Thank you!
+`vex` comes with a full undo/redo system, for almost every command. 
+
+## Cheatsheet
+
+| `vex` | `hg` | `git`  |
+| --- | --- | --- |
+| `vex init`		| `hg init`		    | `git init` 	|
+| `vex undo`		| `hg rollback` for commits	| `git reset --hard HEAD~1` for commits, check stackoverflow otherwise |
+| `vex redo`		| ...             	        | ... 	|
+| `vex undo:list`	| ...             	        | ... 	|
+| `vex redo:list`	| ...             	        | ... 	|
+| `vex status`		| `hg status`	    | `git status` 	|
+| `vex log`	    	| `hg log`		    | `git log --first-parent` 	|
+| `vex diff`	            	| `hg diff`	    | `git diff` / `git diff --cached` 	|
+| `vex diff:branch`      		| `hg diff`   	| `git diff @{upstream}` 	|
+| `vex switch`		| no subtree checkouts		| no subtree checkouts	|
+|   |   |   |
+| `vex add`	    	| `hg add`	    	| `git add` 	|
+| `vex forget`		| `hg forget`   	| `git remove --cached (-r)` 	|
+| `vex remove`		| `hg remove`   	| `git remove (-r)` 	|
+| `vex restore`		| `hg revert`   	| `git checkout HEAD -- <file>` |
+|   |   |   |
+| `vex id`		        | `hg id`   	| `git rev-parse HEAD` 	|
+| `vex commit`		    | `hg commit`	| `git commit -a` 	|
+| `vex commit:amend`	| ...        	| `git commit --amend` 	|
+| `vex message:edit` | ... | ... |
+| `vex message:get` | ... | ... |
+|   |   |   |
+| `vex branch:new`                  | `hg bookmark -i`, `hg update -r` | `git branch`, `git checkout`|
+| `vex branch:open`                 | `hg update -r <name>` | `git checkout` |
+| `vex branch:saveas`               | `hg bookmark <name>` | `git checkout -b`|
+| `vex branch:rename`               | `hg bookmark --rename` | `git branch`|
+| `vex branch:swap`                 | ... | ... |
+| `vex branches` / `branch:list`    | `hg bookmark` | `git branch --list` |
+| ...			    | ...			| ...		|
+
+Note: This is a work-in-progress, Please don't link to this project yet, it isn't ready for an audience yet. Thank you!
 
 ## A Manifesto for yet-another Source Control System
 
@@ -49,36 +85,6 @@ Now Imagine:
 
 Good, because none of it is ready yet.
 
-## Cheatsheet:
-
-These commands are implemented, but are unfinished:
-
-| vex | hg | git  |
-| --- | --- | --- |
-| `vex init`		| `hg init`		    | `git init` 	|
-| `vex add`	    	| `hg add`	    	| `git add` 	|
-| `vex forget`		| `hg forget`   	| `git remove --cached (-r)` 	|
-| `vex remove`		| `hg remove`   	| `git remove (-r)` 	|
-| `vex restore`		| `hg revert`   	| `git reset -- <file>` `git checkout -- <file>` |
-| `vex status`		| `hg status`	    | `git status` 	|
-| `vex commit`		| `hg commit`   	| `git commit -a` 	|
-| `vex log`	    	| `hg log`		    | `git log --first-parent` 	|
-| `vex branch:new`  | `hg bookmark -i`, `hg update -r` | `git branch`, `git checkout`|
-| `vex branch:open`                 | `hg update -r <name>` | `git checkout` |
-| `vex branch:saveas`               | `hg bookmark <name>` | `git checkout -b`|
-| `vex branch:rename`               | `hg bookmark --rename` | `git branch`|
-| `vex branch:swap`                 | ... | ... |
-| `vex branches` / `branch:list`    | `hg bookmark` | `git branch --list` |
-| `vex diff`	                	| `hg diff`	    | `git diff` / `git diff --cached` 	|
-| `vex diff:branch`         		| `hg diff`   	| `git diff @{upstream}` 	|
-| ...			    | ...			| ...		|
-| `vex message:edit` | ... | ... |
-| `vex message:get` | ... | ... |
-| `vex undo`		| `hg rollback` for commits	| check stackoverflow 	|
-| `vex redo`		|              	            | 	|
-| `vex switch`		| no subtree checkouts		| no subtree checkouts	|
-
-
 ## `vex`
 
 Every vex command looks like this: 
@@ -116,7 +122,8 @@ note: some things just break things, sorry.
 use `vex fake <command>` to not break things and see what would be changed*
 
 * sort-of, the stash might get changed but nothing else should
-* and some commands rely on previous changes soooo
+* and some commands rely on previous changes soooo good luck with that
+
 ## Workflows
 
 ### Creating a project
@@ -133,6 +140,8 @@ $ vex status
 By default, `vex init name` creates a repository with a `/name` directory inside. 
 
 (Note: `vex undo`/`vex redo` will undo `vex init`, but leave the `/.vex` directory intact)
+
+You can create a git backed repo with `vex init --git`, or `vex git:init`. The latter command creates a bare, empty git repository, but the first one will include settings files inside the first commit. `vex git:init` also defaults to a checkout prefix of `/` and a branch called `master`. `vex init --git` uses the same defaults as `vex init`, a prefix that matches the name of the working directory, and a branch called `latest`.
 
 ### Undoing changes
 
