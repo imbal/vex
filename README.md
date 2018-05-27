@@ -1,4 +1,4 @@
-# Vex - A database for files and directories.
+# `vex`: a database for files and directories.
 
 Note: This is a work-in-progress, Please don't link to this project yet, it isn't ready for an audience yet. Thank you!
 
@@ -26,10 +26,9 @@ Restored the wrong file? Run `vex undo`
 ```
 $ vex restore file_with_changes.txt
 $ vex undo
-
 ```
 
-Commited on the wrong branch? Yes, `vex undo`
+Committed on the wrong branch? Yes, `vex undo`
 
 ```
 $ vex commit 
@@ -45,16 +44,24 @@ $ vex undo
 $ vex init . --include='*.rb' --include='Gemspec'
 ```
 
+Undid something by accident? `vex redo`!
+
+```
+$ vex undo
+$ vex redo
+```
+
 ## What makes vex different:
 
+- Undo for almost everything!
+- Commands are named after their purpose, rather than implemention.
 - Tab Completion built in!
 - Empty Directories are tracked too.
 - You can work on a subdirectory, rather than the project as a whole.
+- Output goes through `less` if it's too big for your terminal.
+- Changed files do not need to be `vex add`'d before commit, just new ones
 - You can change branches without having to commit or remove unsaved changes.
 - Branches can have multiple sessions attached, with different changes (committed & uncommited).
-- Output goes through `less` if it's too big for your terminal.
-- Commands are named after their purpose, rather than implemention.
-- Changed files do not need to be `vex add`'d before commit, just new ones
 
 ... and if there's a bug in `vex`, it tries its best to leave the project in a working state too!
 
@@ -91,20 +98,20 @@ Commands can be one or more names seperated by `:`, like `vex commit` or `vex un
 | `vex` | `hg` | `git` |
 | ----- | ----- | ----- |
 | `vex init`		| `hg init`		    | `git init` 	|
-| `vex status`		| `hg status`	    | `git status` 	|
+| `vex status`		| `hg status`	    | `git add -u && git status` 	|
 | `vex log`	    	| `hg log`		    | `git log --first-parent` 	|
-| `vex diff`	            	| `hg diff`	    | `git diff` / `git diff --cached` 	|
-| `vex diff:branch`      		| `hg diff`   	| `git diff @{upstream}` 	|
+| `vex diff`	       	| `hg diff`	    | `git diff --cached` 	|
+| `vex diff:branch`    	| `hg diff`   	| `git diff @{upstream}` 	|
 
 ### Files
 
 | `vex` | `hg` | `git` |
 | ----- | ----- | ----- |
-| `vex add`	 (only for new files)   	| `hg add`	    	| `git add` (for changed and new files)	|
+| `vex add`	    	| `hg add`	    	| `git add` |
 | `vex forget`		| `hg forget`   	| `git remove --cached (-r)` 	|
 | `vex remove`		| `hg remove`   	| `git remove (-r)` 	|
-| `vex restore`		| `hg revert`   	| `git checkout HEAD -- <file>` |
-| `vex switch`		| no subtree checkouts		| no subtree checkouts	|
+| `vex restore`		| `hg revert`   	| `git checkout -- <file>` |
+| `vex switch`		|  N/A | N/A |
 
 ### Commits
 
@@ -115,19 +122,18 @@ Commands can be one or more names seperated by `:`, like `vex commit` or `vex un
 | `vex commit:amend`	| ...        	| `git commit --amend` 	|
 | `vex message:edit` | ... | ... |
 | `vex message:get` | ... | ... |
+| `vex message:amend` | ... | ... |
 
 ### Branches
 
 | `vex` | `hg` | `git` |
 | ----- | ----- | ----- |
-| `vex branch:new`                  | `hg bookmark -i`, `hg update -r` | `git branch`, `git checkout`|
+| `vex branch:new`                  | `hg bookmark -i`, `hg update -r` | `git checkout -b new old`|
 | `vex branch:open`                 | `hg update -r <name>` | `git checkout` |
-| `vex branch:saveas`               | `hg bookmark <name>` | `git checkout -b`|
-| `vex branch:rename`               | `hg bookmark --rename` | `git branch`|
+| `vex branch:saveas`               | `hg bookmark <name>` | `git checkout -b new`|
+| `vex branch:rename`               | `hg bookmark --rename` | `git branch -m new`|
 | `vex branch:swap`                 | ... | ... |
 | `vex branches` / `branch:list`    | `hg bookmark` | `git branch --list` |
-| ...			    | ...			| ...		|
-
 
 ### Options/Arguments
 
@@ -140,11 +146,6 @@ The argument to a command can take one the following form:
 
 There are no single letter flags like, `-x`. Tab completion works, and vex opts for a new command over a flag to change behaviour.
 
-## Debugging
-
-If `vex` crashes with a known exception, it will not print the stack trace by default. Additionally, after a crash, `vex` will try to roll back any unfinished changes. Use `vex debug <command>` to always print the stack trace, but this will leave the repo in a broken state, so use `vex debug:rollback` to rollback manually.
-
-Note: some things just break horribly, and a `rollback` isn't enough. Use `vex fake <command>` to not break things and see what would be changed (for some commands, they rely on changes being written and so `fake` gives weird results, sorry).
 
 
 ## Workflows
@@ -321,4 +322,10 @@ The directory `/.vex/settings/bin/` inside working copy is tracked, and added to
 
 - `vex commit --major/--minor/--patch`  *
 - /.vex/setting/features *
+
+## Debugging
+
+If `vex` crashes with a known exception, it will not print the stack trace by default. Additionally, after a crash, `vex` will try to roll back any unfinished changes. Use `vex debug <command>` to always print the stack trace, but this will leave the repo in a broken state, so use `vex debug:rollback` to rollback manually.
+
+Note: some things just break horribly, and a `rollback` isn't enough. Use `vex fake <command>` to not break things and see what would be changed (for some commands, they rely on changes being written and so `fake` gives weird results, sorry).
 

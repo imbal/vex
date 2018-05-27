@@ -771,7 +771,7 @@ def Amend(file):
 @argspec('--editor [message]')
 def EditMessage(editor, message):
     """
-        Edit the commit message
+        Edit the commit message (No Undo/Redo)
 
         Use `--editor` to open the file in an editor
     """
@@ -799,7 +799,7 @@ def EditMessage(editor, message):
 @argspec('--editor')
 def AmendMessage(editor):
     """
-        Amend the commit message
+        Amend the commit message (No undo/redo)
 
         Use `--editor` to open the file in an editor
     """
@@ -850,7 +850,7 @@ def MessageFilename():
 @vex_message_set.on_run()
 @argspec('message')
 def SetMessage(message):
-    """ Set commit message """
+    """ Set commit message (No Undo/Redo)"""
     p = open_project()
     with p.lock('message:set') as p:
         p.state.set('message', message)
@@ -860,6 +860,7 @@ def SetMessage(message):
 @vex_template_edit.on_run()
 @argspec('--editor')
 def EditTemplate(editor):
+    """ Edit commit template (No Undo/Redo)"""
     p = open_project()
     with p.lock('editor') as p:
         if not editor and p.state.exists('editor'):
@@ -892,7 +893,7 @@ def TemplateFilename():
 @vex_template_set.on_run()
 @argspec('template')
 def SetTemplate(template):
-    """ Set the commit template """
+    """ Set the commit template (No Undo/Redo)"""
     p = open_project()
     with p.lock('template:set') as p:
         p.settings.set('template', template)
@@ -901,6 +902,7 @@ def SetTemplate(template):
 @vex_commit_apply.on_run()
 @argspec('branch:branch')
 def Apply(branch):
+    """ Apply changes from another branch to the current session """
     p = open_project()
     with p.lock('apply') as p:
         if not p.names.exists(branch):
@@ -910,6 +912,7 @@ def Apply(branch):
 @vex_commit_append.on_run()
 @argspec('branch:branch')
 def Append(branch):
+    """ Append changes from another branch to the current session """
     p = open_project()
     with p.lock('append') as p:
         if not p.names.exists(branch):
