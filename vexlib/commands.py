@@ -1288,7 +1288,7 @@ class Vex:
         return self.__class__(self.path, self.command+(name,))
 
     def __call__(self, *args, **kwargs):
-        cmd = []
+        cmd = [sys.executable]
         cmd.append(self.path)
         if self.command:
             cmd.append(":".join(self.command))
