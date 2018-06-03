@@ -28,8 +28,10 @@ from datetime import datetime, timezone
 def UUID(): return str(uuid4())
 def NOW(): return datetime.now(timezone.utc)
 
+
 try:
     import fcntl
+
 
     class LockFile:
         def __init__(self, lockfile):

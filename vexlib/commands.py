@@ -1271,21 +1271,15 @@ def DebugRollback():
         else:
             yield ('Oh dear')
 
-def shell(args):
-    print('shell:', args)
-    p= subprocess.run(args, stdout=subprocess.PIPE, shell=True)
-    if p.returncode:
-        sys.stdout.write(p.stdout)
-        raise Exception('error')
-    return p.stdout
 
 class Vex:
-    def __init__(self, path, command=()):
+    def __init__(self, path, dir, command=()):
         self.path = path
+        self.dir=dir
         self.command = command
 
     def __getattr__(self, name):
-        return self.__class__(self.path, self.command+(name,))
+        return self.__class__(self.path, self.dir, command=self.command+(name,))
 
     def __call__(self, *args, **kwargs):
         cmd = [sys.executable]
@@ -1305,11 +1299,11 @@ class Vex:
         for value in args:
             cmd.append(value)
 
-        p=  subprocess.run(cmd, stdout=subprocess.PIPE)
+        p=  subprocess.run(cmd, stdout=subprocess.PIPE, cwd=self.dir)
         if p.returncode:
             sys.stdout.buffer.write(p.stdout)
             raise Exception('Error')
-        print("vex {}:".format(" ".join(cmd[1:])))
+        print("vex {}".format(" ".join(cmd[1:])))
         for line in p.stdout.splitlines():
             print(">  ", line.decode('utf-8'))
 
@@ -1317,14 +1311,19 @@ class Vex:
 @argspec('--git? [dir]')
 def DebugTest(git, dir):
 
-    vex = Vex(os.path.normpath(os.path.join(os.path.split(os.path.abspath(__file__))[0], "..", "vex")))
 
     def do(dir):
-        print("Using:", dir)
-        os.chdir(dir)
-        shell('mkdir repo')
         dir = os.path.join(dir, 'repo')
-        os.chdir(dir)
+        os.makedirs(dir, exist_ok=True)
+        print("Using:", dir)
+        def shell(args):
+            print('shell:', args)
+            p= subprocess.run(args, stdout=subprocess.PIPE, shell=True, cwd=dir)
+            if p.returncode:
+                sys.stdout.write(p.stdout)
+                raise Exception('error')
+            return p.stdout
+        vex = Vex(os.path.normpath(os.path.join(os.path.split(os.path.abspath(__file__))[0], "..", "vex")), dir)
 
         vex.init(git=git)
 
@@ -1349,6 +1348,8 @@ def DebugTest(git, dir):
         vex.redo(choice=1)
         vex.log()
         shell('date >> date')
+        vex.status(all=True)
+        vex.switch()
         vex.switch('dir1')
         shell('rm a')
         shell('mkdir a')
